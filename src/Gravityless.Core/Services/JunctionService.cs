@@ -8,6 +8,88 @@ public class JunctionService
     [DllImport("Kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     private static extern bool CreateHardLink(string lpFileName, string lpExistingFileName, IntPtr lpSecurityAttributes);
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ByHandleFileInformation
+    {
+        public uint FileAttributes;
+        public uint CreationTimeLow, CreationTimeHigh;
+        public uint LastAccessTimeLow, LastAccessTimeHigh;
+        public uint LastWriteTimeLow, LastWriteTimeHigh;
+        public uint VolumeSerialNumber;
+        public uint FileSizeHigh, FileSizeLow;
+        public uint NumberOfLinks;
+        public uint FileIndexHigh, FileIndexLow;
+    }
+
+    [DllImport("Kernel32.dll", SetLastError = true)]
+    private static extern bool GetFileInformationByHandle(
+        Microsoft.Win32.SafeHandles.SafeFileHandle handle,
+        out ByHandleFileInformation info);
+
+    /// <summary>
+    /// True when the file has more than one directory entry, i.e. it is a hard link.
+    /// Hard links carry no reparse point, so FileAttributes cannot be used to detect them.
+    /// </summary>
+    public static bool IsFileHardLink(string path)
+    {
+        try
+        {
+            if (!File.Exists(path)) return false;
+
+            using var stream = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            if (!GetFileInformationByHandle(stream.SafeFileHandle, out var info)) return false;
+
+            return info.NumberOfLinks > 1;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Replaces <paramref name="linkPath"/> with a hard link to <paramref name="targetPath"/>,
+    /// moving the current content into the target when the target does not exist yet.
+    /// Returns false when the file system refuses the link (different volume, FAT32, ...).
+    /// </summary>
+    public static bool EnsureFileHardLink(string linkPath, string targetPath)
+    {
+        try
+        {
+            var linkExists = File.Exists(linkPath);
+            var targetExists = File.Exists(targetPath);
+
+            // Already linked to the target: nothing to do.
+            if (linkExists && targetExists && IsFileHardLink(linkPath))
+            {
+                return true;
+            }
+
+            if (linkExists && !targetExists)
+            {
+                // Adopt the existing instance copy as the canonical one.
+                var parent = Path.GetDirectoryName(targetPath);
+                if (!string.IsNullOrEmpty(parent)) Directory.CreateDirectory(parent);
+                File.Move(linkPath, targetPath);
+                targetExists = true;
+            }
+
+            if (!targetExists) return false;
+
+            if (linkExists)
+            {
+                try { File.Delete(linkPath); } catch { return false; }
+            }
+
+            return CreateFileHardLink(linkPath, targetPath) && IsFileHardLink(linkPath);
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Swallowed("junction.hardlink", ex);
+            return false;
+        }
+    }
+
     /// <summary>Creates an NTFS hard link; falls back to a file copy if the link call fails.</summary>
     public static bool CreateFileHardLink(string linkPath, string targetPath)
     {

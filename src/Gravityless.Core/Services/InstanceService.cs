@@ -1418,7 +1418,7 @@ public class InstanceService
         }
     }
 
-    private static void SetupProjectMetadata(List<ProjectProfile> projects, string instGemini, string instUserData)
+    private void SetupProjectMetadata(List<ProjectProfile> projects, string instGemini, string instUserData)
     {
         try
         {
@@ -1519,10 +1519,42 @@ public class InstanceService
                 };
                 projDoc["projectResources"] = projectResources;
 
-                File.WriteAllText(projJsonPath, projDoc.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+                // Write to the canonical shared path, then hard-link the instance copy to it.
+                // One project therefore has one definition; every instance sees the same file
+                // and Antigravity writes made inside an instance land in the shared copy.
+                var sharedJsonPath = _projectService.GetProjectConfigJsonPath(p.Id);
+                try
+                {
+                    var json = projDoc.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+                    Directory.CreateDirectory(Path.GetDirectoryName(sharedJsonPath)!);
+
+                    // Refresh the shared copy only when it differs, so the link is not broken
+                    // on every launch just to rewrite identical content.
+                    if (!File.Exists(sharedJsonPath) || File.ReadAllText(sharedJsonPath) != json)
+                    {
+                        File.WriteAllText(sharedJsonPath, json);
+                    }
+
+                    if (!JunctionService.EnsureFileHardLink(projJsonPath, sharedJsonPath))
+                    {
+                        // Link refused (different volume, unsupported file system): keep a plain copy.
+                        File.WriteAllText(projJsonPath, json);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    DiagLog.Swallowed("instance.project-meta-link", ex);
+                    try
+                    {
+                        File.WriteAllText(projJsonPath,
+                            projDoc.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+                    }
+                    catch { }
+                }
             }
 
-            // Delete project JSON files that are no longer bound (sidecar entries excluded).
+            // Drop project JSON files that are no longer bound (sidecar entries excluded).
+            // Deleting a hard link removes only this directory entry; the shared copy survives.
             foreach (var file in Directory.EnumerateFiles(configProjectsDir, "*.json"))
             {
                 var guid = Path.GetFileNameWithoutExtension(file);
