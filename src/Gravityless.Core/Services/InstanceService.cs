@@ -1179,6 +1179,10 @@ public class InstanceService
             try { File.Delete(destDb); } catch { }
         }
 
+        // Clear every destination companion first. A leftover -shm or -wal from the previous
+        // occupant would otherwise be paired with the incoming database.
+        DeleteSqliteSiblings(destDb);
+
         File.Move(sourceDb, destDb);
 
         foreach (var suffix in SqliteSiblingSuffixes)
@@ -1188,9 +1192,7 @@ public class InstanceService
 
             try
             {
-                var to = destDb + suffix;
-                if (File.Exists(to)) File.Delete(to);
-                File.Move(from, to);
+                File.Move(from, destDb + suffix);
             }
             catch (Exception ex)
             {
