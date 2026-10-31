@@ -92,6 +92,10 @@ public partial class MainWindow
         };
         Loaded += (_, _) =>
         {
+            // A second launch broadcasts this message; restore from tray and focus instead of
+            // letting the duplicate process create its own window.
+            SingleInstance.Listen(this, ShowFromTray);
+
             // Guard suppresses persistence while controls are re-populated from saved state.
             _isInitializingTheme = true;
             try
@@ -1018,13 +1022,53 @@ public partial class MainWindow
 
     private void ShowFromTray()
     {
-        Show();
+        // The activation message arrives on whichever thread posted it, so marshal to the UI thread.
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.Invoke(ShowFromTray);
+            return;
+        }
+
         if (WindowState == WindowState.Minimized)
         {
             WindowState = WindowState.Normal;
         }
+
+        Show();
+
+        // Activate() alone is routinely refused when another app owns the foreground, so the
+        // window is also raised directly through Win32.
+        var handle = new System.Windows.Interop.WindowInteropHelper(this).Handle;
+        if (handle != IntPtr.Zero)
+        {
+            NativeWindow.Restore(handle);
+        }
+
         Activate();
+        Topmost = true;
+        Topmost = false;
         Focus();
+    }
+
+    private static class NativeWindow
+    {
+        private const int SwRestore = 9;
+        private const int SwShow = 5;
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+        private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+        private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+        public static void Restore(IntPtr hWnd)
+        {
+            ShowWindow(hWnd, SwRestore);
+            ShowWindow(hWnd, SwShow);
+            SetForegroundWindow(hWnd);
+        }
     }
 
     private ContextMenu BuildTrayContextMenu()

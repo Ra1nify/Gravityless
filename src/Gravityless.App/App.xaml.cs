@@ -42,6 +42,15 @@ public partial class App : Application
             return;
         }
 
+        // Single instance: a second launch raises the existing window instead of opening a duplicate.
+        // Runs after the protocol branch so antigravity:// callbacks never reach the mutex.
+        if (!SingleInstance.TryAcquire())
+        {
+            SingleInstance.ActivateExisting();
+            Shutdown(0);
+            return;
+        }
+
         // Apply the persisted mode before subscribing to system changes.
         ThemeMode = ReadThemeModeFromDisk();
         ApplySystemTheme(ResolveTheme(ThemeMode));
