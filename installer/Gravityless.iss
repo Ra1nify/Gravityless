@@ -22,7 +22,7 @@
 #define AppPublisher   "Gravityless"
 #define AppExeName     "Gravityless.App.exe"
 #ifndef AppVersion
-  #define AppVersion "26.10.99"
+  #define AppVersion "0.0.0-dev"
 #endif
 #define AppUrl         "https://github.com/C-F0x/Gravityless"
 
