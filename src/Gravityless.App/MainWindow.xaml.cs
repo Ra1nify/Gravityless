@@ -960,8 +960,47 @@ public partial class MainWindow
             }
         }
 
+        // Projects held by another live instance cannot be mounted twice: the shared SQLite
+        // conversation store would be written concurrently. Offer to skip them instead of
+        // failing the launch outright.
+        IReadOnlyCollection<string>? excludedProjects = null;
+        var projectConflicts = _instanceService.FindProjectConflicts(instId);
+        if (projectConflicts.Count > 0)
+        {
+            var inst = _instanceService.Instances.FirstOrDefault(i => i.Id == instId);
+            var totalBound = inst?.BoundProjectIds.Count ?? 0;
+            var allBusy = projectConflicts.Count >= totalBound;
+
+            // One project per line: the list is the only variable-height part of the dialog.
+            var lines = string.Join("\n", projectConflicts.Select(c =>
+                string.Format(
+                    LocalizationService.GetString("Instances_ProjectConflictLineFormat", "{0} — 被 {1} 使用中"),
+                    c.ProjectName, c.InstanceName)));
+
+            var titleKey = allBusy ? "Instances_AllProjectsBusyTitle" : "Instances_ProjectConflictTitle";
+            var bodyKey = allBusy ? "Instances_AllProjectsBusyMessageFormat" : "Instances_ProjectConflictMessageFormat";
+            var buttonKey = allBusy ? "Instances_AllProjectsBusyBtn" : "Instances_ProjectConflictBtn";
+
+            var conflictMsg = string.Format(
+                LocalizationService.GetString(bodyKey, string.Empty),
+                lines);
+
+            if (!ModernDialog.Confirm(
+                    LocalizationService.GetString(titleKey, "项目被占用"),
+                    conflictMsg,
+                    confirmText: LocalizationService.GetString(buttonKey, "跳过并启动"),
+                    cancelText: LocalizationService.GetString("Common_Cancel", "取消"),
+                    isDestructive: false,
+                    owner: this.IsVisible ? this : null))
+            {
+                return;
+            }
+
+            excludedProjects = projectConflicts.Select(c => c.ProjectId).ToList();
+        }
+
         // A running instance behind the same slot reports conflict; force relaunch is confirmed with the user.
-        if (!_instanceService.LaunchInstance(instId, _currentProxyConfig, out var err, force: false, out var conflict, out var pid))
+        if (!_instanceService.LaunchInstance(instId, _currentProxyConfig, out var err, force: false, excludedProjects, out var conflict, out var pid))
         {
             if (conflict)
             {
@@ -973,7 +1012,7 @@ public partial class MainWindow
                     instName, pid);
                 if (ModernDialog.Confirm(LocalizationService.GetString("Instances_ForceRestartTitle", "实例互斥"), riskMsg, confirmText: LocalizationService.GetString("Instances_ForceRestartBtn", "强行重启"), cancelText: LocalizationService.GetString("Common_Cancel", "取消"), isDestructive: true, owner: this.IsVisible ? this : null))
                 {
-                    if (!_instanceService.LaunchInstance(instId, _currentProxyConfig, out var forceErr, force: true, out _, out _))
+                    if (!_instanceService.LaunchInstance(instId, _currentProxyConfig, out var forceErr, force: true, excludedProjects, out _, out _))
                     {
                         ModernDialog.ShowError(LocalizationService.GetString("Dialogs_StartErrorTitle", "启动失败"), string.Format(LocalizationService.GetString("Dialogs_ForceStartFailedFormat", "强行接管失败: {0}"), forceErr), owner: this.IsVisible ? this : null);
                     }

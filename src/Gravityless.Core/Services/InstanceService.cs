@@ -169,6 +169,55 @@ public class InstanceService
         }
     }
 
+    /// <summary>
+    /// Lists the projects bound to <paramref name="instanceId"/> that another live instance is
+    /// currently holding. Uses in-memory state (<see cref="_runningProcesses"/>), which is
+    /// authoritative for this process, rather than the persisted RunningInstanceId that can
+    /// survive a crash.
+    /// </summary>
+    public List<ProjectConflict> FindProjectConflicts(string instanceId)
+    {
+        var result = new List<ProjectConflict>();
+
+        var inst = _instances.FirstOrDefault(i => i.Id == instanceId);
+        if (inst == null) return result;
+
+        foreach (var projectId in inst.BoundProjectIds)
+        {
+            var holder = FindProjectHolder(projectId, exceptInstanceId: instanceId);
+            if (holder == null) continue;
+
+            var project = _projectService.Projects.FirstOrDefault(p => p.Id == projectId);
+            result.Add(new ProjectConflict
+            {
+                ProjectId = projectId,
+                ProjectName = project?.Name ?? projectId,
+                InstanceId = holder.Id,
+                InstanceName = holder.Name,
+                StartedAt = holder.StartedAt
+            });
+        }
+
+        return result;
+    }
+
+    /// <summary>Returns the live instance mounting <paramref name="projectId"/>, if any.</summary>
+    private InstanceProfile? FindProjectHolder(string projectId, string exceptInstanceId)
+    {
+        foreach (var runningId in _runningProcesses.Keys)
+        {
+            if (runningId == exceptInstanceId) continue;
+
+            var running = _instances.FirstOrDefault(i => i.Id == runningId);
+            if (running?.BoundProjectIds.Contains(projectId) == true)
+            {
+                return running;
+            }
+        }
+
+        return null;
+    }
+
     public bool LaunchInstance(
         string instanceId, 
         ProxyConfig globalProxy, 
@@ -177,11 +226,39 @@ public class InstanceService
         return LaunchInstance(instanceId, globalProxy, out errorMessage, force: false, out _, out _);
     }
 
+    /// <summary>
+    /// Launches the instance while skipping projects held by another live instance.
+    /// <paramref name="excludedProjectIds"/> is transient: it only affects this launch and
+    /// leaves <see cref="InstanceProfile.BoundProjectIds"/> untouched.
+    /// </summary>
+    public bool LaunchInstance(
+        string instanceId,
+        ProxyConfig globalProxy,
+        IReadOnlyCollection<string>? excludedProjectIds,
+        out string errorMessage)
+    {
+        return LaunchInstance(instanceId, globalProxy, out errorMessage, force: false,
+            excludedProjectIds, out _, out _);
+    }
+
     public bool LaunchInstance(
         string instanceId, 
         ProxyConfig globalProxy, 
         out string errorMessage,
         bool force,
+        out bool conflictDetected,
+        out int? conflictingPid)
+    {
+        return LaunchInstance(instanceId, globalProxy, out errorMessage, force,
+            excludedProjectIds: null, out conflictDetected, out conflictingPid);
+    }
+
+    public bool LaunchInstance(
+        string instanceId,
+        ProxyConfig globalProxy,
+        out string errorMessage,
+        bool force,
+        IReadOnlyCollection<string>? excludedProjectIds,
         out bool conflictDetected,
         out int? conflictingPid)
     {
@@ -272,9 +349,14 @@ public class InstanceService
         var account = _accountPool.Accounts.First(a => a.Id == inst.BoundAccountId);
 
         // Project locks: one instance may own several projects.
+        // Excluded ids are skipped for this launch only; the instance keeps its binding.
+        // An empty result is valid: the instance starts with no workspace, where the user can
+        // create a project or open a scratch chat.
         var boundProjects = new List<ProjectProfile>();
         foreach (var projId in inst.BoundProjectIds)
         {
+            if (excludedProjectIds?.Contains(projId) == true) continue;
+
             var p = _projectService.Projects.FirstOrDefault(x => x.Id == projId);
             if (p != null) boundProjects.Add(p);
         }
@@ -305,6 +387,8 @@ public class InstanceService
                 {
                     if (!force)
                     {
+                        // Report the conflict and stop. The caller may relaunch with the
+                        // conflicting projects excluded instead of killing the holder.
                         _accountPool.CheckInAccount(inst.BoundAccountId, Path.Combine(_instancesStorageDir, inst.Id, ".gemini"));
                         conflictDetected = true;
                         conflictingPid = proj.ProcessId;

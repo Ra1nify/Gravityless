@@ -460,6 +460,13 @@
     <sys:String x:Key="Instances_ForceRestartTitle">实例互斥</sys:String>
     <sys:String x:Key="Instances_ForceRestartBtn">强行重启</sys:String>
     <sys:String x:Key="Instances_ForceRestartMessageFormat">「{0}」正在运行 (PID: {1})。&#x0a;强行重启将终止该进程，未保存内容可能丢失。</sys:String>
+    <sys:String x:Key="Instances_ProjectConflictTitle">项目被占用</sys:String>
+    <sys:String x:Key="Instances_ProjectConflictMessageFormat">以下项目正被其他实例使用，继续启动将跳过它们：&#x0a;&#x0a;{0}&#x0a;&#x0a;其余项目正常打开，本次跳过不会解除绑定。</sys:String>
+    <sys:String x:Key="Instances_ProjectConflictLineFormat">{0} — 被 {1} 使用中</sys:String>
+    <sys:String x:Key="Instances_ProjectConflictBtn">跳过并启动</sys:String>
+    <sys:String x:Key="Instances_AllProjectsBusyTitle">项目全部被占用</sys:String>
+    <sys:String x:Key="Instances_AllProjectsBusyMessageFormat">所有绑定项目都在被其他实例使用：&#x0a;&#x0a;{0}&#x0a;&#x0a;继续启动将得到一个没有项目的实例，你仍可在其中新建项目或直接开始对话。</sys:String>
+    <sys:String x:Key="Instances_AllProjectsBusyBtn">仍要启动</sys:String>
     <sys:String x:Key="Instances_StatusRunning">运行中</sys:String>
     <sys:String x:Key="Instances_StatusStopped">已停止</sys:String>
     <sys:String x:Key="Instances_PortLabel">端口:</sys:String>
