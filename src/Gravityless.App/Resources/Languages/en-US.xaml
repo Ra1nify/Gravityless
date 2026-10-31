@@ -460,6 +460,13 @@
     <sys:String x:Key="Instances_ForceRestartTitle">Instance in use</sys:String>
     <sys:String x:Key="Instances_ForceRestartBtn">Restart anyway</sys:String>
     <sys:String x:Key="Instances_ForceRestartMessageFormat">"{0}" is running (PID: {1}).&#x0a;A forced restart terminates the process; unsaved content may be lost.</sys:String>
+    <sys:String x:Key="Instances_ProjectConflictTitle">Projects in use</sys:String>
+    <sys:String x:Key="Instances_ProjectConflictMessageFormat">These projects are already open in another instance and will be skipped:&#x0a;&#x0a;{0}&#x0a;&#x0a;The remaining projects open normally; skipping does not unbind anything.</sys:String>
+    <sys:String x:Key="Instances_ProjectConflictLineFormat">{0} — in use by {1}</sys:String>
+    <sys:String x:Key="Instances_ProjectConflictBtn">Skip and start</sys:String>
+    <sys:String x:Key="Instances_AllProjectsBusyTitle">All projects in use</sys:String>
+    <sys:String x:Key="Instances_AllProjectsBusyMessageFormat">Every bound project is already open in another instance:&#x0a;&#x0a;{0}&#x0a;&#x0a;Continuing starts an instance with no projects. You can still create a project or start a chat there.</sys:String>
+    <sys:String x:Key="Instances_AllProjectsBusyBtn">Start anyway</sys:String>
     <sys:String x:Key="Instances_StatusRunning">Running</sys:String>
     <sys:String x:Key="Instances_StatusStopped">Stopped</sys:String>
     <sys:String x:Key="Instances_PortLabel">Port:</sys:String>
