@@ -59,16 +59,15 @@
 
     <!--
       Trimming is not available here: WPF resolves XAML, dependency properties and bindings
-      reflectively, and the trimmer cannot see those roots (NETSDK1175). Size comes from
-      single-file compression instead.
+      reflectively, and the trimmer cannot see those roots (NETSDK1175).
     -->
     <PublishTrimmed>false</PublishTrimmed>
 
-    <PublishSingleFile>true</PublishSingleFile>
-    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
-
-    <!-- Native libraries are extracted to a temp folder on first run; keep them bundled. -->
-    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <!--
+      Not single-file: compression is only allowed for self-contained bundles (NETSDK1176),
+      and this app stays framework-dependent. The installer packs the output directory.
+    -->
+    <PublishSingleFile>false</PublishSingleFile>
 
     <DebugType>none</DebugType>
     <DebugSymbols>false</DebugSymbols>

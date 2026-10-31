@@ -70,3 +70,21 @@ artifacts/
 *.tmp
 *.log
 *.bak
+## ===================================================================
+## Code signing material — private keys must never be committed
+## ===================================================================
+
+# Private key containers (any location, any casing)
+*.pfx
+*.p12
+*.pvk
+*.snk
+*.key
+*.pem
+*.jks
+*.keystore
+
+# Password / secret sidecars
+*.pfx.password
+certs/**/*.txt
+certs/**/*.secret
