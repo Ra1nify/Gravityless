@@ -150,6 +150,17 @@ public class ProjectService
     }
 
     /// <summary>
+    /// Canonical copy of a project's Antigravity metadata file. Instances hard-link their
+    /// config/projects/&lt;id&gt;.json to this path, so one project has exactly one definition.
+    /// </summary>
+    public string GetProjectConfigJsonPath(string projectId)
+    {
+        var dir = Path.Combine(_projectsStorageDir, ToSafePathSegment(projectId));
+        Directory.CreateDirectory(dir);
+        return Path.Combine(dir, "project.json");
+    }
+
+    /// <summary>
     /// Synthetic project id for Antigravity's project-less chats. They live outside the
     /// Gravityless data root, so the path resolvers special-case this id.
     /// </summary>
