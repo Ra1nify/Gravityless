@@ -888,6 +888,10 @@ public class InstanceService
                     {
                         var fName = Path.GetFileName(f);
                         var target = Path.Combine(instConvos, fName);
+
+                        // A stale -wal from an earlier run would be paired with the freshly linked
+                        // database and make SQLite read pages that no longer belong to it.
+                        DeleteSqliteSiblings(target);
                         JunctionService.CreateFileHardLink(target, f);
                     }
                 }
@@ -1160,6 +1164,57 @@ public class InstanceService
         catch { }
     }
 
+    /// <summary>
+    /// SQLite keeps committed-but-unmerged pages in companion files next to the database.
+    /// Moving the .db alone would silently drop them, so the whole family travels together.
+    /// </summary>
+    private static readonly string[] SqliteSiblingSuffixes = ["-wal", "-shm"];
+
+    private static void MoveSqliteWithSiblings(string sourceDb, string destDb)
+    {
+        // Overwrite semantics: the caller already decided this copy should become the shared one,
+        // and leaving a stale target in place would mix rows from two different databases.
+        if (File.Exists(destDb))
+        {
+            try { File.Delete(destDb); } catch { }
+        }
+
+        File.Move(sourceDb, destDb);
+
+        foreach (var suffix in SqliteSiblingSuffixes)
+        {
+            var from = sourceDb + suffix;
+            if (!File.Exists(from)) continue;
+
+            try
+            {
+                var to = destDb + suffix;
+                if (File.Exists(to)) File.Delete(to);
+                File.Move(from, to);
+            }
+            catch (Exception ex)
+            {
+                DiagLog.Swallowed("instance.sqlite-sibling-move", ex);
+            }
+        }
+    }
+
+    private static void DeleteSqliteSiblings(string dbPath)
+    {
+        foreach (var suffix in SqliteSiblingSuffixes)
+        {
+            try
+            {
+                var path = dbPath + suffix;
+                if (File.Exists(path)) File.Delete(path);
+            }
+            catch (Exception ex)
+            {
+                DiagLog.Swallowed("instance.sqlite-sibling-delete", ex);
+            }
+        }
+    }
+
     public void ReconcileAndHarvestProjects(InstanceProfile inst)
     {
         var instGemini = Path.Combine(_instancesStorageDir, inst.Id, ".gemini");
@@ -1384,11 +1439,13 @@ public class InstanceService
 
                         if (!File.Exists(targetPubConvoDb))
                         {
-                            File.Move(srcConvoDb, targetPubConvoDb);
+                            // Move the whole family: a bare .db loses whatever still sits in -wal.
+                            MoveSqliteWithSiblings(srcConvoDb, targetPubConvoDb);
                         }
                         else
                         {
                             File.Delete(srcConvoDb);
+                            DeleteSqliteSiblings(srcConvoDb);
                         }
 
                         JunctionService.CreateFileHardLink(srcConvoDb, targetPubConvoDb);
