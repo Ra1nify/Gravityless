@@ -11,6 +11,9 @@ Yet Another Spicy Companion Of Antigravity
 **English** | [简体中文](README.zh-CN.md)
 
 
+<img width="1260" height="840" alt="image" src="https://github.com/user-attachments/assets/112bd0cb-0696-4036-9980-95a046d74796" />
+
+
 Gravityless runs several isolated Antigravity instances side by side on Windows, manages a pool of Google accounts, and patches the app for native window materials.
 
 
