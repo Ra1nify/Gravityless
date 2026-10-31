@@ -1,0 +1,30 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <Color x:Key="BrandAccentColor">#FF4285F4</Color>
+    <SolidColorBrush x:Key="BrandAccentBrush" Color="{StaticResource BrandAccentColor}" />
+    <SolidColorBrush x:Key="BrandAccentFillSoftBrush" Color="#1A4285F4" />
+    <SolidColorBrush x:Key="BrandAccentFillMediumBrush" Color="#224285F4" />
+    <SolidColorBrush x:Key="BrandAccentFillStrongBrush" Color="#264285F4" />
+    <SolidColorBrush x:Key="BrandAccentFillStrongerBrush" Color="#334285F4" />
+    <SolidColorBrush x:Key="BrandAccentTextBrush" Color="#0B57D0" />
+
+    <SolidColorBrush x:Key="StatusSuccessBrush" Color="#1E8E3E" />
+    <SolidColorBrush x:Key="StatusSuccessFillSoftBrush" Color="#1A1E8E3E" />
+    <SolidColorBrush x:Key="StatusSuccessFillFaintBrush" Color="#181E8E3E" />
+    <SolidColorBrush x:Key="StatusCautionBrush" Color="#E37400" />
+    <SolidColorBrush x:Key="StatusCautionFillSoftBrush" Color="#1AE37400" />
+    <SolidColorBrush x:Key="StatusCriticalBrush" Color="#D93025" />
+    <SolidColorBrush x:Key="StatusNeutralBrush" Color="#5F6368" />
+
+    <SolidColorBrush x:Key="OverlaySeparatorBrush" Color="#33000000" />
+    <SolidColorBrush x:Key="OverlaySurfaceFaintBrush" Color="#0F000000" />
+
+    <SolidColorBrush x:Key="TranscriptUserCardBrush" Color="#EEF2FA" />
+    <SolidColorBrush x:Key="TranscriptUserBorderBrush" Color="#A8C0E8" />
+    <SolidColorBrush x:Key="TranscriptAssistantCardBrush" Color="#F5F5F5" />
+    <SolidColorBrush x:Key="TranscriptThinkingCardBrush" Color="#FAFAFA" />
+    <SolidColorBrush x:Key="TranscriptToolCallBrush" Color="#F0F4F9" />
+    <SolidColorBrush x:Key="TranscriptToolOutputBrush" Color="#F7F7F7" />
+    <!-- Window surface base; alpha is driven at runtime by the opacity slider -->
+</ResourceDictionary>

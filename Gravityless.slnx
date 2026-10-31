@@ -1,0 +1,6 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Gravityless.App/Gravityless.App.csproj" />
+    <Project Path="src/Gravityless.Core/Gravityless.Core.csproj" />
+  </Folder>
+</Solution>

@@ -1,0 +1,72 @@
+## ===================================================================
+## Standard C# / .NET / Visual Studio / JetBrains Rider .gitignore
+## ===================================================================
+
+# Build results
+[Dd]ebug/
+[Dd]ebugPublic/
+[Rr]elease/
+[Rr]eleases/
+x64/
+x86/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+[Tt]est[Bb]uild/
+
+# Visual Studio & Windows
+.vs/
+*.suo
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svclog
+*.VisualState.xml
+*.DotSettings.user
+
+# JetBrains Rider & ReSharper
+.idea/
+*.sln.iml
+_ReSharper*/
+*.ReSharper
+*.ReSharper.user
+
+# User-specific files
+*.rsuser
+*.userosscache
+*.sln.docstates
+
+# NuGet Packages & Assets
+*.nuget.props
+*.nuget.targets
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+# Crash dumps & caches
+*.stackdump
+*.dmp
+*.crash
+
+## ===================================================================
+## Gravityless Application Runtime Data & Local Sandboxes
+## ===================================================================
+
+# Managed Antigravity Core Binaries (Large binary distribution)
+**/core/
+
+# Runtime Data, Sandboxes, Projects & Accounts
+**/data/
+**/temp/
+**/shared/
+
+# Temporary and backup files
+*.local.json
+*.tmp
+*.log
+*.bak

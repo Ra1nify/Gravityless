@@ -1,0 +1,197 @@
+<ui:FluentWindow x:Class="Gravityless.App.Dialogs.ConversationPreviewDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+        Title="{DynamicResource ConversationPreview_Title}" 
+        Width="960"
+        Height="700"
+        MinHeight="500"
+        MinWidth="720"
+        WindowBackdropType="Mica"
+        ExtendsContentIntoTitleBar="True"
+        WindowCornerPreference="Round"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False"
+        Background="Transparent">
+
+    <Grid Margin="0,0,0,16" ClipToBounds="True">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <ui:TitleBar x:Name="DialogTitleBar" Grid.Row="0" Title="{DynamicResource ConversationPreview_Title}" ShowMaximize="True" ShowMinimize="False"/>
+
+        <ui:Card Grid.Row="1" Margin="20,6,20,10" Padding="16,10">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                    <TextBlock x:Name="ConversationTitleText" FontWeight="Bold" FontSize="15" TextTrimming="CharacterEllipsis"/>
+                    <TextBlock x:Name="ConversationMetaText" FontSize="11" Opacity="0.6" Margin="0,3,0,0" FontFamily="Consolas" TextTrimming="CharacterEllipsis"/>
+                </StackPanel>
+
+                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                    <ui:TextBox x:Name="SearchBox" 
+                                Width="260" 
+                                PlaceholderText="{DynamicResource ConversationPreview_SearchPlaceholder}" 
+                                TextChanged="OnSearchTextChanged" 
+                                Icon="{ui:SymbolIcon Symbol=Search24}" 
+                                Margin="0,0,10,0"/>
+                    <ui:Button x:Name="ExportSingleBtn" 
+                               Content="{DynamicResource ConversationPreview_ExportBtn}" 
+                               Click="OnExportSingleClicked" 
+                               Appearance="Primary" 
+                               Icon="{ui:SymbolIcon Symbol=Save24}" 
+                               Padding="12,5" 
+                               VerticalAlignment="Center"/>
+                </StackPanel>
+            </Grid>
+        </ui:Card>
+
+        <Grid Grid.Row="2" Margin="20,0,20,0">
+            <StackPanel x:Name="LoadingPanel" VerticalAlignment="Center" HorizontalAlignment="Center">
+                <ui:ProgressRing IsIndeterminate="True" Width="42" Height="42" Margin="0,0,0,14"/>
+                <TextBlock Text="{DynamicResource ConversationPreview_Loading}" FontSize="13" Opacity="0.75" HorizontalAlignment="Center"/>
+            </StackPanel>
+
+            <TextBlock x:Name="EmptyNoticeText" Text="{DynamicResource ConversationPreview_EmptyNotice}" Visibility="Collapsed" FontSize="13" Opacity="0.5" VerticalAlignment="Center" HorizontalAlignment="Center"/>
+        </Grid>
+
+        <ListBox x:Name="TranscriptListBox" Grid.Row="2" Margin="20,0,20,0" Visibility="Collapsed"
+                 Background="Transparent" BorderThickness="0" Padding="0"
+                 HorizontalContentAlignment="Stretch" VerticalContentAlignment="Top"
+                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                 ScrollViewer.VerticalScrollBarVisibility="Auto"
+                 ScrollViewer.CanContentScroll="True"
+                 VirtualizingPanel.IsVirtualizing="True"
+                 VirtualizingPanel.VirtualizationMode="Recycling"
+                 VirtualizingPanel.ScrollUnit="Pixel">
+            <ListBox.ItemContainerStyle>
+                <Style TargetType="ListBoxItem">
+                    <Setter Property="Padding" Value="0"/>
+                    <Setter Property="Margin" Value="0"/>
+                    <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                    <Setter Property="Focusable" Value="True"/>
+                    <Setter Property="Template">
+                        <Setter.Value>
+                            <ControlTemplate TargetType="ListBoxItem">
+                                <Border x:Name="RowChrome"
+                                        Background="Transparent"
+                                        BorderBrush="Transparent"
+                                        BorderThickness="1"
+                                        CornerRadius="6"
+                                        Padding="6,4"
+                                        Margin="-6,-4"
+                                        SnapsToDevicePixels="True">
+                                    <ContentPresenter/>
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="RowChrome" Property="Background"
+                                                Value="{DynamicResource SubtleFillColorSecondaryBrush}"/>
+                                    </Trigger>
+                                    <Trigger Property="IsSelected" Value="True">
+                                        <Setter TargetName="RowChrome" Property="Background"
+                                                Value="{DynamicResource SubtleFillColorTertiaryBrush}"/>
+                                        <Setter TargetName="RowChrome" Property="BorderBrush"
+                                                Value="{DynamicResource ControlStrokeColorDefaultBrush}"/>
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Setter.Value>
+                    </Setter>
+                </Style>
+            </ListBox.ItemContainerStyle>
+            <ListBox.ItemTemplate>
+                    <DataTemplate>
+                        <Grid Margin="0,0,0,12">
+                            <Grid.ContextMenu>
+                                <ContextMenu Background="Transparent" Foreground="{DynamicResource TextFillColorPrimaryBrush}" BorderBrush="{DynamicResource DividerStrokeColorDefaultBrush}">
+                                    <MenuItem Header="{Binding ForkMenuHeader}" Click="OnForkFromStepClicked" Tag="{Binding StepIndex}">
+                                        <MenuItem.Icon>
+                                            <ui:SymbolIcon Symbol="BranchFork24" Foreground="{DynamicResource StatusSuccessBrush}"/>
+                                        </MenuItem.Icon>
+                                    </MenuItem>
+                                    <Separator Background="{DynamicResource DividerStrokeColorDefaultBrush}"/>
+                                    <MenuItem Header="{DynamicResource ConversationPreview_CopyStepMenu}" Click="OnCopyStepContentClicked" Tag="{Binding StepIndex}">
+                                        <MenuItem.Icon>
+                                            <ui:SymbolIcon Symbol="Copy24" Foreground="{DynamicResource BrandAccentTextBrush}"/>
+                                        </MenuItem.Icon>
+                                    </MenuItem>
+                                </ContextMenu>
+                            </Grid.ContextMenu>
+
+                            <ui:Card Padding="14,10" Background="{DynamicResource TranscriptUserCardBrush}" BorderBrush="{DynamicResource TranscriptUserBorderBrush}" BorderThickness="1"
+                                     Visibility="{Binding UserBubbleVisibility}">
+                                <StackPanel>
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                                        <TextBlock Text="{DynamicResource ConversationPreview_UserLabel}" FontWeight="Bold" FontSize="12" Foreground="{DynamicResource BrandAccentTextBrush}"/>
+                                        <TextBlock Text="{Binding FormattedTime}" FontSize="11" Opacity="0.5" Margin="8,0,0,0"/>
+                                        <TextBlock Text="{Binding StepBadgeText}" FontSize="11" Opacity="0.4" Margin="8,0,0,0"/>
+                                    </StackPanel>
+                                    <TextBlock Text="{Binding Content}" FontSize="13" TextWrapping="Wrap"/>
+                                </StackPanel>
+                            </ui:Card>
+
+                            <ui:Card Padding="14,10" Background="{DynamicResource TranscriptAssistantCardBrush}" BorderBrush="{DynamicResource DividerStrokeColorDefaultBrush}" BorderThickness="1"
+                                     Visibility="{Binding ModelBubbleVisibility}">
+                                <StackPanel>
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                                        <TextBlock Text="🤖 Antigravity" FontWeight="Bold" FontSize="12" Foreground="{DynamicResource StatusSuccessBrush}"/>
+                                        <TextBlock Text="{Binding FormattedTime}" FontSize="11" Opacity="0.5" Margin="8,0,0,0"/>
+                                        <TextBlock Text="{Binding StepBadgeText}" FontSize="11" Opacity="0.4" Margin="8,0,0,0"/>
+                                    </StackPanel>
+
+                                    <Border Background="{DynamicResource TranscriptThinkingCardBrush}" CornerRadius="4" Padding="10,6" Margin="0,0,0,8"
+                                            Visibility="{Binding ThinkingVisibility}">
+                                        <StackPanel>
+                                            <TextBlock Text="{DynamicResource ConversationPreview_ThinkingLabel}" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource StatusCautionBrush}" Margin="0,0,0,4"/>
+                                            <TextBlock Text="{Binding Thinking}" FontSize="11" Opacity="0.75" TextWrapping="Wrap" FontFamily="Consolas"/>
+                                        </StackPanel>
+                                    </Border>
+
+                                    <Border Background="{DynamicResource TranscriptToolCallBrush}" CornerRadius="4" Padding="10,6" Margin="0,0,0,8"
+                                            Visibility="{Binding ToolCallVisibility}">
+                                        <StackPanel>
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="{DynamicResource ConversationPreview_ToolCallLabel}" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource BrandAccentBrush}"/>
+                                                <TextBlock Text="{Binding ToolName}" FontSize="11" FontWeight="Bold" FontFamily="Consolas" Foreground="{DynamicResource BrandAccentTextBrush}"/>
+                                                <TextBlock Text="{Binding ToolSummary, StringFormat=' ({0})'}" FontSize="11" Opacity="0.7" Margin="6,0,0,0"/>
+                                            </StackPanel>
+                                            <TextBlock Text="{Binding ToolArgs}" FontSize="11" Opacity="0.6" FontFamily="Consolas" TextWrapping="Wrap" Margin="0,4,0,0"
+                                                       Visibility="{Binding ToolArgsVisibility}"/>
+                                        </StackPanel>
+                                    </Border>
+
+                                    <TextBlock Text="{Binding Content}" FontSize="13" TextWrapping="Wrap"
+                                               Visibility="{Binding ContentVisibility}"/>
+                                </StackPanel>
+                            </ui:Card>
+
+                            <Border Background="{DynamicResource TranscriptToolOutputBrush}" BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="4" Padding="10,8"
+                                    Visibility="{Binding ToolOutputVisibility}">
+                                <StackPanel>
+                                    <TextBlock Text="{Binding ToolOutputHeader}" FontSize="11" Opacity="0.5" Margin="0,0,0,4"/>
+                                    <TextBlock Text="{Binding Content}" FontSize="11" Opacity="0.8" FontFamily="Consolas" TextWrapping="Wrap"/>
+                                </StackPanel>
+                            </Border>
+                        </Grid>
+                    </DataTemplate>
+            </ListBox.ItemTemplate>
+        </ListBox>
+
+        <Grid Grid.Row="3" Margin="20,10,20,0">
+            <TextBlock Text="{DynamicResource ConversationPreview_ForkHint}" FontSize="11" Opacity="0.45"
+                       HorizontalAlignment="Left" VerticalAlignment="Center"/>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <ui:Button Content="{DynamicResource Common_Close}" Click="OnCloseClicked" Appearance="Secondary" Padding="16,5"/>
+            </StackPanel>
+        </Grid>
+    </Grid>
+</ui:FluentWindow>

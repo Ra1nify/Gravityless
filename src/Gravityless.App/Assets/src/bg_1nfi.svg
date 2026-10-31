@@ -1,0 +1,137 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1000" width="100%" height="100%">
+  <defs>
+    <!-- 1. 莫比乌斯环核心几何复合路径 (环宽严格 88px，100% 双孔镂空) -->
+    <path id="infinity-hollow-shape" fill-rule="evenodd" d="
+      M 500 237.78
+      L 543.93 193.93
+      A 150.066 150.066 0 1 1 543.93 406.07
+      L 500 362.22
+      L 456.07 406.07
+      A 150.066 150.066 0 1 1 456.07 193.93
+      Z
+
+      M 437.78 300
+      L 393.93 343.93
+      A 62.066 62.066 0 1 1 393.93 256.07
+      Z
+
+      M 562.22 300
+      L 606.07 256.07
+      A 62.066 62.066 0 1 1 606.07 343.93
+      Z
+    " />
+
+    <!-- 2. 全局双孔镂空蒙版 -->
+    <mask id="infinity-hollow-mask">
+      <rect width="1000" height="600" fill="black" />
+      <use href="#infinity-hollow-shape" fill="white" />
+    </mask>
+
+    <!-- 3. 下层环专属裁切区 (左上至右下)：严格限制阴影只投射在下层蓝环上 -->
+    <clipPath id="bottom-strand-clip">
+      <polygon points="350,80 650,380 560,470 260,170" />
+    </clipPath>
+
+    <!-- 4. 上层环精确几何边界裁切：严锁 88px 物理边界 -->
+    <clipPath id="top-strand-clip">
+      <path d="
+        M 350 149.934
+        A 150.066 150.066 0 1 0 456.07 406.07
+        L 606.07 256.07
+        A 62.066 62.066 0 1 1 606.07 343.93
+        L 668.28 406.14
+        A 150.066 150.066 0 1 0 543.93 193.93
+        L 393.93 343.93
+        A 62.066 62.066 0 1 1 393.93 256.07
+        Z
+      " />
+    </clipPath>
+
+    <!-- 5A. 左环垂直渐变 (严格以 y=300 水平黑线为 50% 蓝绿混色中值) -->
+    <linearGradient id="left-lobe-grad" x1="250" y1="215" x2="250" y2="385" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#1B72E8" />
+      <stop offset="25%" stop-color="#1D80C8" />
+      <stop offset="50%" stop-color="#218D9F" />
+      <stop offset="78%" stop-color="#2B9B76" />
+      <stop offset="100%" stop-color="#34A853" />
+    </linearGradient>
+
+    <!-- 5B. 右环垂直渐变 (严格以 y=300 水平黑线为 50% 红蓝混色中值) -->
+    <linearGradient id="right-lobe-grad" x1="750" y1="215" x2="750" y2="385" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#EA4335" />
+      <stop offset="22%" stop-color="#B84F62" />
+      <stop offset="50%" stop-color="#825B8F" />
+      <stop offset="75%" stop-color="#4E66BC" />
+      <stop offset="100%" stop-color="#1B72E8" />
+    </linearGradient>
+
+    <!-- 5C. 中心斜向主渐变 (绿:黄:红 ≈ 1:1:1) -->
+    <linearGradient id="center-bridge-grad" x1="375" y1="425" x2="625" y2="175" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#34A853" />
+      <stop offset="12%" stop-color="#34A853" />
+      <stop offset="24%" stop-color="#7CB836" />
+      <stop offset="34%" stop-color="#E2BA0E" />
+      <stop offset="44%" stop-color="#F6B704" />
+      <stop offset="56%" stop-color="#FB9E00" />
+      <stop offset="66%" stop-color="#F77E14" />
+      <stop offset="76%" stop-color="#EE5628" />
+      <stop offset="88%" stop-color="#EA4335" />
+      <stop offset="100%" stop-color="#EA4335" />
+    </linearGradient>
+
+    <!-- 6. 零漏底消痕滤镜 (柔和融接弯道折痕 + 100% 不透明度封底) -->
+    <filter id="seamless-curve-blend" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="18" result="blurred" />
+      <feComponentTransfer in="blurred">
+        <feFuncA type="linear" slope="50" intercept="1" />
+      </feComponentTransfer>
+    </filter>
+
+    <!-- 7. 交叠边缘阴影滤镜 -->
+    <filter id="overlap-shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="15" result="blur" />
+      <feOffset in="blur" dx="0" dy="2" result="offsetBlur" />
+      <feComponentTransfer in="offsetBlur" result="shadow">
+        <feFuncA type="linear" slope="0.52" />
+      </feComponentTransfer>
+      <feMerge>
+        <feMergeNode in="shadow" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- 底层：参照 icon.png 规格的 1000x1000 圆角纯白底板 -->
+  <rect x="0" y="0" width="1000" height="1000" rx="225" ry="225" fill="#FFFFFF" />
+
+  <!-- 居中与呼吸感留白容器：将 1000x600 的莫比乌斯环精确居中于 1000x1000 画布 -->
+  <g transform="translate(500, 500) scale(1.39) translate(-500, -300)">
+    <g mask="url(#infinity-hollow-mask)">
+      
+      <!-- 第一层：Google 标准蓝基底 -->
+      <use href="#infinity-hollow-shape" fill="#1B72E8" />
+
+      <!-- 第二层：上层对下层投射的边缘阴影 (严格限制在下层蓝环内) -->
+      <g clip-path="url(#bottom-strand-clip)">
+        <path d="M 350 450 L 650 150" stroke="#041E49" stroke-width="88" stroke-linecap="butt" fill="none" filter="url(#overlap-shadow)" />
+      </g>
+
+      <!-- 第三层：零突变、零漏蓝顺环过渡带 -->
+      <g clip-path="url(#top-strand-clip)">
+        <g filter="url(#seamless-curve-blend)">
+          
+          <!-- 3.1 左环段 -->
+          <path d="M 350 193.934 A 106.066 106.066 0 1 0 445 355" stroke="url(#left-lobe-grad)" stroke-width="170" stroke-linecap="round" fill="none" />
+
+          <!-- 3.2 右环段 -->
+          <path d="M 555 245 A 106.066 106.066 0 1 1 650 406.066" stroke="url(#right-lobe-grad)" stroke-width="170" stroke-linecap="round" fill="none" />
+
+          <!-- 3.3 中心段 -->
+          <path d="M 365 408 A 106.066 106.066 0 0 0 425 375 L 575 225 A 106.066 106.066 0 0 1 635 192" stroke="url(#center-bridge-grad)" stroke-width="170" stroke-linecap="round" fill="none" />
+
+        </g>
+      </g>
+
+    </g>
+  </g>
+</svg>
