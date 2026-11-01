@@ -380,17 +380,12 @@ public class AccountPoolService
 
         int maxAttempts = autoRetry ? 3 : 1;
 
-        // Without an OAuth client pair every refresh returns invalid_grant, which reads as
-        // "credentials revoked" when the real cause is a missing configuration file.
+        // The file path is a cache populated ahead of time (startup and after each capture).
+        // Reading it here keeps the refresh path free of binary scanning, which takes seconds.
         var oauthClient = LoadOAuthClient(_baseDir);
         if (string.IsNullOrEmpty(oauthClient.ClientId) || string.IsNullOrEmpty(oauthClient.ClientSecret))
         {
-            var recovered = await EnsureOAuthClientAsync(proxyConfig, cancellationToken);
-            if (recovered == null)
-            {
-                return (false, "缺少 OAuth 客户端配置，且无法从已安装的 Antigravity 核心中提取");
-            }
-            oauthClient = (recovered.ClientId, recovered.ClientSecret);
+            return (false, "缺少 OAuth 客户端配置，请先在概览页同步核心后重启应用");
         }
 
         using var client = CreateHttpClient(proxyConfig);
@@ -1077,6 +1072,15 @@ public class AccountPoolService
                 // Archive the account credentials into data/accounts/{id}/.
                 var accountDir = GetAccountStorageDir(profile.Id);
                 InjectAccountToGeminiDir(accountDir, profile);
+
+                // The captured refresh token is guaranteed to be live, so it is the most
+                // reliable moment to certify an OAuth client pair. Fire and forget: capture
+                // has already succeeded and must not block on a 2 s binary scan.
+                _ = Task.Run(async () =>
+                {
+                    try { await EnsureOAuthClientAsync(null); }
+                    catch (Exception ex) { DiagLog.Swallowed("account.oauth-client-post-capture", ex); }
+                });
             }
 
             return profile;
