@@ -1550,9 +1550,13 @@ public partial class MainWindow
             result.GeminiStatus, result.GeminiLatencyMeasured, result.GeminiLatencyMs, result.GeminiMessage,
             ProxyGeminiStatus, ProxyGeminiLatency, ProxyGeminiReason);
 
+        // The sampled account belongs to the Antigravity probe, so its alias lives here and is
+        // always shown: on success it is the only thing in the column, on failure it prefixes
+        // the reason.
         ApplyProxyProbeRow(
             result.AntigravityStatus, result.AntigravityLatencyMeasured, result.AntigravityLatencyMs, result.AntigravityMessage,
-            ProxyAntigravityStatus, ProxyAntigravityLatency, ProxyAntigravityReason);
+            ProxyAntigravityStatus, ProxyAntigravityLatency, ProxyAntigravityReason,
+            result.TestedAccountAlias);
     }
 
     /// <summary>Clears the report so a previous run cannot show through while a new one runs.</summary>
@@ -1570,6 +1574,7 @@ public partial class MainWindow
     /// <summary>
     /// Fills one probe row: status glyph, latency, and the reason shown only when it matters.
     /// A failure that never completed a round trip reports N/A instead of a misleading 0 ms.
+    /// <paramref name="alias"/> is prefixed to the reason column and shown even on success.
     /// </summary>
     private static void ApplyProxyProbeRow(
         ConnectivityStatus status,
@@ -1578,7 +1583,8 @@ public partial class MainWindow
         string message,
         System.Windows.Controls.TextBlock statusBlock,
         System.Windows.Controls.TextBlock latencyBlock,
-        System.Windows.Controls.TextBlock reasonBlock)
+        System.Windows.Controls.TextBlock reasonBlock,
+        string? alias = null)
     {
         var na = LocalizationService.GetString("Proxy_ResultNa", "N/A");
 
@@ -1594,8 +1600,15 @@ public partial class MainWindow
             ? Palette.Get("TextFillColorPrimaryBrush")
             : Palette.Get("TextFillColorTertiaryBrush");
 
-        // Success needs no explanation; failures and skips do.
-        reasonBlock.Text = status == ConnectivityStatus.Success ? string.Empty : message;
+        // Success carries no reason, so the alias stands alone; failures join the two.
+        var showMessage = status != ConnectivityStatus.Success && !string.IsNullOrWhiteSpace(message);
+        reasonBlock.Text = (alias, showMessage) switch
+        {
+            (null or "", true) => message,
+            (null or "", false) => string.Empty,
+            (_, true) => $"{alias} · {message}",
+            (_, false) => alias!
+        };
     }
 
     private void OnSaveProxyClicked(object sender, RoutedEventArgs e)
