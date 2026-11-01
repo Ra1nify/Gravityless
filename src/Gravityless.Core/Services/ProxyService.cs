@@ -31,6 +31,12 @@ public class ProxyTestResult
     public bool AntigravityLatencyMeasured { get; set; }
     public string? TestedAccountEmail { get; set; }
 
+    /// <summary>
+    /// Short label of the sampled account (its display name, falling back to the local part of
+    /// the address). Shown in the UI so a full email is not exposed in a status report.
+    /// </summary>
+    public string? TestedAccountAlias { get; set; }
+
     public long LatencyMs { get; set; }
 
     // Egress IP of the proxy node, kept internally and not shown in the UI
@@ -241,6 +247,7 @@ public class ProxyService
             foreach (var chosenAccount in orderedAccounts)
             {
                 result.TestedAccountEmail = chosenAccount.Email;
+                result.TestedAccountAlias = AccountAlias(chosenAccount);
                 var (accessToken, refreshToken, expiry) = ExtractTokens(chosenAccount.CredentialBlob);
 
                 // Refresh when the token is missing or expires within two minutes
@@ -273,7 +280,7 @@ public class ProxyService
                 if (string.IsNullOrWhiteSpace(accessToken))
                 {
                     result.AntigravityStatus = ConnectivityStatus.Failed;
-                    result.AntigravityMessage = $"抽测账号 [{chosenAccount.Email}] 凭据损坏或缺少 Access Token";
+                    result.AntigravityMessage = $"抽测账号 [{result.TestedAccountAlias}] 凭据损坏或缺少 Access Token";
                     lastAgResult = result;
                     continue;
                 }
@@ -332,7 +339,7 @@ public class ProxyService
                             result.AntigravityLatencyMs = agSw.ElapsedMilliseconds;
 
                             var retryBody = await retryResp.Content.ReadAsStringAsync();
-                            var evaluated = EvaluateAntigravityResponse(result, sw, retryResp, retryBody, chosenAccount.Email);
+                            var evaluated = EvaluateAntigravityResponse(result, sw, retryResp, retryBody, result.TestedAccountAlias ?? chosenAccount.Email);
                             if (evaluated.AntigravityStatus == ConnectivityStatus.Success || evaluated.AntigravityMessage.Contains("地区受阻"))
                             {
                                 return evaluated;
@@ -342,7 +349,7 @@ public class ProxyService
                         }
                     }
 
-                    var eval = EvaluateAntigravityResponse(result, sw, agResp, agBody, chosenAccount.Email);
+                    var eval = EvaluateAntigravityResponse(result, sw, agResp, agBody, result.TestedAccountAlias ?? chosenAccount.Email);
                     if (eval.AntigravityStatus == ConnectivityStatus.Success || eval.AntigravityMessage.Contains("地区受阻"))
                     {
                         return eval;
@@ -378,12 +385,24 @@ public class ProxyService
     }
 
     /// <summary>Classifies the Antigravity probe response: location block, credential failure, success, or other.</summary>
+    /// <summary>
+    /// Short label for an account: its display name, or the local part of the address when the
+    /// name is empty. Keeps reports readable without printing a full email.
+    /// </summary>
+    private static string AccountAlias(AccountProfile account)
+    {
+        if (!string.IsNullOrWhiteSpace(account.DisplayName)) return account.DisplayName.Trim();
+
+        var at = account.Email.IndexOf('@');
+        return at > 0 ? account.Email[..at] : account.Email;
+    }
+
     private static ProxyTestResult EvaluateAntigravityResponse(
         ProxyTestResult result,
         Stopwatch totalSw,
         HttpResponseMessage agResp,
         string agBody,
-        string accountEmail)
+        string accountAlias)
     {
         result.LatencyMs = totalSw.ElapsedMilliseconds;
 
@@ -407,7 +426,7 @@ public class ProxyService
             agBody.Contains("UNAUTHENTICATED", StringComparison.OrdinalIgnoreCase))
         {
             result.AntigravityStatus = ConnectivityStatus.Failed;
-            result.AntigravityMessage = $"凭据失效 (401 Unauthorized · 账号 [{accountEmail}] 需要重新登录授权)";
+            result.AntigravityMessage = $"凭据失效 (401 Unauthorized · 账号 [{accountAlias}] 需要重新登录授权)";
             return result;
         }
 
@@ -415,7 +434,7 @@ public class ProxyService
         {
             totalSw.Stop();
             result.AntigravityStatus = ConnectivityStatus.Success;
-            result.AntigravityMessage = $"服务正常 (200 OK · 抽测账号: {accountEmail})";
+            result.AntigravityMessage = $"服务正常 (200 OK · 抽测账号: {accountAlias})";
             return result;
         }
 
