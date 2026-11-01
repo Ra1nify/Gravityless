@@ -66,6 +66,15 @@
     <!-- Projects View -->
     <sys:String x:Key="Projects_ImportGeminiBtn">Import from .gemini</sys:String>
     <sys:String x:Key="Projects_RefreshBtn">Refresh List</sys:String>
+    <sys:String x:Key="Projects_RepairBtn">Repair memory</sys:String>
+    <sys:String x:Key="Projects_RepairScanning">Scanning project memory…</sys:String>
+    <sys:String x:Key="Projects_RepairNothingTitle">Nothing to repair</sys:String>
+    <sys:String x:Key="Projects_RepairNothingMessage">All project memory is intact.</sys:String>
+    <sys:String x:Key="Projects_RepairFoundTitle">Repairable items found</sys:String>
+    <sys:String x:Key="Projects_RepairFoundFormat">{0} conversations are missing their data; {1} can still be exported from brain.</sys:String>
+    <sys:String x:Key="Projects_RepairConfirmMessageFormat">{0}&#x0a;&#x0a;Repair will:&#x0a;1. Re-register brain entries that are missing from the project list&#x0a;2. Export each transcript as Markdown beside its brain directory&#x0a;&#x0a;Note: the conversation data is gone, so it still will not open in Antigravity.</sys:String>
+    <sys:String x:Key="Projects_RepairConfirmBtn">Start repair</sys:String>
+    <sys:String x:Key="Projects_RepairDoneTitle">Repair finished</sys:String>
     <sys:String x:Key="Projects_Desc">Project workspace and memory store. Written back when the instance exits.</sys:String>
     <sys:String x:Key="Projects_PathInvalid">Path invalid</sys:String>
     <sys:String x:Key="Projects_RelocateBtn">Relocate</sys:String>

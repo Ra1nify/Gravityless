@@ -66,6 +66,15 @@
     <!-- Projects View -->
     <sys:String x:Key="Projects_ImportGeminiBtn">从 .gemini 导入</sys:String>
     <sys:String x:Key="Projects_RefreshBtn">刷新列表</sys:String>
+    <sys:String x:Key="Projects_RepairBtn">修复记忆</sys:String>
+    <sys:String x:Key="Projects_RepairScanning">检查项目记忆…</sys:String>
+    <sys:String x:Key="Projects_RepairNothingTitle">无需修复</sys:String>
+    <sys:String x:Key="Projects_RepairNothingMessage">所有项目记忆都完整。</sys:String>
+    <sys:String x:Key="Projects_RepairFoundTitle">发现可修复项</sys:String>
+    <sys:String x:Key="Projects_RepairFoundFormat">共 {0} 条记录缺少对话本体，其中 {1} 条可从 brain 导出内容。</sys:String>
+    <sys:String x:Key="Projects_RepairConfirmMessageFormat">{0}&#x0a;&#x0a;修复会：&#x0a;1. 把 brain 中未登记的记忆补回项目列表&#x0a;2. 将对话记录导出为 Markdown 保存在各对话目录&#x0a;&#x0a;注意：对话本体已丢失，修复后仍无法在 Antigravity 中打开。</sys:String>
+    <sys:String x:Key="Projects_RepairConfirmBtn">开始修复</sys:String>
+    <sys:String x:Key="Projects_RepairDoneTitle">修复完成</sys:String>
     <sys:String x:Key="Projects_Desc">项目代码工作区与记忆库。实例退出时自动写回。</sys:String>
     <sys:String x:Key="Projects_PathInvalid">路径失效</sys:String>
     <sys:String x:Key="Projects_RelocateBtn">重定位</sys:String>

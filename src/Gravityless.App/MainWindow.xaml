@@ -394,6 +394,7 @@
                             <StackPanel Grid.Column="0" Orientation="Horizontal">
                                 <ui:Button AutomationProperties.AutomationId="ProjectsImportGeminiBtn" Content="{DynamicResource Projects_ImportGeminiBtn}" Click="OnImportFromGeminiClicked" Appearance="Primary" Margin="0,0,12,0" Icon="{ui:SymbolIcon Symbol=FolderArrowRight24}"/>
                                 <ui:Button AutomationProperties.AutomationId="ProjectsRefreshBtn" Content="{DynamicResource Projects_RefreshBtn}" Click="OnRefreshProjectsClicked" Margin="0,0,12,0" Icon="{ui:SymbolIcon Symbol=ArrowSync24}"/>
+                                <ui:Button AutomationProperties.AutomationId="ProjectsRepairBtn" Content="{DynamicResource Projects_RepairBtn}" Click="OnRepairProjectsClicked" Icon="{ui:SymbolIcon Symbol=Wrench24}"/>
                             </StackPanel>
                             <ctrl:PageStatusStrip Grid.Column="1" x:Name="ProjectsStatusStrip" Margin="12,0,0,0" VerticalAlignment="Center"/>
                         </Grid>
