@@ -78,6 +78,7 @@ public partial class MainWindow
         UpdateSidebarStatus();
         RefreshEngineStatus();
         AccountPoolService.EnsureProtocolInterceptorRegistered();
+        WarmUpOAuthClient();
         RefreshAccountsUi();
         RefreshProjectsUi();
         RefreshInstancesUi();
@@ -273,6 +274,26 @@ public partial class MainWindow
     }
 
     /// <summary>Re-applies localized window chrome; call again after a language switch.</summary>
+    /// <summary>
+    /// Populates data/oauth_client.json in the background so the first manual quota refresh
+    /// does not pay for scanning the core binaries. Runs once per launch and is a no-op when
+    /// the cache already exists.
+    /// </summary>
+    private void WarmUpOAuthClient()
+    {
+        var cached = AccountPoolService.LoadOAuthClient();
+        if (!string.IsNullOrEmpty(cached.ClientId) && !string.IsNullOrEmpty(cached.ClientSecret))
+        {
+            return;
+        }
+
+        _ = Task.Run(async () =>
+        {
+            try { await _accountPool.EnsureOAuthClientAsync(_currentProxyConfig); }
+            catch (Exception ex) { DiagLog.Swallowed("main.oauth-client-warmup", ex); }
+        });
+    }
+
     private void ApplyLocalizedChrome()
     {
         var version = GetAppVersion();
