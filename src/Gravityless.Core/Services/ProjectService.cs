@@ -166,12 +166,32 @@ public class ProjectService
     /// </summary>
     public const string LooseChatsProjectId = "__loose__";
 
+    /// <summary>
+    /// Value Antigravity itself writes into <c>conversation_summaries.project_id</c> for a
+    /// chat started outside any workspace. Treated as equivalent to <see cref="LooseChatsProjectId"/>.
+    /// </summary>
+    public const string AntigravityLooseProjectId = "outside-of-project";
+
     /// <summary>Directory holding project-less conversations on the host.</summary>
     public static string GetLooseChatsDir() => Path.Combine(GetRealHostGeminiDir(), "antigravity");
 
     /// <summary>True when <paramref name="projectId"/> refers to the project-less chat store.</summary>
     public static bool IsLooseChats(string projectId) =>
-        string.Equals(projectId, LooseChatsProjectId, StringComparison.Ordinal);
+        string.Equals(projectId, LooseChatsProjectId, StringComparison.Ordinal)
+        || string.Equals(projectId, AntigravityLooseProjectId, StringComparison.Ordinal);
+
+    /// <summary>
+    /// True when a summary row describes a chat that belongs to no workspace. Antigravity leaves
+    /// both the id and the workspace list empty in that case, so either signal is enough.
+    /// </summary>
+    public static bool IsProjectlessConversation(string? projectId, string? workspaceUris)
+    {
+        if (IsLooseChats(projectId ?? string.Empty)) return true;
+        if (string.IsNullOrWhiteSpace(projectId)) return true;
+
+        var uris = workspaceUris?.Trim();
+        return string.IsNullOrEmpty(uris) || uris == "[]";
+    }
 
     public string GetProjectMemoryDir(string projectId) =>
         IsLooseChats(projectId) ? GetLooseChatsDir() : Path.Combine(GetProjectDir(projectId), "memory");

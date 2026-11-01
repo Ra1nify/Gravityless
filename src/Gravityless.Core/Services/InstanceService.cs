@@ -1093,12 +1093,18 @@ public class InstanceService
             using var conn = new SqliteConnection($"Data Source={instSummaryDb};Mode=ReadOnly");
             conn.Open();
             using var cmd = conn.CreateCommand();
-            cmd.CommandText = "SELECT conversation_id, workspace_uris FROM conversation_summaries";
+            cmd.CommandText = "SELECT conversation_id, workspace_uris, project_id FROM conversation_summaries";
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
             {
                 var cid = reader.GetString(0);
                 var urisJson = reader.GetString(1);
+                var pId = reader.IsDBNull(2) ? null : reader.GetString(2);
+
+                // Project-less chats belong to no workspace; copying them into one would relocate
+                // their brain and make them appear under an unrelated project.
+                if (ProjectService.IsProjectlessConversation(pId, urisJson)) continue;
+
                 var matchedProj = boundProjects.FirstOrDefault(p => !string.IsNullOrEmpty(p.Path) && urisJson.Contains(p.Path.Replace("\\", "/"), StringComparison.OrdinalIgnoreCase));
                 if (matchedProj != null)
                 {
@@ -1334,6 +1340,7 @@ public class InstanceService
                     continue;
 
                 ProjectProfile? matchedProj = null;
+                var isProjectless = false;
 
                 // A. Resolve project_id / workspace_uris from conversation_summaries.db.
                 if (File.Exists(instSummaryDb))
@@ -1351,12 +1358,17 @@ public class InstanceService
                             var pId = reader.IsDBNull(0) ? null : reader.GetString(0);
                             var urisJson = reader.IsDBNull(1) ? null : reader.GetString(1);
 
-                            if (!string.IsNullOrEmpty(pId))
+                            // A chat started outside any workspace is not a mismatched project:
+                            // adopting it into one would move its brain into that project and make
+                            // the conversation appear under an unrelated name.
+                            isProjectless = ProjectService.IsProjectlessConversation(pId, urisJson);
+
+                            if (!isProjectless && !string.IsNullOrEmpty(pId))
                             {
                                 matchedProj = _projectService.Projects.FirstOrDefault(p => p.Id.Equals(pId, StringComparison.OrdinalIgnoreCase));
                             }
 
-                            if (matchedProj == null && !string.IsNullOrEmpty(urisJson))
+                            if (!isProjectless && matchedProj == null && !string.IsNullOrEmpty(urisJson))
                             {
                                 foreach (var p in _projectService.Projects)
                                 {
@@ -1372,6 +1384,12 @@ public class InstanceService
                     catch { }
                 }
 
+                // Project-less chats keep their own store; leave them where Antigravity put them.
+                if (isProjectless)
+                {
+                    continue;
+                }
+
                 // B. Fall back to the instance's first bound project.
                 if (matchedProj == null)
                 {
@@ -1385,8 +1403,9 @@ public class InstanceService
                 // C. Still unmatched: bind an existing/default workspace or create one.
                 if (matchedProj == null)
                 {
-                    matchedProj = _projectService.Projects.FirstOrDefault(p => p.Name == $"{inst.Name}-工作区")
-                        ?? _projectService.Projects.FirstOrDefault();
+                    // Only the instance's own workspace is a safe default. Picking an arbitrary
+                    // project here is what made unrelated chats show up under the wrong name.
+                    matchedProj = _projectService.Projects.FirstOrDefault(p => p.Name == $"{inst.Name}-工作区");
 
                     if (matchedProj == null)
                     {
