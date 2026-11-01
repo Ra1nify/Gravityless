@@ -679,12 +679,64 @@ public class InstanceService
     /// <summary>Raised after an instance has consumed and released the global credential slot.</summary>
     public event Action<InstanceProfile>? CredentialSlotReleased;
 
+    /// <summary>
+    /// Flushes every WAL in the instance sandbox into its main database. Runs after the
+    /// process tree is gone, so no writer can interleave. A database whose -wal is not merged
+    /// reads as empty even though all its pages are on disk, which is how conversations were
+    /// being harvested as zero-length files.
+    /// </summary>
+    private static void CheckpointInstanceDatabases(string instanceGeminiDir)
+    {
+        var root = Path.Combine(instanceGeminiDir, "antigravity");
+        if (!Directory.Exists(root)) return;
+
+        foreach (var pattern in new[] { "conversation_summaries.db", "conversations/*.db" })
+        {
+            IEnumerable<string> files;
+            try
+            {
+                var dir = Path.GetDirectoryName(Path.Combine(root, pattern));
+                if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) continue;
+                files = Directory.EnumerateFiles(dir, Path.GetFileName(pattern), SearchOption.TopDirectoryOnly);
+            }
+            catch (Exception ex)
+            {
+                DiagLog.Swallowed("instance.checkpoint-enumerate", ex);
+                continue;
+            }
+
+            foreach (var db in files)
+            {
+                // No WAL means nothing to merge; opening would only create and drop one.
+                if (!File.Exists(db + "-wal")) continue;
+
+                try
+                {
+                    using var conn = new SqliteConnection($"Data Source={db};Default Timeout=5");
+                    conn.Open();
+                    using var cmd = conn.CreateCommand();
+                    cmd.CommandText = "PRAGMA wal_checkpoint(TRUNCATE);";
+                    cmd.ExecuteNonQuery();
+                }
+                catch (Exception ex)
+                {
+                    DiagLog.Swallowed("instance.checkpoint", ex);
+                }
+            }
+        }
+    }
+
     private void OnInstanceProcessExited(string instanceId, string instanceGeminiDir, List<ProjectProfile> boundProjects)
     {
         var inst = _instances.FirstOrDefault(i => i.Id == instanceId);
         if (inst == null) return;
 
         _runningProcesses.Remove(instanceId);
+
+        // Force every WAL into its main file before harvesting. A process killed mid-write
+        // leaves committed pages in -wal while the .db itself is still empty; harvest would
+        // then see a valid-looking but data-less file.
+        CheckpointInstanceDatabases(instanceGeminiDir);
 
         // Harvest projects and memory on process exit.
         ReconcileAndHarvestProjects(inst);
@@ -1176,6 +1228,39 @@ public class InstanceService
     /// </summary>
     private static readonly string[] SqliteSiblingSuffixes = ["-wal", "-shm"];
 
+    /// <summary>Header every SQLite 3 database starts with.</summary>
+    private static readonly byte[] SqliteHeader = "SQLite format 3\0"u8.ToArray();
+
+    /// <summary>
+    /// True when the path holds a database that is safe to keep and to link against.
+    /// File.Exists alone is not enough: a process killed before checkpointing leaves a
+    /// zero-length file that still reports as present, and treating it as real is what
+    /// destroys the only good copy.
+    /// </summary>
+    private static bool IsUsableSqlite(string path)
+    {
+        try
+        {
+            var info = new FileInfo(path);
+            if (!info.Exists) return false;
+
+            // A valid database needs at least one page plus the header.
+            if (info.Length <= 512) return false;
+
+            using var stream = File.OpenRead(path);
+            var header = new byte[SqliteHeader.Length];
+            var read = stream.Read(header, 0, header.Length);
+            if (read != SqliteHeader.Length) return false;
+
+            return header.AsSpan().SequenceEqual(SqliteHeader);
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Swallowed("instance.sqlite-probe", ex);
+            return false;
+        }
+    }
+
     private static void MoveSqliteWithSiblings(string sourceDb, string destDb)
     {
         // Overwrite semantics: the caller already decided this copy should become the shared one,
@@ -1458,13 +1543,15 @@ public class InstanceService
                         var parent = Path.GetDirectoryName(targetPubConvoDb);
                         if (!string.IsNullOrEmpty(parent)) Directory.CreateDirectory(parent);
 
-                        if (!File.Exists(targetPubConvoDb))
+                        if (!IsUsableSqlite(targetPubConvoDb))
                         {
-                            // Move the whole family: a bare .db loses whatever still sits in -wal.
+                            // Target is absent or an empty shell left by an uncheckpointed WAL.
+                            // The instance copy is the only real data, so it becomes the shared one.
                             MoveSqliteWithSiblings(srcConvoDb, targetPubConvoDb);
                         }
                         else
                         {
+                            // Proven good copy exists; the instance-side duplicate can go.
                             File.Delete(srcConvoDb);
                             DeleteSqliteSiblings(srcConvoDb);
                         }
