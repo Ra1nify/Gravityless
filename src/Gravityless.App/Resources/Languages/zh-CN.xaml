@@ -476,6 +476,8 @@
     <sys:String x:Key="Instances_NoBoundProject">项目: 无</sys:String>
     <sys:String x:Key="Proxy_TestingStatus">测试连接…</sys:String>
     <sys:String x:Key="Proxy_RegionFormat">出口地区: {0}</sys:String>
+    <sys:String x:Key="Proxy_RegionRow">地区</sys:String>
+    <sys:String x:Key="Proxy_ResultNa">N/A</sys:String>
     <sys:String x:Key="Tools_TabSkillsFormat">技能 ({0})</sys:String>
     <sys:String x:Key="Tools_TabPluginsFormat">插件 ({0})</sys:String>
     <sys:String x:Key="Tools_TabMcpFormat">MCP ({0})</sys:String>

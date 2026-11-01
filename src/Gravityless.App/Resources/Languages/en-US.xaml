@@ -476,6 +476,8 @@
     <sys:String x:Key="Instances_NoBoundProject">No projects</sys:String>
     <sys:String x:Key="Proxy_TestingStatus">Testing connection…</sys:String>
     <sys:String x:Key="Proxy_RegionFormat">Exit region: {0}</sys:String>
+    <sys:String x:Key="Proxy_RegionRow">Region</sys:String>
+    <sys:String x:Key="Proxy_ResultNa">N/A</sys:String>
     <sys:String x:Key="Tools_TabSkillsFormat">Skills ({0})</sys:String>
     <sys:String x:Key="Tools_TabPluginsFormat">Plugins ({0})</sys:String>
     <sys:String x:Key="Tools_TabMcpFormat">MCP ({0})</sys:String>

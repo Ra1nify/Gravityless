@@ -479,16 +479,30 @@ public class AccountPoolService
     }
 
     /// <summary>Refreshes the token of every account in the pool (single attempt each).</summary>
+    /// <summary>
+    /// Refreshes every account in turn. Each account exchanges its refresh token for a fresh
+    /// access token and then re-reads its quota, so a completed run leaves both current.
+    /// </summary>
+    /// <param name="onProgress">Receives (index, total, email) before each account is processed.</param>
     public async Task<(int successCount, int failedCount)> RefreshAllTokensAsync(
         ProxyConfig? proxyConfig = null,
+        Action<int, int, string>? onProgress = null,
         CancellationToken cancellationToken = default)
     {
         int success = 0;
         int failed = 0;
 
-        foreach (var acc in _accounts.ToList())
+        var accounts = _accounts.ToList();
+        for (int i = 0; i < accounts.Count; i++)
         {
-            var res = await RefreshTokenAsync(acc.Id, proxyConfig, autoRetry: false, cancellationToken);
+            var acc = accounts[i];
+            cancellationToken.ThrowIfCancellationRequested();
+
+            onProgress?.Invoke(i + 1, accounts.Count, acc.Email);
+
+            // autoRetry stays on: a transient network fault should not mark an account dead
+            // for the rest of the batch.
+            var res = await RefreshTokenAsync(acc.Id, proxyConfig, autoRetry: true, cancellationToken);
             if (res.success) success++;
             else failed++;
         }

@@ -19,9 +19,16 @@ public class ProxyTestResult
     public string GeminiMessage { get; set; } = string.Empty;
     public long GeminiLatencyMs { get; set; }
 
+    /// <summary>
+    /// True when the probe actually completed a round trip. A failure that never connected
+    /// leaves this false, which is how the UI tells "blocked" apart from "slow".
+    /// </summary>
+    public bool GeminiLatencyMeasured { get; set; }
+
     public ConnectivityStatus AntigravityStatus { get; set; } = ConnectivityStatus.NotTested;
     public string AntigravityMessage { get; set; } = string.Empty;
     public long AntigravityLatencyMs { get; set; }
+    public bool AntigravityLatencyMeasured { get; set; }
     public string? TestedAccountEmail { get; set; }
 
     public long LatencyMs { get; set; }
@@ -178,6 +185,7 @@ public class ProxyService
                 using var geminiResp = await client.SendAsync(geminiReq);
                 geminiSw.Stop();
                 result.GeminiLatencyMs = geminiSw.ElapsedMilliseconds;
+                result.GeminiLatencyMeasured = true;
 
                 var geminiBody = await geminiResp.Content.ReadAsStringAsync();
 
@@ -283,6 +291,7 @@ public class ProxyService
                     using var agResp = await client.SendAsync(agRequest);
                     agSw.Stop();
                     result.AntigravityLatencyMs = agSw.ElapsedMilliseconds;
+                    result.AntigravityLatencyMeasured = true;
 
                     var agBody = await agResp.Content.ReadAsStringAsync();
 

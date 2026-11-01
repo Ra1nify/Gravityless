@@ -1428,7 +1428,11 @@ public partial class MainWindow
         AccountsStatusStrip.ShowBusy(LocalizationService.GetString("Accounts_RefreshAllStatus", "批量刷新 Token…"));
         try
         {
-            var (successCount, failedCount) = await _accountPool.RefreshAllTokensAsync(_currentProxyConfig);
+            var (successCount, failedCount) = await _accountPool.RefreshAllTokensAsync(
+                _currentProxyConfig,
+                onProgress: (current, total, email) => Dispatcher.Invoke(() =>
+                    AccountsStatusStrip.ShowStep(current, total, email)));
+
             ModernDialog.ShowInfo(LocalizationService.GetString("Accounts_RefreshAllDoneTitle", "已刷新"), string.Format(LocalizationService.GetString("Accounts_RefreshAllDoneFormat", "完成 {0} 个，失败 {1} 个。"), successCount, failedCount), owner: this);
         }
         catch (Exception ex)
@@ -1533,27 +1537,65 @@ public partial class MainWindow
     private async void OnTestProxyClicked(object sender, RoutedEventArgs e)
     {
         SaveCurrentProxyConfigFromUi();
-        ProxyTestResultText.Text = LocalizationService.GetString("Proxy_TestingStatus", "正在测试连接...");
-        ProxyTestResultText.Foreground = Brushes.LightGray;
+
+        ProxyTestResultGrid.Visibility = Visibility.Visible;
+        ResetProxyTestGrid();
+        ProxyRegionValue.Text = LocalizationService.GetString("Proxy_TestingStatus", "测试连接…");
+
         var result = await _proxyService.TestConnectionAsync(_currentProxyConfig, _accountPool.Accounts, _accountPool);
-        var sb = new System.Text.StringBuilder();
-        sb.AppendLine(string.Format(LocalizationService.GetString("Proxy_RegionFormat", "出口地区: {0}"), result.FormattedLocation));
-        var geminiBadge = result.GeminiStatus switch
+
+        ProxyRegionValue.Text = result.FormattedLocation;
+
+        ApplyProxyProbeRow(
+            result.GeminiStatus, result.GeminiLatencyMeasured, result.GeminiLatencyMs, result.GeminiMessage,
+            ProxyGeminiStatus, ProxyGeminiLatency, ProxyGeminiReason);
+
+        ApplyProxyProbeRow(
+            result.AntigravityStatus, result.AntigravityLatencyMeasured, result.AntigravityLatencyMs, result.AntigravityMessage,
+            ProxyAntigravityStatus, ProxyAntigravityLatency, ProxyAntigravityReason);
+    }
+
+    /// <summary>Clears the report so a previous run cannot show through while a new one runs.</summary>
+    private void ResetProxyTestGrid()
+    {
+        foreach (var block in new[] { ProxyGeminiStatus, ProxyGeminiLatency, ProxyAntigravityStatus, ProxyAntigravityLatency })
         {
-            ConnectivityStatus.Success => $"✓ {result.GeminiLatencyMs}ms",
-            ConnectivityStatus.Failed => $"✗ {(result.GeminiLatencyMs > 0 ? $"{result.GeminiLatencyMs}ms " : "")}",
-            _ => "-"
-        };
-        sb.AppendLine($"Gemini: {geminiBadge} ({result.GeminiMessage})");
-        var agBadge = result.AntigravityStatus switch
+            block.Text = string.Empty;
+        }
+
+        ProxyGeminiReason.Text = string.Empty;
+        ProxyAntigravityReason.Text = string.Empty;
+    }
+
+    /// <summary>
+    /// Fills one probe row: status glyph, latency, and the reason shown only when it matters.
+    /// A failure that never completed a round trip reports N/A instead of a misleading 0 ms.
+    /// </summary>
+    private static void ApplyProxyProbeRow(
+        ConnectivityStatus status,
+        bool latencyMeasured,
+        long latencyMs,
+        string message,
+        System.Windows.Controls.TextBlock statusBlock,
+        System.Windows.Controls.TextBlock latencyBlock,
+        System.Windows.Controls.TextBlock reasonBlock)
+    {
+        var na = LocalizationService.GetString("Proxy_ResultNa", "N/A");
+
+        (statusBlock.Text, statusBlock.Foreground) = status switch
         {
-            ConnectivityStatus.Success => $"✓ {result.AntigravityLatencyMs}ms",
-            ConnectivityStatus.Failed => $"✗ {(result.AntigravityLatencyMs > 0 ? $"{result.AntigravityLatencyMs}ms " : "")}",
-            _ => "-"
+            ConnectivityStatus.Success => ("✓", Palette.Success),
+            ConnectivityStatus.Failed => ("×", Palette.Critical),
+            _ => ("-", Palette.Get("TextFillColorTertiaryBrush"))
         };
-        sb.Append($"Antigravity: {agBadge} ({result.AntigravityMessage})");
-        ProxyTestResultText.Text = sb.ToString();
-        ProxyTestResultText.Foreground = result.Success ? Brushes.LightGreen : Brushes.OrangeRed;
+
+        latencyBlock.Text = latencyMeasured ? $"{latencyMs} ms" : na;
+        latencyBlock.Foreground = latencyMeasured
+            ? Palette.Get("TextFillColorPrimaryBrush")
+            : Palette.Get("TextFillColorTertiaryBrush");
+
+        // Success needs no explanation; failures and skips do.
+        reasonBlock.Text = status == ConnectivityStatus.Success ? string.Empty : message;
     }
 
     private void OnSaveProxyClicked(object sender, RoutedEventArgs e)
