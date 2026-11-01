@@ -726,7 +726,54 @@
                                         <ui:Button AutomationProperties.AutomationId="ProxySaveBtn" Content="{DynamicResource Proxy_SaveBtn}" Click="OnSaveProxyClicked" Appearance="Primary" Icon="{ui:SymbolIcon Symbol=Checkmark24}"/>
                                     </StackPanel>
 
-                                    <TextBlock x:Name="ProxyTestResultText" Margin="0,12,0,0" FontWeight="SemiBold" FontSize="13" TextWrapping="Wrap"/>
+                                    <!-- Connectivity report. Row 0 spans the value columns because a
+                                         run has a single egress region; rows 1 and 2 are per probe. -->
+                                    <Grid x:Name="ProxyTestResultGrid" Margin="0,12,0,0" Visibility="Collapsed">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" MinWidth="110"/>
+                                            <ColumnDefinition Width="32"/>
+                                            <ColumnDefinition Width="88"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
+
+                                        <TextBlock x:Name="ProxyRegionLabel" Grid.Row="0" Grid.Column="0"
+                                                   Text="{DynamicResource Proxy_RegionRow}" FontSize="13" Opacity="0.75"
+                                                   VerticalAlignment="Center" Margin="0,0,0,6"/>
+                                        <TextBlock x:Name="ProxyRegionValue" Grid.Row="0" Grid.Column="1" Grid.ColumnSpan="3"
+                                                   FontSize="13" FontWeight="SemiBold" TextAlignment="Center"
+                                                   VerticalAlignment="Center" Margin="0,0,0,6"/>
+
+                                        <TextBlock x:Name="ProxyGeminiLabel" Grid.Row="1" Grid.Column="0"
+                                                   Text="Gemini" FontSize="13" Opacity="0.75"
+                                                   VerticalAlignment="Center" Margin="0,0,0,4"/>
+                                        <TextBlock x:Name="ProxyGeminiStatus" Grid.Row="1" Grid.Column="1"
+                                                   FontSize="13" FontWeight="Bold" TextAlignment="Center"
+                                                   VerticalAlignment="Center" Margin="0,0,0,4"/>
+                                        <TextBlock x:Name="ProxyGeminiLatency" Grid.Row="1" Grid.Column="2"
+                                                   FontSize="13" TextAlignment="Center"
+                                                   VerticalAlignment="Center" Margin="0,0,0,4"/>
+                                        <TextBlock x:Name="ProxyGeminiReason" Grid.Row="1" Grid.Column="3"
+                                                   FontSize="12" Opacity="0.65" TextAlignment="Left" TextWrapping="Wrap"
+                                                   VerticalAlignment="Center" Margin="0,0,0,4"/>
+
+                                        <TextBlock x:Name="ProxyAntigravityLabel" Grid.Row="2" Grid.Column="0"
+                                                   Text="Antigravity" FontSize="13" Opacity="0.75"
+                                                   VerticalAlignment="Center"/>
+                                        <TextBlock x:Name="ProxyAntigravityStatus" Grid.Row="2" Grid.Column="1"
+                                                   FontSize="13" FontWeight="Bold" TextAlignment="Center"
+                                                   VerticalAlignment="Center"/>
+                                        <TextBlock x:Name="ProxyAntigravityLatency" Grid.Row="2" Grid.Column="2"
+                                                   FontSize="13" TextAlignment="Center"
+                                                   VerticalAlignment="Center"/>
+                                        <TextBlock x:Name="ProxyAntigravityReason" Grid.Row="2" Grid.Column="3"
+                                                   FontSize="12" Opacity="0.65" TextAlignment="Left" TextWrapping="Wrap"
+                                                   VerticalAlignment="Center"/>
+                                    </Grid>
                                 </StackPanel>
                             </ui:Card>
                         </StackPanel>
