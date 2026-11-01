@@ -95,7 +95,32 @@ if ($Sign) {
         $signBase = @('/sha1', $Thumbprint)
         Write-Host "Signing with: $($cert.Subject)"
     }
-    $signBase += @('/fd', 'SHA256', '/tr', 'http://timestamp.digicert.com', '/td', 'SHA256')
+}
+
+# Public timestamp services fail independently, so each candidate is tried in turn.
+# A timestamp is preferable but not required: without it the signature stays valid
+# until the certificate itself expires (2036-11-01).
+$timestampServers = @(
+    'http://timestamp.digicert.com'
+    'http://timestamp.sectigo.com'
+    'http://time.certum.pl'
+    'http://timestamp.globalsign.com/tsa/r6advanced1'
+)
+
+# Signs one file, falling back through the timestamp servers. Throws only when the
+# signature itself cannot be produced.
+function Invoke-SignFile {
+    param([string]$FilePath)
+
+    foreach ($server in $timestampServers) {
+        & $signtool sign @signBase '/fd' 'SHA256' '/tr' $server '/td' 'SHA256' $FilePath 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) { return }
+        Write-Host "  timestamp server unavailable: $server" -ForegroundColor DarkYellow
+    }
+
+    & $signtool sign @signBase '/fd' 'SHA256' $FilePath 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Signing failed: $FilePath" }
+    Write-Host '  signed without a timestamp; valid until the certificate expires' -ForegroundColor Yellow
 }
 
 # ---------------------------------------------------------------------------
@@ -128,8 +153,7 @@ foreach ($a in $targets) {
     if ($Sign) {
         Write-Host "Signing $rid binaries..." -ForegroundColor Cyan
         Get-ChildItem $publishDir -Filter '*.exe' -Recurse | ForEach-Object {
-            & $signtool sign @signBase $_.FullName | Out-Null
-            if ($LASTEXITCODE -ne 0) { throw "Signing failed: $($_.Name)" }
+            Invoke-SignFile -FilePath $_.FullName
         }
     }
 
@@ -144,8 +168,7 @@ foreach ($a in $targets) {
 if ($Sign) {
     Write-Host "`n=== Signing installers ===" -ForegroundColor Cyan
     foreach ($setup in $setups) {
-        & $signtool sign @signBase $setup | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw "Signing failed: $setup" }
+        Invoke-SignFile -FilePath $setup
     }
 }
 

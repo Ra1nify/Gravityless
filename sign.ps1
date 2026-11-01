@@ -19,7 +19,14 @@ param(
     [string]$PfxPath,
     [string]$PfxPassword,
 
-    [string]$TimestampServer = 'http://timestamp.digicert.com'
+    # Tried in order. Public timestamp services go down independently, so a single
+    # hard-coded host turns every release into a manual retry.
+    [string[]]$TimestampServer = @(
+        'http://timestamp.digicert.com'
+        'http://timestamp.sectigo.com'
+        'http://time.certum.pl'
+        'http://timestamp.globalsign.com/tsa/r6advanced1'
+    )
 )
 
 $ErrorActionPreference = 'Stop'
@@ -53,9 +60,7 @@ $signArgs = if ($PfxPath) {
 }
 
 # Timestamping keeps signatures valid after the certificate expires (2036-11-01).
-if ($TimestampServer) {
-    $signArgs += @('/tr', $TimestampServer, '/td', 'SHA256')
-}
+$timestampServers = @($TimestampServer | Where-Object { $_ })
 
 $failed = @()
 foreach ($pattern in $Path) {
@@ -68,8 +73,26 @@ foreach ($pattern in $Path) {
     foreach ($file in $files) {
         Write-Host "Signing $($file.Name) ..." -NoNewline
 
-        & $signtool @signArgs $file.FullName | Out-Null
-        if ($LASTEXITCODE -ne 0) {
+        $signed = $false
+        foreach ($server in $timestampServers) {
+            & $signtool @signArgs '/tr' $server '/td' 'SHA256' $file.FullName | Out-Null
+            if ($LASTEXITCODE -eq 0) {
+                $signed = $true
+                break
+            }
+
+            Write-Host -NoNewline " [$server unavailable]"
+        }
+
+        # A timestamp is preferable but not mandatory: an untimestamped signature is still
+        # valid now and only stops verifying once the certificate itself expires.
+        if (-not $signed) {
+            Write-Host -NoNewline ' [no timestamp, signing without]'
+            & $signtool @signArgs $file.FullName | Out-Null
+            if ($LASTEXITCODE -eq 0) { $signed = $true }
+        }
+
+        if (-not $signed) {
             Write-Host ' FAILED' -ForegroundColor Red
             $failed += $file.Name
             continue
