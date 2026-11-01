@@ -698,6 +698,81 @@ public partial class MainWindow
         UpdateSidebarStatus();
     }
 
+    /// <summary>
+    /// Scans project memory for conversations whose checkpoint database is gone, then offers to
+    /// re-register the ones still present in brain and export their transcripts.
+    /// </summary>
+    private async void OnRepairProjectsClicked(object sender, RoutedEventArgs e)
+    {
+        var service = new ProjectMemoryRepairService(_projectService);
+        ProjectsStatusStrip.ShowBusy(LocalizationService.GetString("Projects_RepairScanning", "检查项目记忆…"));
+        await Dispatcher.Yield(DispatcherPriority.Background);
+
+        List<ProjectMemoryIssue> issues;
+        try
+        {
+            issues = await Task.Run(() => service.Scan());
+        }
+        catch (Exception ex)
+        {
+            ProjectsStatusStrip.Clear();
+            ModernDialog.ShowError(LocalizationService.GetString("Common_Error", "错误"), ex.Message, owner: this);
+            return;
+        }
+        ProjectsStatusStrip.Clear();
+
+        if (issues.Count == 0)
+        {
+            ModernDialog.ShowInfo(
+                LocalizationService.GetString("Projects_RepairNothingTitle", "无需修复"),
+                LocalizationService.GetString("Projects_RepairNothingMessage", "所有项目记忆都完整。"),
+                owner: this);
+            return;
+        }
+
+        var recoverable = issues.Count(i => i.HasBrainData);
+        var found = string.Format(
+            LocalizationService.GetString("Projects_RepairFoundFormat",
+                "共 {0} 条记录缺少对话本体，其中 {1} 条可从 brain 导出内容。"),
+            issues.Count, recoverable);
+
+        if (!ModernDialog.Confirm(
+                LocalizationService.GetString("Projects_RepairFoundTitle", "发现可修复项"),
+                string.Format(
+                    LocalizationService.GetString("Projects_RepairConfirmMessageFormat",
+                        "{0}\n\n修复会：\n1. 把 brain 中未登记的记忆补回项目列表\n2. 将对话记录导出为 Markdown 保存在各对话目录\n\n注意：对话本体已丢失，修复后仍无法在 Antigravity 中打开。"),
+                    found),
+                confirmText: LocalizationService.GetString("Projects_RepairConfirmBtn", "开始修复"),
+                cancelText: LocalizationService.GetString("Common_Cancel", "取消"),
+                isDestructive: false,
+                owner: this.IsVisible ? this : null))
+        {
+            return;
+        }
+
+        ProjectsStatusStrip.ShowBusy(LocalizationService.GetString("Projects_RepairScanning", "检查项目记忆…"));
+        string report;
+        try
+        {
+            report = await Task.Run(() => service.Repair(issues, (current, total, label) =>
+                Dispatcher.Invoke(() => ProjectsStatusStrip.ShowStep(current, total, label))));
+        }
+        catch (Exception ex)
+        {
+            ProjectsStatusStrip.Clear();
+            ModernDialog.ShowError(LocalizationService.GetString("Common_Error", "错误"), ex.Message, owner: this);
+            return;
+        }
+        ProjectsStatusStrip.Clear();
+
+        ModernDialog.ShowInfo(
+            LocalizationService.GetString("Projects_RepairDoneTitle", "修复完成"),
+            report,
+            owner: this);
+
+        RefreshProjectsUi();
+    }
+
     private async void OnOpenProjectConversationsClicked(object sender, RoutedEventArgs e)
     {
         if (sender is FrameworkElement { Tag: string projId })
