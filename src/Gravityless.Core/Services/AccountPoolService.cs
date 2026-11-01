@@ -239,6 +239,87 @@ public class AccountPoolService
         return (string.Empty, string.Empty);
     }
 
+    public static void SaveOAuthClient(OAuthClientConfig config, string? baseDir = null)
+    {
+        try
+        {
+            var root = baseDir ?? AppDomain.CurrentDomain.BaseDirectory;
+            var dataDir = Path.Combine(root, "data");
+            Directory.CreateDirectory(dataDir);
+
+            var node = new JsonObject
+            {
+                ["client_id"] = config.ClientId,
+                ["client_secret"] = config.ClientSecret,
+                ["extracted_at"] = config.ExtractedAt.ToString("o")
+            };
+
+            File.WriteAllText(
+                Path.Combine(dataDir, "oauth_client.json"),
+                node.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Swallowed("account.oauth-client-save", ex);
+        }
+    }
+
+    /// <summary>
+    /// Returns the cached OAuth pair, extracting it from the installed Antigravity binaries
+    /// when the cache is missing. Verification needs a live refresh token, so it is skipped
+    /// when none is supplied; the first candidate pair is cached unverified in that case.
+    /// </summary>
+    public async Task<OAuthClientConfig?> EnsureOAuthClientAsync(
+        ProxyConfig? proxy = null,
+        CancellationToken cancellationToken = default)
+    {
+        var cached = LoadOAuthClient(_baseDir);
+        if (!string.IsNullOrEmpty(cached.ClientId) && !string.IsNullOrEmpty(cached.ClientSecret))
+        {
+            return new OAuthClientConfig { ClientId = cached.ClientId, ClientSecret = cached.ClientSecret };
+        }
+
+        var coreDir = Path.Combine(_baseDir, "core");
+        if (!Directory.Exists(coreDir)) return null;
+
+        // Any stored refresh token can certify a candidate pair.
+        var refreshToken = _accounts
+            .Select(a => ProxyService.ExtractTokens(a.CredentialBlob).refreshToken)
+            .FirstOrDefault(t => !string.IsNullOrWhiteSpace(t));
+
+        OAuthClientConfig? resolved = null;
+
+        if (!string.IsNullOrWhiteSpace(refreshToken))
+        {
+            resolved = await OAuthClientExtractor.ResolveAsync(coreDir, refreshToken, proxy, cancellationToken);
+        }
+
+        if (resolved == null)
+        {
+            // Nothing to verify against: cache the first candidate so a later refresh has
+            // something to try. The refresh path reports failure honestly if it is wrong.
+            var candidates = OAuthClientExtractor.FindCandidates(coreDir);
+            if (candidates.Count > 0)
+            {
+                resolved = new OAuthClientConfig
+                {
+                    ClientId = candidates[0].ClientId,
+                    ClientSecret = candidates[0].ClientSecret
+                };
+            }
+        }
+
+        if (resolved != null)
+        {
+            SaveOAuthClient(resolved, _baseDir);
+        }
+
+        return resolved;
+    }
+
+    /// <summary>Shared by the refresh path and the OAuth client extractor.</summary>
+    public static HttpClient CreateHttpClientForOAuth(ProxyConfig? config) => CreateHttpClient(config);
+
     private static HttpClient CreateHttpClient(ProxyConfig? config)
     {
         var handler = new SocketsHttpHandler
@@ -298,13 +379,26 @@ public class AccountPoolService
         }
 
         int maxAttempts = autoRetry ? 3 : 1;
+
+        // Without an OAuth client pair every refresh returns invalid_grant, which reads as
+        // "credentials revoked" when the real cause is a missing configuration file.
+        var oauthClient = LoadOAuthClient(_baseDir);
+        if (string.IsNullOrEmpty(oauthClient.ClientId) || string.IsNullOrEmpty(oauthClient.ClientSecret))
+        {
+            var recovered = await EnsureOAuthClientAsync(proxyConfig, cancellationToken);
+            if (recovered == null)
+            {
+                return (false, "缺少 OAuth 客户端配置，且无法从已安装的 Antigravity 核心中提取");
+            }
+            oauthClient = (recovered.ClientId, recovered.ClientSecret);
+        }
+
         using var client = CreateHttpClient(proxyConfig);
 
         for (int attempt = 1; attempt <= maxAttempts; attempt++)
         {
             try
             {
-                var oauthClient = LoadOAuthClient(_baseDir);
                 using var request = new HttpRequestMessage(HttpMethod.Post, OAuthTokenEndpoint)
                 {
                     Content = new FormUrlEncodedContent(new Dictionary<string, string>

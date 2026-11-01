@@ -88,3 +88,5 @@ artifacts/
 *.pfx.password
 certs/**/*.txt
 certs/**/*.secret
+# OAuth client pair is extracted from the installed core at runtime
+**/data/oauth_client.json
