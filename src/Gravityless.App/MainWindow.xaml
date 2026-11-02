@@ -213,12 +213,35 @@
                                     <TextBlock Text="{DynamicResource Overview_AppUpdateDesc}"
                                                TextWrapping="Wrap" Opacity="0.75" Margin="0,0,0,14" FontSize="13"/>
 
-                                    <StackPanel Orientation="Horizontal">
-                                        <ui:Button AutomationProperties.AutomationId="AppUpdateButton" x:Name="AppUpdateButton" Content="{DynamicResource Overview_AppUpdateBtn}"
-                                                   Appearance="Primary" IsEnabled="False"
-                                                   ToolTip="{DynamicResource Overview_AppUpdateComingSoon}"
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                                        <ui:Button AutomationProperties.AutomationId="AppUpdateButton" x:Name="AppUpdateButton"
+                                                   Content="{DynamicResource Overview_AppUpdateBtn}"
+                                                   Click="OnCheckAppUpdateClicked"
+                                                   Appearance="Primary" Margin="0,0,12,0"
                                                    Icon="{ui:SymbolIcon Symbol=ArrowSync24}"/>
+                                        <ui:Button AutomationProperties.AutomationId="AppUpdateInstallButton" x:Name="AppUpdateInstallButton"
+                                                   Content="{DynamicResource Overview_AppUpdateInstallBtn}"
+                                                   Click="OnDownloadAppUpdateClicked"
+                                                   Appearance="Secondary" IsEnabled="False"
+                                                   Icon="{ui:SymbolIcon Symbol=ArrowDownload24}"/>
                                     </StackPanel>
+
+                                    <!-- Same pattern as the core update bar: status text and progress
+                                         live inside one surface instead of floating in the layout. -->
+                                    <ui:InfoBar x:Name="AppUpdateInfoBar"
+                                                Severity="Informational"
+                                                Title="{DynamicResource Overview_AppUpdateStatusTitle}"
+                                                IsOpen="False"
+                                                IsClosable="True">
+                                        <ui:InfoBar.Content>
+                                            <StackPanel>
+                                                <TextBlock x:Name="AppUpdateMessageText" FontSize="12" TextWrapping="Wrap"/>
+                                                <StackPanel x:Name="AppUpdateProgressPanel" Visibility="Collapsed" Margin="0,8,0,0">
+                                                    <ProgressBar x:Name="AppUpdateProgressBar" Height="4" Minimum="0" Maximum="100"/>
+                                                </StackPanel>
+                                            </StackPanel>
+                                        </ui:InfoBar.Content>
+                                    </ui:InfoBar>
                                 </StackPanel>
                             </ui:Card>
 
@@ -272,9 +295,26 @@
                                         <ui:Button AutomationProperties.AutomationId="UninstallCoreButton" x:Name="UninstallCoreButton" Content="{DynamicResource CoreStatus_UninstallBtn}" Click="OnUninstallCoreClicked" Appearance="Danger" IsEnabled="False" Icon="{ui:SymbolIcon Symbol=Delete24}"/>
                                     </StackPanel>
 
-                                    <TextBlock x:Name="OnlineVersionText" Text="{DynamicResource CloudUpdate_InitialHint}" Margin="0,0,0,8" Opacity="0.85" FontSize="12" TextWrapping="Wrap"/>
-                                    <ProgressBar x:Name="InstallProgressBar" Height="6" Margin="0,6,0,6" Visibility="Collapsed"/>
-                                    <TextBlock x:Name="InstallProgressLabel" Visibility="Collapsed" FontSize="12" Opacity="0.8" TextWrapping="Wrap"/>
+                                    <!-- Update status. InfoBar carries the state; the progress bar sits inside
+                                         its content so the two read as one block instead of loose text. -->
+                                    <ui:InfoBar x:Name="UpdateInfoBar"
+                                                Severity="Informational"
+                                                Title="{DynamicResource CloudUpdate_StatusTitle}"
+                                                IsOpen="True"
+                                                IsClosable="False"
+                                                Margin="0,0,0,0">
+                                        <ui:InfoBar.Content>
+                                            <StackPanel>
+                                                <TextBlock x:Name="OnlineVersionText"
+                                                           Text="{DynamicResource CloudUpdate_InitialHint}"
+                                                           FontSize="12" TextWrapping="Wrap"/>
+                                                <StackPanel x:Name="InstallProgressPanel" Visibility="Collapsed" Margin="0,8,0,0">
+                                                    <ProgressBar x:Name="InstallProgressBar" Height="4"/>
+                                                    <TextBlock x:Name="InstallProgressLabel" FontSize="12" Opacity="0.8" TextWrapping="Wrap" Margin="0,6,0,0"/>
+                                                </StackPanel>
+                                            </StackPanel>
+                                        </ui:InfoBar.Content>
+                                    </ui:InfoBar>
                                 </StackPanel>
                             </ui:Card>
                         </StackPanel>

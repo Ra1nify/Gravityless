@@ -39,10 +39,14 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
-    <Version>26.11.0.2</Version>
     <PackageLicenseExpression>GPL-3.0-or-later</PackageLicenseExpression>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <!-- Surfaced at runtime through AssemblyMetadataAttribute. -->
+  <ItemGroup>
+    <AssemblyMetadata Include="VersionCode" Value="$(VersionCode)" />
+  </ItemGroup>
 
   <!-- ================= Packaging ================= -->
 

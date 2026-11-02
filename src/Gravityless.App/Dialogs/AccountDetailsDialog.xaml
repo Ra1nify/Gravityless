@@ -164,7 +164,14 @@
                     </StackPanel>
                 </ui:Card>
 
-                <TextBlock x:Name="RefreshFeedbackText" Visibility="Collapsed" FontWeight="SemiBold" FontSize="12" Margin="0,4,0,0" TextWrapping="Wrap"/>
+                <!-- Refresh outcome. Sits inside the last card so it does not float between
+                     card edges; severity carries the result instead of a coloured text run. -->
+                <ui:InfoBar x:Name="RefreshInfoBar"
+                            Severity="Informational"
+                            Title="{DynamicResource AccountDetails_RefreshTitle}"
+                            IsOpen="False"
+                            IsClosable="True"
+                            Margin="0,12,0,0"/>
 
             </StackPanel>
         </ScrollViewer>

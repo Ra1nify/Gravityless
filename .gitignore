@@ -54,6 +54,9 @@ artifacts/
 *.crash
 
 ## ===================================================================
+## Build-time version override (local only)
+version.props
+
 ## Gravityless Application Runtime Data & Local Sandboxes
 ## ===================================================================
 

@@ -23,6 +23,15 @@ public partial class MainWindow
 
     private readonly GravitylessDaemon _daemon;
     private readonly EngineService _engineService;
+
+    /// <summary>Fetches the app's own update manifest from the static info branch.</summary>
+    private readonly AppUpdateService _appUpdate = new();
+
+    /// <summary>Downloads and launches the installer.</summary>
+    private readonly AppUpdateInstaller _appInstaller = new();
+
+    /// <summary>Manifest from the last successful check; null until one succeeds.</summary>
+    private AppUpdateInfo? _pendingAppUpdate;
     private readonly AccountPoolService _accountPool;
     private readonly ProjectService _projectService;
     private readonly InstanceService _instanceService;
@@ -1877,24 +1886,270 @@ public partial class MainWindow
         ResetUpdateOpUi(kind);
     }
 
+    /// <summary>
+    /// Sets the update InfoBar text and its severity together.
+    ///
+    /// The bar is the only surface that reports update and core-install state, so the state
+    /// and its tone must change in one step; setting them from different call sites is how
+    /// a success message ends up in a bar still painted as an error.
+    /// </summary>
+    private void SetUpdateStatus(string message, InfoBarSeverity severity = InfoBarSeverity.Informational)
+    {
+        if (UpdateInfoBar == null) return;
+
+        UpdateInfoBar.Severity = severity;
+        UpdateInfoBar.IsOpen = true;
+
+        if (OnlineVersionText != null)
+        {
+            OnlineVersionText.Text = message;
+        }
+    }
+
+    /// <summary>Shows or hides the progress row inside the update InfoBar.</summary>
+    private void SetUpdateProgressVisible(bool visible)
+    {
+        if (InstallProgressPanel != null)
+        {
+            InstallProgressPanel.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        }
+    }
+
+    /// <summary>
+    /// Moves the InfoBar to a new stage: the title names the step, the label carries its detail.
+    /// Keeps the four install phases distinguishable instead of appending them to one label.
+    /// </summary>
+    // ---------------------------------------------------------------- app self-update
+
+    /// <summary>
+    /// Checks the info branch for a newer build. Mirrors are not configured yet, so the
+    /// default endpoint is the only entry.
+    /// </summary>
+    private async void OnCheckAppUpdateClicked(object sender, RoutedEventArgs e)
+    {
+        if (AppUpdateButton != null) AppUpdateButton.IsEnabled = false;
+        if (AppUpdateInstallButton != null) AppUpdateInstallButton.IsEnabled = false;
+
+        SetAppUpdateStatus(
+            LocalizationService.GetString("Overview_AppUpdateChecking", "正在检查更新…"),
+            InfoBarSeverity.Informational);
+
+        try
+        {
+            var endpoints = AppUpdateService.BuildEndpoints();
+            var result = await _appUpdate.CheckAsync(endpoints);
+
+            if (!result.IsSuccess || result.Info == null)
+            {
+                _pendingAppUpdate = null;
+                SetAppUpdateStatus(DescribeUpdateFailure(result), InfoBarSeverity.Error);
+                return;
+            }
+
+            var info = result.Info;
+            var local = AppVersion.ReadLocalVersionCode();
+
+            if (local <= 0)
+            {
+                // A Debug build carries no version code, so no comparison is meaningful.
+                _pendingAppUpdate = null;
+                SetAppUpdateStatus(
+                    LocalizationService.GetString("Overview_AppUpdateNoLocalCode", "当前构建无版本码，跳过比较。"),
+                    InfoBarSeverity.Warning);
+                return;
+            }
+
+            if (!AppVersion.IsNewer(info.VersionCode, local))
+            {
+                _pendingAppUpdate = null;
+                SetAppUpdateStatus(
+                    string.Format(
+                        LocalizationService.GetString("Overview_AppUpdateLatestFormat", "已是最新版本 {0}。"),
+                        AppVersion.ReadLocalVersionName()),
+                    InfoBarSeverity.Success);
+                return;
+            }
+
+            var asset = AppUpdateService.SelectAsset(info);
+            if (asset == null)
+            {
+                _pendingAppUpdate = null;
+                SetAppUpdateStatus(
+                    string.Format(
+                        LocalizationService.GetString("Overview_AppUpdateNoAssetFormat", "版本 {0} 没有适用于本机架构的安装包。"),
+                        info.VersionName),
+                    InfoBarSeverity.Warning);
+                return;
+            }
+
+            _pendingAppUpdate = info;
+
+            var sizeText = asset.Size > 0
+                ? string.Format(LocalizationService.GetString("Overview_AppUpdateSizeFormat", " · {0} MB"), (asset.Size / 1024.0 / 1024.0).ToString("F1"))
+                : string.Empty;
+
+            SetAppUpdateStatus(
+                string.Format(
+                    LocalizationService.GetString("Overview_AppUpdateFoundFormat", "发现新版本 {0}{1}"),
+                    info.VersionName, sizeText),
+                InfoBarSeverity.Success);
+
+            if (AppUpdateInstallButton != null) AppUpdateInstallButton.IsEnabled = true;
+        }
+        catch (Exception ex)
+        {
+            _pendingAppUpdate = null;
+            SetAppUpdateStatus(ex.Message, InfoBarSeverity.Error);
+        }
+        finally
+        {
+            if (AppUpdateButton != null) AppUpdateButton.IsEnabled = true;
+        }
+    }
+
+    /// <summary>Downloads the pending installer, verifies its hash, then launches it.</summary>
+    private async void OnDownloadAppUpdateClicked(object sender, RoutedEventArgs e)
+    {
+        var info = _pendingAppUpdate;
+        if (info == null) return;
+
+        var asset = AppUpdateService.SelectAsset(info);
+        if (asset == null) return;
+
+        if (AppUpdateInstallButton != null) AppUpdateInstallButton.IsEnabled = false;
+        if (AppUpdateButton != null) AppUpdateButton.IsEnabled = false;
+
+        SetAppUpdateStatus(
+            LocalizationService.GetString("Overview_AppUpdateDownloading", "正在下载安装包…"),
+            InfoBarSeverity.Informational);
+        SetAppUpdateProgressVisible(true);
+
+        try
+        {
+            var progress = new Progress<double>(p =>
+            {
+                if (AppUpdateProgressBar != null) AppUpdateProgressBar.Value = p * 100;
+            });
+
+            var (path, error) = await _appInstaller.DownloadAsync(asset, progress);
+
+            if (path == null)
+            {
+                SetAppUpdateStatus(
+                    error ?? LocalizationService.GetString("Overview_AppUpdateDownloadFailed", "下载失败。"),
+                    InfoBarSeverity.Error);
+                if (AppUpdateInstallButton != null) AppUpdateInstallButton.IsEnabled = true;
+                return;
+            }
+
+            // The installer closes this process itself via /CLOSEAPPLICATIONS.
+            if (AppUpdateInstaller.Launch(path, silent: false))
+            {
+                SetAppUpdateStatus(
+                    LocalizationService.GetString("Overview_AppUpdateLaunching", "安装程序已启动，应用将退出。"),
+                    InfoBarSeverity.Success);
+            }
+            else
+            {
+                SetAppUpdateStatus(
+                    string.Format(
+                        LocalizationService.GetString("Overview_AppUpdateLaunchFailedFormat", "无法启动安装程序: {0}"),
+                        path),
+                    InfoBarSeverity.Error);
+                if (AppUpdateInstallButton != null) AppUpdateInstallButton.IsEnabled = true;
+            }
+        }
+        catch (Exception ex)
+        {
+            SetAppUpdateStatus(ex.Message, InfoBarSeverity.Error);
+            if (AppUpdateInstallButton != null) AppUpdateInstallButton.IsEnabled = true;
+        }
+        finally
+        {
+            SetAppUpdateProgressVisible(false);
+            if (AppUpdateButton != null) AppUpdateButton.IsEnabled = true;
+        }
+    }
+
+    /// <summary>Sets the app-update InfoBar text and tone together.</summary>
+    private void SetAppUpdateStatus(string message, InfoBarSeverity severity)
+    {
+        if (AppUpdateInfoBar == null) return;
+
+        AppUpdateInfoBar.Severity = severity;
+        AppUpdateInfoBar.IsOpen = true;
+
+        if (AppUpdateMessageText != null) AppUpdateMessageText.Text = message;
+    }
+
+    /// <summary>Shows or hides the download progress row.</summary>
+    private void SetAppUpdateProgressVisible(bool visible)
+    {
+        if (AppUpdateProgressPanel != null)
+        {
+            AppUpdateProgressPanel.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        }
+    }
+
+    /// <summary>
+    /// Turns a fetch failure into a message the user can act on. Network trouble is theirs to
+    /// fix; a missing or malformed manifest is the publisher's, so the wording differs.
+    /// </summary>
+    private static string DescribeUpdateFailure(AppUpdateResult result)
+    {
+        var detail = string.IsNullOrWhiteSpace(result.Error) ? string.Empty : $" ({result.Error})";
+
+        return result.Failure switch
+        {
+            AppUpdateFailure.NoUrl =>
+                LocalizationService.GetString("Overview_AppUpdateErrNoUrl", "未配置更新地址。"),
+            AppUpdateFailure.Network =>
+                LocalizationService.GetString("Overview_AppUpdateErrNetwork", "网络不可达，请检查连接。"),
+            AppUpdateFailure.Blocked =>
+                LocalizationService.GetString("Overview_AppUpdateErrBlocked", "请求被拦截，请检查代理或防火墙。"),
+            AppUpdateFailure.NotFound =>
+                LocalizationService.GetString("Overview_AppUpdateErrNotFound", "更新清单不存在，发布方可能尚未发布。"),
+            AppUpdateFailure.Http =>
+                string.Format(LocalizationService.GetString("Overview_AppUpdateErrHttpFormat", "服务器返回异常{0}"), detail),
+            AppUpdateFailure.Malformed =>
+                LocalizationService.GetString("Overview_AppUpdateErrMalformed", "更新清单格式无效。"),
+            AppUpdateFailure.Invalid =>
+                LocalizationService.GetString("Overview_AppUpdateErrInvalid", "更新清单内容不完整。"),
+            _ => LocalizationService.GetString("Overview_AppUpdateErrUnknown", "检查更新失败。"),
+        };
+    }
+
+    private void SetUpdateStage(string title, string detail, InfoBarSeverity severity = InfoBarSeverity.Informational)
+    {
+        if (UpdateInfoBar == null) return;
+
+        UpdateInfoBar.Severity = severity;
+        UpdateInfoBar.Title = title;
+        UpdateInfoBar.IsOpen = true;
+
+        if (InstallProgressLabel != null)
+        {
+            InstallProgressLabel.Text = detail;
+        }
+    }
+
     /// <summary>Restores the overview controls after an abandoned operation.</summary>
     private void ResetUpdateOpUi(UpdateOpKind kind)
     {
-        var aborted = LocalizationService.GetString("CloudUpdate_Aborted", "已取消本次更新操作。");
+        var aborted = LocalizationService.GetString("CloudUpdate_Aborted", "更新已取消。");
 
         switch (kind)
         {
             case UpdateOpKind.CoreCheck:
-                OnlineVersionText.Text = aborted;
+                SetUpdateStatus(aborted, InfoBarSeverity.Warning);
                 CheckUpdateButton.IsEnabled = true;
                 break;
 
             case UpdateOpKind.CoreInstall:
             case UpdateOpKind.CoreUninstall:
                 InstallProgressBar.IsIndeterminate = false;
-                InstallProgressBar.Visibility = Visibility.Collapsed;
-                InstallProgressLabel.Visibility = Visibility.Visible;
-                InstallProgressLabel.Text = aborted;
+                SetUpdateProgressVisible(false);
+                SetUpdateStatus(aborted, InfoBarSeverity.Warning);
                 CheckUpdateButton.IsEnabled = true;
                 DownloadInstallButton.IsEnabled = _currentManifest != null;
                 if (UninstallCoreButton != null)
@@ -1926,9 +2181,9 @@ public partial class MainWindow
                 catch (Exception ex)
                 {
                     // Nobody is waiting here, so report on the card instead of throwing from async void.
-                    OnlineVersionText.Text = string.Format(
-                        LocalizationService.GetString("CloudUpdate_CheckFailedFormat", "检查更新失败: {0}"),
-                        ex.Message);
+                    SetUpdateStatus(
+                        string.Format(LocalizationService.GetString("CloudUpdate_CheckFailedFormat", "检查更新失败: {0}"), ex.Message),
+                        InfoBarSeverity.Error);
                 }
             }),
             DispatcherPriority.Background);
@@ -1941,24 +2196,29 @@ public partial class MainWindow
 
     private async Task RunCoreCheckAsync(CancellationToken cancellationToken)
     {
-        OnlineVersionText.Text = LocalizationService.GetString("CloudUpdate_Fetching", "⏳ 正在请求官方 Cloud Run Manifest 清单...");
+        SetUpdateStatus(
+            LocalizationService.GetString("CloudUpdate_Fetching", "正在请求官方 Cloud Run Manifest…"),
+            InfoBarSeverity.Informational);
         try
         {
             _currentManifest = await _engineService.FetchLatestManifestAsync(cancellationToken);
             if (_currentManifest != null)
             {
                 var sizeMb = _currentManifest.Size / (1024.0 * 1024.0);
-                OnlineVersionText.Text = string.Format(
-                    LocalizationService.GetString("CloudUpdate_FoundFormat", "发现最新版本: v{0} | 包体大小: {1} MB\n下载直链: {2}"),
-                    _currentManifest.Version,
-                    sizeMb.ToString("F1"),
-                    _currentManifest.DownloadUrl);
+                SetUpdateStatus(
+                    string.Format(
+                        LocalizationService.GetString("CloudUpdate_FoundFormat", "最新版本 v{0} · {1} MB"),
+                        _currentManifest.Version,
+                        sizeMb.ToString("F1")),
+                    InfoBarSeverity.Success);
                 DownloadInstallButton.IsEnabled = true;
                 UpdateSidebarStatus();
             }
             else
             {
-                OnlineVersionText.Text = LocalizationService.GetString("CloudUpdate_ParseFailed", "未能解析到版本清单信息。");
+                SetUpdateStatus(
+                    LocalizationService.GetString("CloudUpdate_ParseFailed", "未能解析版本清单。"),
+                    InfoBarSeverity.Warning);
             }
         }
         catch (OperationCanceledException)
@@ -1967,7 +2227,9 @@ public partial class MainWindow
         }
         catch (Exception ex)
         {
-            OnlineVersionText.Text = string.Format(LocalizationService.GetString("CloudUpdate_CheckFailedFormat", "检查更新失败: {0}"), ex.Message);
+            SetUpdateStatus(
+                string.Format(LocalizationService.GetString("CloudUpdate_CheckFailedFormat", "检查更新失败: {0}"), ex.Message),
+                InfoBarSeverity.Error);
         }
     }
 
@@ -1996,40 +2258,52 @@ public partial class MainWindow
         DownloadInstallButton.IsEnabled = false;
         CheckUpdateButton.IsEnabled = false;
         if (UninstallCoreButton != null) UninstallCoreButton.IsEnabled = false;
-        InstallProgressBar.Visibility = Visibility.Visible;
-        InstallProgressLabel.Visibility = Visibility.Visible;
+        SetUpdateProgressVisible(true);
         string? installerPath = null;
         try
         {
             // Stage 1: download to the system temp directory.
             InstallProgressBar.IsIndeterminate = false;
-            InstallProgressLabel.Text = LocalizationService.GetString("CloudUpdate_Stage1Download", "阶段 1/4: 正在下载安装包至系统临时目录 (tmp)...");
+            SetUpdateStage(
+                LocalizationService.GetString("CloudUpdate_Stage1Title", "下载安装包"),
+                LocalizationService.GetString("CloudUpdate_Stage1Download", "正在下载至临时目录…"));
             TouchUpdateOp();
             var progress = new Progress<double>(p =>
             {
                 TouchUpdateOp();
                 InstallProgressBar.Value = p * 100;
-                InstallProgressLabel.Text = string.Format(LocalizationService.GetString("CloudUpdate_Stage1PercentFormat", "阶段 1/4: 正在下载安装程序... {0}%"), (p * 100).ToString("F1"));
+                InstallProgressLabel.Text = string.Format(
+                    LocalizationService.GetString("CloudUpdate_Stage1PercentFormat", "正在下载安装程序… {0}%"),
+                    (p * 100).ToString("F1"));
             });
             installerPath = await _engineService.DownloadInstallerAsync(_currentManifest, progress, cancellationToken);
             // Stage 2: SHA512 verification happens inside the download call.
             InstallProgressBar.IsIndeterminate = true;
-            InstallProgressLabel.Text = LocalizationService.GetString("CloudUpdate_Stage2Verified", "阶段 2/4: 安装包下载完成，SHA512 完整性校验通过。");
+            SetUpdateStage(
+                LocalizationService.GetString("CloudUpdate_Stage2Title", "校验安装包"),
+                LocalizationService.GetString("CloudUpdate_Stage2Verified", "SHA512 校验通过。"));
             TouchUpdateOp();
             await Task.Delay(200, cancellationToken);
             // Stage 3: silent uninstall and cleanup of the core directory.
-            InstallProgressLabel.Text = LocalizationService.GetString("CloudUpdate_Stage3Uninstall", "阶段 3/4: 正在卸载旧版核心并彻底清理运行目录残留...");
+            SetUpdateStage(
+                LocalizationService.GetString("CloudUpdate_Stage3Title", "卸载旧版核心"),
+                LocalizationService.GetString("CloudUpdate_Stage3Uninstall", "正在清理运行目录…"));
             // Local phase from here: no progress callbacks, so widen the idle tolerance.
             _updateOpIdleTtl = UpdateOpIdleTtlLocal;
             TouchUpdateOp();
             await _engineService.UninstallExistingCoreAsync(cancellationToken);
             // Stage 4: fresh silent install into the core directory.
-            InstallProgressLabel.Text = LocalizationService.GetString("CloudUpdate_Stage4Install", "阶段 4/4: 正在全新部署 Managed 便携核心...");
+            SetUpdateStage(
+                LocalizationService.GetString("CloudUpdate_Stage4Title", "部署核心"),
+                LocalizationService.GetString("CloudUpdate_Stage4Install", "正在部署 Managed 便携核心…"));
             TouchUpdateOp();
             await _engineService.InstallToManagedCoreAsync(installerPath, cancellationToken);
             InstallProgressBar.IsIndeterminate = false;
             InstallProgressBar.Value = 100;
-            InstallProgressLabel.Text = LocalizationService.GetString("CloudUpdate_InstallSuccess", "安装完成。");
+            SetUpdateStage(
+                LocalizationService.GetString("CloudUpdate_InstallDoneTitle", "安装完成"),
+                LocalizationService.GetString("CloudUpdate_InstallSuccess", "Managed 核心已部署。"),
+                InfoBarSeverity.Success);
             TouchUpdateOp();
             RefreshEngineStatus();
             UpdateSidebarStatus();
@@ -2044,7 +2318,10 @@ public partial class MainWindow
         }
         catch (Exception ex)
         {
-            InstallProgressLabel.Text = string.Format(LocalizationService.GetString("CloudUpdate_InstallFailedFormat", "安装失败: {0}"), ex.Message);
+            SetUpdateStage(
+                LocalizationService.GetString("CloudUpdate_InstallFailedTitle", "安装失败"),
+                string.Format(LocalizationService.GetString("CloudUpdate_InstallFailedFormat", "安装失败: {0}"), ex.Message),
+                InfoBarSeverity.Error);
             ModernDialog.ShowError(
                 LocalizationService.GetString("Common_Error", "错误"),
                 string.Format(LocalizationService.GetString("CloudUpdate_InstallFailedFormat", "安装失败: {0}"), ex.Message),
@@ -2090,14 +2367,18 @@ public partial class MainWindow
             if (UninstallCoreButton != null) UninstallCoreButton.IsEnabled = false;
             DownloadInstallButton.IsEnabled = false;
             CheckUpdateButton.IsEnabled = false;
-            InstallProgressLabel.Visibility = Visibility.Visible;
-            InstallProgressLabel.Text = LocalizationService.GetString("CoreUninstall_Progress", "正在静默卸载并清理核心目录...");
-            InstallProgressBar.Visibility = Visibility.Visible;
+            SetUpdateProgressVisible(true);
+            SetUpdateStage(
+                LocalizationService.GetString("CoreUninstall_ConfirmTitle", "卸载核心"),
+                LocalizationService.GetString("CoreUninstall_Progress", "正在清理核心目录…"));
             InstallProgressBar.IsIndeterminate = true;
             await _engineService.UninstallExistingCoreAsync(cancellationToken);
             InstallProgressBar.IsIndeterminate = false;
             InstallProgressBar.Value = 100;
-            InstallProgressLabel.Text = LocalizationService.GetString("CoreUninstall_Done", "核心已彻底卸载清空。");
+            SetUpdateStage(
+                LocalizationService.GetString("CoreUninstall_SuccessTitle", "卸载完成"),
+                LocalizationService.GetString("CoreUninstall_Done", "核心目录已清空。"),
+                InfoBarSeverity.Success);
             RefreshEngineStatus();
             UpdateSidebarStatus();
             ModernDialog.ShowSuccess(
@@ -2111,7 +2392,10 @@ public partial class MainWindow
         }
         catch (Exception ex)
         {
-            InstallProgressLabel.Text = string.Format(LocalizationService.GetString("CoreUninstall_FailedFormat", "卸载失败: {0}"), ex.Message);
+            SetUpdateStage(
+                LocalizationService.GetString("CoreUninstall_FailedTitle", "卸载失败"),
+                string.Format(LocalizationService.GetString("CoreUninstall_FailedFormat", "卸载失败: {0}"), ex.Message),
+                InfoBarSeverity.Error);
             ModernDialog.ShowError(
                 LocalizationService.GetString("Common_Error", "错误"),
                 string.Format(LocalizationService.GetString("CoreUninstall_FailedFormat", "卸载失败: {0}"), ex.Message),

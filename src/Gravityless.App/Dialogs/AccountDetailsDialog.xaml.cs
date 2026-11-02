@@ -3,6 +3,7 @@ using System.Windows.Media;
 using Gravityless.App.Services;
 using Gravityless.Core.Models;
 using Gravityless.Core.Services;
+using Wpf.Ui.Controls;
 
 namespace Gravityless.App.Dialogs;
 
@@ -31,8 +32,6 @@ public partial class AccountDetailsDialog
 
     private void LoadAccountData()
     {
-        bool isEn = LocalizationService.CurrentLanguage == "en-US";
-
         DisplayNameBox.Text = string.IsNullOrEmpty(_account.DisplayName) ? _account.Email : _account.DisplayName;
         EmailText.Text = _account.Email;
 
@@ -44,19 +43,23 @@ public partial class AccountDetailsDialog
             if (inst != null)
             {
                 BoundInstanceNameText.Text = $"🔵 {inst.DisplayNameWithShortId}";
-                BoundInstanceIdText.Text = isEn ? $"Instance ID: {_account.BoundInstanceId}" : $"实例 ID: {_account.BoundInstanceId}";
+                BoundInstanceIdText.Text = string.Format(
+                    LocalizationService.GetString("AccountDetails_BoundInstanceIdFormat", "实例 ID: {0}"),
+                    _account.BoundInstanceId);
             }
             else
             {
-                BoundInstanceNameText.Text = isEn ? $"🔵 Bound (ID: {_account.BoundInstanceId})" : $"已绑定";
+                BoundInstanceNameText.Text = string.Format(
+                    LocalizationService.GetString("AccountDetails_BoundInstanceFormat", "已绑定 (ID: {0})"),
+                    _account.BoundInstanceId);
                 BoundInstanceIdText.Text = $"ID: {_account.BoundInstanceId}";
             }
             CopyInstanceIdBtn.Visibility = Visibility.Visible;
         }
         else
         {
-            BoundInstanceNameText.Text = isEn ? "Not bound" : "未绑定";
-            BoundInstanceIdText.Text = isEn ? "Not assigned" : "未分配";
+            BoundInstanceNameText.Text = LocalizationService.GetString("AccountDetails_NotBound", "未绑定");
+            BoundInstanceIdText.Text = LocalizationService.GetString("AccountDetails_NotAssigned", "未分配");
             CopyInstanceIdBtn.Visibility = Visibility.Collapsed;
         }
 
@@ -65,36 +68,34 @@ public partial class AccountDetailsDialog
 
         if (hasRefresh)
         {
-            TokenStatusText.Text = isEn 
-                ? "✓ Refresh Token valid (Auto-refresh & quiet renewal enabled)" 
-                : "有效";
-            TokenStatusDot.Fill = Brushes.LightGreen;
+            TokenStatusText.Text = LocalizationService.GetString("AccountDetails_TokenValid", "有效");
+            TokenStatusDot.Fill = ResolveBrush("SystemFillColorSuccessBrush", Colors.LightGreen);
         }
         else
         {
-            TokenStatusText.Text = isEn 
-                ? "⚠️ Missing Refresh Token (Re-login required)" 
-                : "缺少 Refresh Token";
-            TokenStatusDot.Fill = Brushes.Orange;
+            TokenStatusText.Text = LocalizationService.GetString("AccountDetails_TokenMissing", "缺少 Refresh Token");
+            TokenStatusDot.Fill = ResolveBrush("SystemFillColorCautionBrush", Colors.Orange);
         }
 
         TokenExpiryText.Text = expiry.HasValue
-            ? (isEn ? $"Token Expiry: {expiry.Value.ToLocalTime():yyyy-MM-dd HH:mm:ss}" : $"过期时间: {expiry.Value.ToLocalTime():yyyy-MM-dd HH:mm:ss}")
-            : (isEn ? "Token Expiry: Unknown" : "过期时间: 未知");
+            ? string.Format(
+                LocalizationService.GetString("AccountDetails_TokenExpiryFormat", "过期时间: {0}"),
+                expiry.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss"))
+            : LocalizationService.GetString("AccountDetails_TokenExpiryUnknown", "过期时间: 未知");
 
-        TokenLastActiveText.Text = isEn
-            ? $"Last Active / Refreshed: {_account.LastActiveAt.ToLocalTime():yyyy-MM-dd HH:mm:ss}"
-            : $"最近活动: {_account.LastActiveAt.ToLocalTime():yyyy-MM-dd HH:mm:ss}";
+        TokenLastActiveText.Text = string.Format(
+            LocalizationService.GetString("AccountDetails_LastActiveFormat", "最近活动: {0}"),
+            _account.LastActiveAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss"));
 
         if (_account.QuotaLastFetchedAt.HasValue)
         {
-            QuotaLastFetchedText.Text = isEn 
-                ? $"Synced: {_account.QuotaLastFetchedAt.Value.ToLocalTime():HH:mm:ss}" 
-                : $"同步于: {_account.QuotaLastFetchedAt.Value.ToLocalTime():HH:mm:ss}";
+            QuotaLastFetchedText.Text = string.Format(
+                LocalizationService.GetString("AccountDetails_QuotaSyncedFormat", "同步于: {0}"),
+                _account.QuotaLastFetchedAt.Value.ToLocalTime().ToString("HH:mm:ss"));
         }
         else
         {
-            QuotaLastFetchedText.Text = isEn ? "Not cached" : "未同步";
+            QuotaLastFetchedText.Text = LocalizationService.GetString("AccountDetails_QuotaNotCached", "未同步");
         }
 
         // Any unset 5h block falls back to the 7d value, then to "-".
@@ -104,22 +105,21 @@ public partial class AccountDetailsDialog
             Gemini5hProgressBar.Value = g5h;
             Gemini5hPercentText.Text = $"{g5h}%";
             Gemini5hResetText.Text = _account.Gemini5hResetTime.HasValue
-                ? (isEn ? $"Reset: {_account.Gemini5hResetTime.Value.ToLocalTime():HH:mm} ({FormatCountdown(_account.Gemini5hResetTime.Value, isEn)})"
-                        : $"重置: {_account.Gemini5hResetTime.Value.ToLocalTime():HH:mm} ({FormatCountdown(_account.Gemini5hResetTime.Value, isEn)})")
-                : (isEn ? "Rolling window (5h)" : "5小时滚动窗口");
+                ? FormatResetLine(_account.Gemini5hResetTime.Value, "HH:mm")
+                : LocalizationService.GetString("AccountDetails_Rolling5h", "5 小时滚动窗口");
         }
         else if (_account.Gemini7dFraction.HasValue)
         {
             var g7dVal = (int)(_account.Gemini7dFraction.Value * 100);
             Gemini5hProgressBar.Value = g7dVal;
             Gemini5hPercentText.Text = $"{g7dVal}%";
-            Gemini5hResetText.Text = isEn ? "Depleted" : "已耗尽";
+            Gemini5hResetText.Text = LocalizationService.GetString("AccountDetails_Depleted", "已耗尽");
         }
         else
         {
             Gemini5hProgressBar.Value = 0;
             Gemini5hPercentText.Text = "-";
-            Gemini5hResetText.Text = isEn ? "No 5h quota cached" : "暂无 5h 配额缓存";
+            Gemini5hResetText.Text = LocalizationService.GetString("AccountDetails_NoQuota5h", "暂无 5h 配额缓存");
         }
 
         if (_account.Gemini7dFraction.HasValue)
@@ -128,21 +128,20 @@ public partial class AccountDetailsDialog
             Gemini7dProgressBar.Value = g7d;
             Gemini7dPercentText.Text = $"{g7d}%";
             Gemini7dResetText.Text = _account.Gemini7dResetTime.HasValue
-                ? (isEn ? $"Reset: {_account.Gemini7dResetTime.Value.ToLocalTime():MM-dd HH:mm} ({FormatCountdown(_account.Gemini7dResetTime.Value, isEn)})"
-                        : $"重置: {_account.Gemini7dResetTime.Value.ToLocalTime():MM-dd HH:mm} ({FormatCountdown(_account.Gemini7dResetTime.Value, isEn)})")
-                : (isEn ? "Weekly ceiling (7d)" : "7天周期上限");
+                ? FormatResetLine(_account.Gemini7dResetTime.Value, "MM-dd HH:mm")
+                : LocalizationService.GetString("AccountDetails_WeeklyCeiling7d", "7 天周期上限");
         }
         else if (_account.Gemini5hFraction.HasValue)
         {
             Gemini7dProgressBar.Value = 100;
             Gemini7dPercentText.Text = "100%";
-            Gemini7dResetText.Text = isEn ? "Normal" : "正常";
+            Gemini7dResetText.Text = LocalizationService.GetString("AccountDetails_Normal", "正常");
         }
         else
         {
             Gemini7dProgressBar.Value = 0;
             Gemini7dPercentText.Text = "-";
-            Gemini7dResetText.Text = isEn ? "No 7d quota cached" : "暂无 7d 配额缓存";
+            Gemini7dResetText.Text = LocalizationService.GetString("AccountDetails_NoQuota7d", "暂无 7d 配额缓存");
         }
 
         // Any unset 5h block is treated as counted against the weekly quota.
@@ -152,21 +151,20 @@ public partial class AccountDetailsDialog
             Claude5hProgressBar.Value = c5h;
             Claude5hPercentText.Text = $"{c5h}%";
             Claude5hResetText.Text = _account.Claude5hResetTime.HasValue
-                ? (isEn ? $"Reset: {_account.Claude5hResetTime.Value.ToLocalTime():HH:mm} ({FormatCountdown(_account.Claude5hResetTime.Value, isEn)})"
-                        : $"重置: {_account.Claude5hResetTime.Value.ToLocalTime():HH:mm} ({FormatCountdown(_account.Claude5hResetTime.Value, isEn)})")
-                : (isEn ? "Rolling window (5h)" : "5小时滚动窗口");
+                ? FormatResetLine(_account.Claude5hResetTime.Value, "HH:mm")
+                : LocalizationService.GetString("AccountDetails_Rolling5h", "5 小时滚动窗口");
         }
         else if (_account.Claude7dFraction.HasValue)
         {
             Claude5hProgressBar.Value = (int)(_account.Claude7dFraction.Value * 100);
             Claude5hPercentText.Text = "✓";
-            Claude5hResetText.Text = isEn ? "Counted against weekly quota" : "按周配额计算";
+            Claude5hResetText.Text = LocalizationService.GetString("AccountDetails_CountedWeekly", "按周配额计算");
         }
         else
         {
             Claude5hProgressBar.Value = 0;
             Claude5hPercentText.Text = "-";
-            Claude5hResetText.Text = isEn ? "No 5h quota cached" : "暂无 5h 配额缓存";
+            Claude5hResetText.Text = LocalizationService.GetString("AccountDetails_NoQuota5h", "暂无 5h 配额缓存");
         }
 
         if (_account.Claude7dFraction.HasValue)
@@ -175,31 +173,45 @@ public partial class AccountDetailsDialog
             Claude7dProgressBar.Value = c7d;
             Claude7dPercentText.Text = $"{c7d}%";
             Claude7dResetText.Text = _account.Claude7dResetTime.HasValue
-                ? (isEn ? $"Reset: {_account.Claude7dResetTime.Value.ToLocalTime():MM-dd HH:mm} ({FormatCountdown(_account.Claude7dResetTime.Value, isEn)})"
-                        : $"重置: {_account.Claude7dResetTime.Value.ToLocalTime():MM-dd HH:mm} ({FormatCountdown(_account.Claude7dResetTime.Value, isEn)})")
-                : (isEn ? "Weekly ceiling (7d)" : "7天周期上限");
+                ? FormatResetLine(_account.Claude7dResetTime.Value, "MM-dd HH:mm")
+                : LocalizationService.GetString("AccountDetails_WeeklyCeiling7d", "7 天周期上限");
         }
         else
         {
             Claude7dProgressBar.Value = 0;
             Claude7dPercentText.Text = "-";
-            Claude7dResetText.Text = isEn ? "No 7d quota cached" : "暂无 7d 配额缓存";
+            Claude7dResetText.Text = LocalizationService.GetString("AccountDetails_NoQuota7d", "暂无 7d 配额缓存");
         }
     }
 
-    private static string FormatCountdown(DateTime targetUtc, bool isEn)
+    /// <summary>"Reset: 14:30 (in 2h 5m)" — the absolute time plus a countdown.</summary>
+    private static string FormatResetLine(DateTime targetUtc, string timeFormat)
+    {
+        return string.Format(
+            LocalizationService.GetString("AccountDetails_ResetFormat", "重置: {0} ({1})"),
+            targetUtc.ToLocalTime().ToString(timeFormat),
+            FormatCountdown(targetUtc));
+    }
+
+    /// <summary>Relative time to a reset instant, in the shape "3天2小时后" / "2h 5m".</summary>
+    private static string FormatCountdown(DateTime targetUtc)
     {
         var remaining = targetUtc - DateTime.UtcNow;
-        if (remaining <= TimeSpan.Zero) return isEn ? "Resetting soon" : "即将重置";
+        if (remaining <= TimeSpan.Zero)
+        {
+            return LocalizationService.GetString("AccountDetails_ResetSoon", "即将重置");
+        }
+
         if (remaining.TotalHours >= 24)
         {
-            return isEn 
-                ? $"in {(int)remaining.TotalDays}d {remaining.Hours}h" 
-                : $"{(int)remaining.TotalDays}天{remaining.Hours}小时后";
+            return string.Format(
+                LocalizationService.GetString("AccountDetails_CountdownDaysFormat", "{0} 天 {1} 小时后"),
+                (int)remaining.TotalDays, remaining.Hours);
         }
-        return isEn 
-            ? $"in {(int)remaining.TotalHours}h {remaining.Minutes}m" 
-            : $"{(int)remaining.TotalHours}小时{remaining.Minutes}分后";
+
+        return string.Format(
+            LocalizationService.GetString("AccountDetails_CountdownHoursFormat", "{0} 小时 {1} 分后"),
+            (int)remaining.TotalHours, remaining.Minutes);
     }
 
     private void OnSaveDisplayNameClicked(object sender, RoutedEventArgs e)
@@ -210,8 +222,8 @@ public partial class AccountDetailsDialog
             _account.DisplayName = newName;
             _accountPool.UpdateAccountDisplayName(_account.Id, newName);
             ModernDialog.ShowSuccess(
-                LocalizationService.GetString("Common_Success", "成功"),
-                LocalizationService.GetString("AccountDetails_NameSaved", "账号名称已成功保存！"),
+                LocalizationService.GetString("AccountDetails_NameSavedTitle", "已保存"),
+                LocalizationService.GetString("AccountDetails_NameSaved", "账号名称已更新。"),
                 this);
         }
     }
@@ -222,8 +234,8 @@ public partial class AccountDetailsDialog
         {
             Clipboard.SetText(_account.InstallationId);
             ModernDialog.ShowSuccess(
-                LocalizationService.GetString("Common_Success", "成功"),
-                LocalizationService.GetString("AccountDetails_CopiedFingerprint", "设备指纹 ID 已成功复制到剪贴板！"),
+                LocalizationService.GetString("Common_CopiedTitle", "已复制"),
+                LocalizationService.GetString("AccountDetails_CopiedFingerprint", "设备指纹已复制。"),
                 this);
         }
         catch { }
@@ -236,8 +248,8 @@ public partial class AccountDetailsDialog
         {
             Clipboard.SetText(_account.BoundInstanceId);
             ModernDialog.ShowSuccess(
-                LocalizationService.GetString("Common_Success", "成功"),
-                LocalizationService.GetString("AccountDetails_CopiedInstanceId", "完整实例 ID 已成功复制到剪贴板！"),
+                LocalizationService.GetString("Common_CopiedTitle", "已复制"),
+                LocalizationService.GetString("AccountDetails_CopiedInstanceId", "实例 ID 已复制。"),
                 this);
         }
         catch { }
@@ -245,13 +257,11 @@ public partial class AccountDetailsDialog
 
     private async void OnRefreshTokenClicked(object sender, RoutedEventArgs e)
     {
-        bool isEn = LocalizationService.CurrentLanguage == "en-US";
         RefreshTokenBtn.IsEnabled = false;
-        RefreshFeedbackText.Visibility = Visibility.Visible;
-        RefreshFeedbackText.Foreground = Brushes.LightGray;
-        RefreshFeedbackText.Text = isEn 
-            ? "⏳ Renewing Access Token and synchronizing model quotas..." 
-            : "正在刷新 Token...";
+        SetRefreshStatus(
+            LocalizationService.GetString("AccountDetails_RefreshRunning", "正在刷新 Token 与配额…"),
+            InfoBarSeverity.Informational,
+            closable: false);
 
         try
         {
@@ -259,28 +269,49 @@ public partial class AccountDetailsDialog
 
             if (success)
             {
-                RefreshFeedbackText.Text = $"✓ {msg}";
-                RefreshFeedbackText.Foreground = Brushes.LightGreen;
+                SetRefreshStatus(msg, InfoBarSeverity.Success, closable: true);
                 LoadAccountData();
             }
             else
             {
-                RefreshFeedbackText.Text = $"✗ {msg}";
-                RefreshFeedbackText.Foreground = Brushes.OrangeRed;
+                SetRefreshStatus(msg, InfoBarSeverity.Error, closable: true);
             }
         }
         catch (Exception ex)
         {
             // async void handler: an unhandled exception would crash the UI thread.
-            RefreshFeedbackText.Text = isEn
-                ? $"✗ Refresh failed: {ex.Message}"
-                : $"刷新失败: {ex.Message}";
-            RefreshFeedbackText.Foreground = Brushes.OrangeRed;
+            SetRefreshStatus(
+                string.Format(LocalizationService.GetString("AccountDetails_RefreshFailedFormat", "刷新失败: {0}"), ex.Message),
+                InfoBarSeverity.Error,
+                closable: true);
         }
         finally
         {
             RefreshTokenBtn.IsEnabled = true;
         }
+    }
+
+    /// <summary>
+    /// Resolves a theme brush by key, falling back to a literal colour when the theme does not
+    /// define it. Keeps status dots on the theme palette instead of fixed RGB values.
+    /// </summary>
+    private Brush ResolveBrush(string key, Color fallback)
+    {
+        return TryFindResource(key) as Brush ?? new SolidColorBrush(fallback);
+    }
+
+    /// <summary>
+    /// Updates the refresh InfoBar. Severity replaces the previous coloured text run, so the
+    /// result reads the same in light, dark and contrast themes.
+    /// </summary>
+    private void SetRefreshStatus(string message, InfoBarSeverity severity, bool closable)
+    {
+        if (RefreshInfoBar == null) return;
+
+        RefreshInfoBar.Severity = severity;
+        RefreshInfoBar.Message = message;
+        RefreshInfoBar.IsClosable = closable;
+        RefreshInfoBar.IsOpen = true;
     }
 
     private void OnCloseClicked(object sender, RoutedEventArgs e)
