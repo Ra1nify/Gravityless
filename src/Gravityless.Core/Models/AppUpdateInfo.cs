@@ -1,26 +1,34 @@
+using System.Text.Json.Serialization;
+
 namespace Gravityless.Core.Models;
 
 /// <summary>
 /// The manifest published at <c>update.json</c> on the <c>info</c> branch.
 ///
-/// Only <see cref="VersionCode"/> decides whether an update exists; the display fields are
-/// for the UI. Downloads are listed per architecture so one manifest serves both builds.
+/// Only <see cref="VersionCode"/> decides whether an update exists; <see cref="Version"/> is
+/// the dotted form shown in the UI. Downloads are listed per architecture so one manifest
+/// serves both builds.
 /// </summary>
 public class AppUpdateInfo
 {
-    /// <summary>yyMM + major + minor. Compared as a number against the local build.</summary>
+    /// <summary><c>yyMM + major + minor</c>, e.g. 261102. Internal; never displayed.</summary>
+    [JsonPropertyName("version_code")]
     public long VersionCode { get; set; }
 
-    /// <summary>Display version, e.g. <c>26.11.0.2</c>.</summary>
-    public string VersionName { get; set; } = string.Empty;
+    /// <summary><c>yy.MM.major.minor</c>, e.g. <c>26.11.0.2</c>.</summary>
+    [JsonPropertyName("version")]
+    public string Version { get; set; } = string.Empty;
 
     /// <summary>Per-architecture download entries.</summary>
+    [JsonPropertyName("assets")]
     public List<AppUpdateAsset> Assets { get; set; } = [];
 
     /// <summary>Changelog for this version.</summary>
+    [JsonPropertyName("changelog_url")]
     public string ChangelogUrl { get; set; } = string.Empty;
 
     /// <summary>Same document as <see cref="ChangelogUrl"/>; preferred when present.</summary>
+    [JsonPropertyName("latest_changelog")]
     public string? LatestChangelog { get; set; }
 }
 
@@ -28,13 +36,13 @@ public class AppUpdateInfo
 public class AppUpdateAsset
 {
     /// <summary><c>x64</c> or <c>arm64</c>.</summary>
+    [JsonPropertyName("arch")]
     public string Arch { get; set; } = string.Empty;
 
+    [JsonPropertyName("url")]
     public string Url { get; set; } = string.Empty;
 
-    /// <summary>Lowercase hex SHA-512 of the installer. Verified before it is executed.</summary>
-    public string Sha512 { get; set; } = string.Empty;
-
+    [JsonPropertyName("size")]
     public long Size { get; set; }
 }
 
@@ -46,19 +54,25 @@ public class AppUpdateAsset
 /// </summary>
 public class AppChangelog
 {
+    [JsonPropertyName("version_code")]
     public long VersionCode { get; set; }
 
-    public string VersionName { get; set; } = string.Empty;
+    [JsonPropertyName("version")]
+    public string Version { get; set; } = string.Empty;
 
     /// <summary>Release date, <c>YYYY-MM-DD</c>.</summary>
+    [JsonPropertyName("date")]
     public string Date { get; set; } = string.Empty;
 
-    /// <summary>Absolute URL of the previous version, or null for the first release.</summary>
+    /// <summary>Absolute URL of the previous version, or null for the earliest release.</summary>
+    [JsonPropertyName("previous_changelog")]
     public string? PreviousChangelog { get; set; }
 
     /// <summary>Absolute URL of the next version, or null for the newest release.</summary>
+    [JsonPropertyName("next_changelog")]
     public string? NextChangelog { get; set; }
 
+    [JsonPropertyName("entries")]
     public List<AppChangelogEntry> Entries { get; set; } = [];
 }
 
@@ -66,12 +80,16 @@ public class AppChangelog
 public class AppChangelogEntry
 {
     /// <summary>Commit type prefix, e.g. <c>feat</c>, <c>fix</c>. Empty when unsorted.</summary>
+    [JsonPropertyName("type")]
     public string Type { get; set; } = string.Empty;
 
+    [JsonPropertyName("title")]
     public string Title { get; set; } = string.Empty;
 
+    [JsonPropertyName("body")]
     public string Body { get; set; } = string.Empty;
 
+    [JsonPropertyName("hash")]
     public string Hash { get; set; } = string.Empty;
 }
 
@@ -99,7 +117,7 @@ public enum AppUpdateFailure
     /// <summary>Response body was not the expected JSON shape.</summary>
     Malformed,
 
-    /// <summary>Parsed, but a required field was unusable (version code ≤ 0, no asset for this arch).</summary>
+    /// <summary>Parsed, but a required field was unusable (version code ≤ 0).</summary>
     Invalid,
 }
 

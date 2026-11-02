@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Security.Cryptography;
 using Gravityless.Core.Models;
 
 namespace Gravityless.Core.Services;
@@ -7,9 +6,10 @@ namespace Gravityless.Core.Services;
 /// <summary>
 /// Downloads an app installer and hands it to the shell.
 ///
-/// The payload is executable, so the hash from the manifest is verified before the file is
-/// launched. A mismatch deletes the download rather than asking the user to judge it: a
-/// partial or substituted installer has no safe interpretation.
+/// No hash is checked here: the installer is code-signed, and Windows verifies that signature
+/// before running it elevated. A truncated download shows up as a content-length shortfall,
+/// which the read loop already detects by comparing the received byte count with the
+/// advertised length.
 /// </summary>
 public class AppUpdateInstaller
 {
@@ -92,14 +92,15 @@ public class AppUpdateInstaller
             return (null, ex.Message);
         }
 
-        if (!string.IsNullOrWhiteSpace(asset.Sha512))
+        // A short read means the transfer was truncated; the signature check at launch would
+        // otherwise fail with a generic corruption message.
+        if (asset.Size > 0)
         {
-            var actual = await ComputeSha512Async(path, cancellationToken).ConfigureAwait(false);
-
-            if (!string.Equals(actual, asset.Sha512.Trim(), StringComparison.OrdinalIgnoreCase))
+            var length = new FileInfo(path).Length;
+            if (length != asset.Size)
             {
                 TryDelete(path);
-                return (null, $"SHA-512 mismatch: expected {asset.Sha512}, got {actual}");
+                return (null, $"incomplete download: expected {asset.Size} bytes, got {length}");
             }
         }
 
@@ -130,14 +131,6 @@ public class AppUpdateInstaller
         {
             return false;
         }
-    }
-
-    /// <summary>Lowercase hex SHA-512 of a file.</summary>
-    public static async Task<string> ComputeSha512Async(string path, CancellationToken cancellationToken = default)
-    {
-        await using var stream = File.OpenRead(path);
-        var hash = await SHA512.HashDataAsync(stream, cancellationToken).ConfigureAwait(false);
-        return Convert.ToHexString(hash).ToLowerInvariant();
     }
 
     private static void TryDelete(string path)

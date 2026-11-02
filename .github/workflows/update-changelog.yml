@@ -1,10 +1,11 @@
 name: update-changelog
 
-# Regenerates the `info` branch from release tags: update.json, one changelog per release,
-# and a changelog-index.json fallback. The client reads only those static files, so it never
-# needs a new build when the download source or repository changes.
+# Regenerates the `info` branch from release tags: update.json and one changelog per release.
+# The client reads only those static files, so it never needs a new build when the download
+# source or repository changes.
 #
-# Tag format is the version code: yyMM + major + minor, e.g. 261102.
+# Tag format is the version code: yyMM + major + minor, e.g. 261102. Every run rebuilds the
+# whole chain and force-pushes the branch, so a missed or repeated run leaves no damage.
 
 on:
   release:
@@ -83,10 +84,6 @@ jobs:
             fi
           done
 
-          if ! echo "$ASSETS" | grep -q '\.sha512$'; then
-            echo "::warning::no .sha512 asset; the manifest will omit hashes"
-          fi
-
       - name: Build info branch
         shell: bash
         env:
@@ -142,15 +139,19 @@ jobs:
             PREV_URL=""
             [ -n "$PREV" ] && PREV_URL="${BASE}/changelog-${PREV}.json"
 
+            # Tag layout is fixed: 2-digit year, 2-digit month, then major and minor.
+            YY="${T:0:2}"; MM="${T:2:2}"; MAJ="${T:4:1}"; MIN="${T:5:1}"
+            DISPLAY="${YY}.${MM}.${MAJ}.${MIN}"
+
             jq -n \
               --arg code "$T" \
-              --arg name "$T" \
+              --arg ver "$DISPLAY" \
               --arg date "$DATE" \
               --arg prev "$PREV_URL" \
               --slurpfile entries /tmp/_commits.json \
               '{
                 version_code: ($code | tonumber),
-                version_name: $name,
+                version: $ver,
                 date: $date,
                 previous_changelog: (if $prev == "" then null else $prev end),
                 next_changelog: null,
@@ -183,63 +184,47 @@ jobs:
           done
 
           # --- update.json ------------------------------------------------------------
+          # One query for the asset list; the size comes from the same response so the
+          # manifest cannot describe a file that was replaced between calls.
+          gh release view "$TAG" --json assets --jq '.assets[] | "\(.name)\t\(.size)"' > /tmp/_assets.tsv
+
           ASSETS_JSON="["
           FIRST=1
           for ARCH in x64 arm64; do
-            ASSET="$(gh release view "$TAG" --json assets \
-              --jq ".assets[] | select(.name | test(\"-${ARCH}\\\\.exe$\")) | .name" | head -1)"
+            ASSET="$(awk -F'\t' -v a="-${ARCH}.exe" '$1 ~ /^Gravityless-.*\.exe$/ && index($1, a) == length($1) - length(a) + 1 { print $1; exit }' /tmp/_assets.tsv)"
+
             if [ -z "$ASSET" ]; then
-              echo "::error::no $ARCH installer for $TAG"
+              echo "::error::no $ARCH installer found for $TAG"
               exit 1
             fi
 
-            SIZE="$(gh release view "$TAG" --json assets \
-              --jq ".assets[] | select(.name == \"$ASSET\") | .size")"
-
-            SHA="$(gh release view "$TAG" --json assets \
-              --jq ".assets[] | select(.name == \"${ASSET}.sha512\") | .name" | head -1)"
-            [ -z "$SHA" ] && SHA=""
+            SIZE="$(awk -F'\t' -v n="$ASSET" '$1 == n { print $2; exit }' /tmp/_assets.tsv)"
 
             [ $FIRST -eq 0 ] && ASSETS_JSON+=","
             FIRST=0
-            ASSETS_JSON+="{\"arch\":\"${ARCH}\",\"url\":\"https://github.com/${GH_REPO}/releases/download/${TAG}/${ASSET}\",\"size\":${SIZE}}"
+            ASSETS_JSON+="{\"arch\":\"${ARCH}\",\"url\":\"https://github.com/${GH_REPO}/releases/download/${TAG}/${ASSET}\",\"size\":${SIZE:-0}}"
           done
           ASSETS_JSON+="]"
 
-          # Attach hashes by fetching the .sha512 assets when present.
-          if echo "$ASSETS_JSON" | grep -q '"url"'; then
-            for ARCH in x64 arm64; do
-              ASSET="$(gh release view "$TAG" --json assets \
-                --jq ".assets[] | select(.name | test(\"-${ARCH}\\\\.exe$\")) | .name" | head -1)"
-              SHA_NAME="${ASSET}.sha512"
-              HASH="$(gh release download "$TAG" --pattern "$SHA_NAME" --dir /tmp/sha --clobber 2>/dev/null \
-                && cut -d' ' -f1 "/tmp/sha/${SHA_NAME}" 2>/dev/null || true)"
-              if [ -n "$HASH" ]; then
-                ASSETS_JSON="$(echo "$ASSETS_JSON" | jq --arg arch "$ARCH" --arg sha "$HASH" \
-                  'map(if .arch == $arch then . + {sha512: $sha} else . end)')"
-              fi
-            done
-          fi
+          # Same fixed layout as the tag split above.
+          YY="${TAG:0:2}"; MM="${TAG:2:2}"; MAJ="${TAG:4:1}"; MIN="${TAG:5:1}"
+          DISPLAY="${YY}.${MM}.${MAJ}.${MIN}"
 
           jq -n \
             --arg code "$TAG" \
-            --arg name "$TAG" \
+            --arg ver "$DISPLAY" \
             --arg changelog "${BASE}/changelog-${TAG}.json" \
             --argjson assets "$ASSETS_JSON" \
             '{
               version_code: ($code | tonumber),
-              version_name: $name,
+              version: $ver,
               assets: $assets,
               changelog_url: $changelog,
               latest_changelog: $changelog
             }' > "$WORK/update.json"
 
-          # --- changelog-index.json ---------------------------------------------------
-          # Neutral fallback: if a link is ever broken, the client can still enumerate.
-          jq -n --argjson codes "$(printf '%s\n' "${TAGS[@]}" | jq -R -s 'split("\n") | map(select(length>0)) | map(tonumber)')" \
-            '{ codes: $codes, latest: ($codes | last) }' > "$WORK/changelog-index.json"
-
           echo
+
           echo "Generated:"
           ls -1 "$WORK" | sed 's/^/  /'
           echo

@@ -1977,7 +1977,7 @@ public partial class MainWindow
                 SetAppUpdateStatus(
                     string.Format(
                         LocalizationService.GetString("Overview_AppUpdateNoAssetFormat", "版本 {0} 没有适用于本机架构的安装包。"),
-                        info.VersionName),
+                        info.Version),
                     InfoBarSeverity.Warning);
                 return;
             }
@@ -1991,7 +1991,7 @@ public partial class MainWindow
             SetAppUpdateStatus(
                 string.Format(
                     LocalizationService.GetString("Overview_AppUpdateFoundFormat", "发现新版本 {0}{1}"),
-                    info.VersionName, sizeText),
+                    info.Version, sizeText),
                 InfoBarSeverity.Success);
 
             if (AppUpdateInstallButton != null) AppUpdateInstallButton.IsEnabled = true;
