@@ -320,7 +320,7 @@
     <sys:String x:Key="Sidebar_DaemonTooltipActiveFormat">守护服务运行中 (127.0.0.1:{0})</sys:String>
     <sys:String x:Key="Sidebar_DaemonTooltipOffline">守护服务未运行，样式更新不可用。</sys:String>
     <sys:String x:Key="CloudUpdate_Fetching">正在请求官方 Cloud Run Manifest…</sys:String>
-    <sys:String x:Key="CloudUpdate_FoundFormat">最新版本: v{0} | 包体: {1} MB&#x0a;下载直链: {2}</sys:String>
+    <sys:String x:Key="CloudUpdate_FoundFormat">最新版本 {0} · {1} MB</sys:String>
     <sys:String x:Key="CloudUpdate_ParseFailed">未能解析版本清单。</sys:String>
     <sys:String x:Key="CloudUpdate_CheckFailedFormat">检查更新失败: {0}</sys:String>
     <sys:String x:Key="CloudUpdate_RunningConfirmTitle">升级前确认</sys:String>
@@ -595,4 +595,5 @@
     <sys:String x:Key="Overview_AppUpdateErrMalformed">更新清单格式无效。</sys:String>
     <sys:String x:Key="Overview_AppUpdateErrInvalid">更新清单内容不完整。</sys:String>
     <sys:String x:Key="Overview_AppUpdateErrUnknown">检查更新失败。</sys:String>
+    <sys:String x:Key="CloudUpdate_OpenLinkTip">在浏览器中打开下载链接</sys:String>
 </ResourceDictionary>

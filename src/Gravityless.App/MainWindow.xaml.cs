@@ -1897,13 +1897,13 @@ public partial class MainWindow
     {
         if (UpdateInfoBar == null) return;
 
+        // Install phases retitle the bar with their step name; a check must put the general
+        // title back, otherwise "Download installer" stays above an unrelated result.
+        UpdateInfoBar.Title = LocalizationService.GetString("CloudUpdate_StatusTitle", "更新状态");
         UpdateInfoBar.Severity = severity;
         UpdateInfoBar.IsOpen = true;
-
-        if (OnlineVersionText != null)
-        {
-            OnlineVersionText.Text = message;
-        }
+        // The template renders Message; writing to an inner TextBlock does not show up.
+        UpdateInfoBar.Message = message;
     }
 
     /// <summary>Shows or hides the progress row inside the update InfoBar.</summary>
@@ -1915,10 +1915,6 @@ public partial class MainWindow
         }
     }
 
-    /// <summary>
-    /// Moves the InfoBar to a new stage: the title names the step, the label carries its detail.
-    /// Keeps the four install phases distinguishable instead of appending them to one label.
-    /// </summary>
     // ---------------------------------------------------------------- app self-update
 
     /// <summary>
@@ -2078,8 +2074,9 @@ public partial class MainWindow
 
         AppUpdateInfoBar.Severity = severity;
         AppUpdateInfoBar.IsOpen = true;
-
-        if (AppUpdateMessageText != null) AppUpdateMessageText.Text = message;
+        // The template renders Message, not arbitrary content; a bare severity icon with no
+        // text tells the user nothing about what actually happened.
+        AppUpdateInfoBar.Message = message;
     }
 
     /// <summary>Shows or hides the download progress row.</summary>
@@ -2119,6 +2116,10 @@ public partial class MainWindow
         };
     }
 
+    /// <summary>
+    /// Moves the InfoBar to a new stage: the title names the step, the label carries its detail.
+    /// Keeps the four install phases distinguishable instead of appending them to one label.
+    /// </summary>
     private void SetUpdateStage(string title, string detail, InfoBarSeverity severity = InfoBarSeverity.Informational)
     {
         if (UpdateInfoBar == null) return;
@@ -2126,6 +2127,7 @@ public partial class MainWindow
         UpdateInfoBar.Severity = severity;
         UpdateInfoBar.Title = title;
         UpdateInfoBar.IsOpen = true;
+        UpdateInfoBar.Message = detail;
 
         if (InstallProgressLabel != null)
         {
@@ -2199,6 +2201,7 @@ public partial class MainWindow
         SetUpdateStatus(
             LocalizationService.GetString("CloudUpdate_Fetching", "正在请求官方 Cloud Run Manifest…"),
             InfoBarSeverity.Informational);
+        SetDownloadLink(null);
         try
         {
             _currentManifest = await _engineService.FetchLatestManifestAsync(cancellationToken);
@@ -2211,6 +2214,9 @@ public partial class MainWindow
                         _currentManifest.Version,
                         sizeMb.ToString("F1")),
                     InfoBarSeverity.Success);
+                // The manifest URL is worth showing: it lets the user fetch the installer with
+                // their own tool when the in-app download is blocked or too slow.
+                SetDownloadLink(_currentManifest.DownloadUrl);
                 DownloadInstallButton.IsEnabled = true;
                 UpdateSidebarStatus();
             }
@@ -2230,6 +2236,42 @@ public partial class MainWindow
             SetUpdateStatus(
                 string.Format(LocalizationService.GetString("CloudUpdate_CheckFailedFormat", "检查更新失败: {0}"), ex.Message),
                 InfoBarSeverity.Error);
+        }
+    }
+
+    /// <summary>
+    /// Shows or hides the direct download link in the update bar. Passing null hides it, which
+    /// is what every non-success path wants; a stale link next to an error message would offer
+    /// a file the manifest no longer describes.
+    /// </summary>
+    private void SetDownloadLink(string? url)
+    {
+        if (DownloadLinkPanel == null || DownloadLinkText == null) return;
+
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            DownloadLinkPanel.Visibility = Visibility.Collapsed;
+            DownloadLinkText.Text = string.Empty;
+            return;
+        }
+
+        DownloadLinkText.Text = url;
+        DownloadLinkPanel.Visibility = Visibility.Visible;
+    }
+
+    /// <summary>Opens the download URL in the default browser.</summary>
+    private void OnDownloadLinkClicked(object sender, RoutedEventArgs e)
+    {
+        var url = DownloadLinkText?.Text;
+        if (string.IsNullOrWhiteSpace(url)) return;
+
+        try
+        {
+            Process.Start(new ProcessStartInfo { FileName = url, UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Swallowed("overview.download-link", ex);
         }
     }
 

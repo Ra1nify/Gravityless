@@ -320,7 +320,7 @@
     <sys:String x:Key="Sidebar_DaemonTooltipActiveFormat">Daemon running (127.0.0.1:{0})</sys:String>
     <sys:String x:Key="Sidebar_DaemonTooltipOffline">Daemon not running; style updates unavailable.</sys:String>
     <sys:String x:Key="CloudUpdate_Fetching">Requesting Cloud Run manifest…</sys:String>
-    <sys:String x:Key="CloudUpdate_FoundFormat">Latest: v{0} | Size: {1} MB&#x0a;Direct link: {2}</sys:String>
+    <sys:String x:Key="CloudUpdate_FoundFormat">Latest {0} · {1} MB</sys:String>
     <sys:String x:Key="CloudUpdate_ParseFailed">Could not parse the version manifest.</sys:String>
     <sys:String x:Key="CloudUpdate_CheckFailedFormat">Update check failed: {0}</sys:String>
     <sys:String x:Key="CloudUpdate_RunningConfirmTitle">Before upgrading</sys:String>
@@ -595,4 +595,5 @@
     <sys:String x:Key="Overview_AppUpdateErrMalformed">Update manifest is malformed.</sys:String>
     <sys:String x:Key="Overview_AppUpdateErrInvalid">Update manifest is incomplete.</sys:String>
     <sys:String x:Key="Overview_AppUpdateErrUnknown">Update check failed.</sys:String>
+    <sys:String x:Key="CloudUpdate_OpenLinkTip">Open the download link in your browser</sys:String>
 </ResourceDictionary>

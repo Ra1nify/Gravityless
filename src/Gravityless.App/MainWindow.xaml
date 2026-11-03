@@ -226,19 +226,16 @@
                                                    Icon="{ui:SymbolIcon Symbol=ArrowDownload24}"/>
                                     </StackPanel>
 
-                                    <!-- Same pattern as the core update bar: status text and progress
-                                         live inside one surface instead of floating in the layout. -->
+                                    <!-- Same pattern as the core update bar: the message rides the
+                                         InfoBar's own Message property; content holds only extras. -->
                                     <ui:InfoBar x:Name="AppUpdateInfoBar"
                                                 Severity="Informational"
                                                 Title="{DynamicResource Overview_AppUpdateStatusTitle}"
                                                 IsOpen="False"
                                                 IsClosable="True">
                                         <ui:InfoBar.Content>
-                                            <StackPanel>
-                                                <TextBlock x:Name="AppUpdateMessageText" FontSize="12" TextWrapping="Wrap"/>
-                                                <StackPanel x:Name="AppUpdateProgressPanel" Visibility="Collapsed" Margin="0,8,0,0">
-                                                    <ProgressBar x:Name="AppUpdateProgressBar" Height="4" Minimum="0" Maximum="100"/>
-                                                </StackPanel>
+                                            <StackPanel x:Name="AppUpdateProgressPanel" Visibility="Collapsed" Margin="0,8,0,0">
+                                                <ProgressBar x:Name="AppUpdateProgressBar" Height="4" Minimum="0" Maximum="100"/>
                                             </StackPanel>
                                         </ui:InfoBar.Content>
                                     </ui:InfoBar>
@@ -295,8 +292,8 @@
                                         <ui:Button AutomationProperties.AutomationId="UninstallCoreButton" x:Name="UninstallCoreButton" Content="{DynamicResource CoreStatus_UninstallBtn}" Click="OnUninstallCoreClicked" Appearance="Danger" IsEnabled="False" Icon="{ui:SymbolIcon Symbol=Delete24}"/>
                                     </StackPanel>
 
-                                    <!-- Update status. InfoBar carries the state; the progress bar sits inside
-                                         its content so the two read as one block instead of loose text. -->
+                                    <!-- Update status. The message rides the InfoBar's own Message
+                                         property; content holds the download link and progress row. -->
                                     <ui:InfoBar x:Name="UpdateInfoBar"
                                                 Severity="Informational"
                                                 Title="{DynamicResource CloudUpdate_StatusTitle}"
@@ -305,9 +302,15 @@
                                                 Margin="0,0,0,0">
                                         <ui:InfoBar.Content>
                                             <StackPanel>
-                                                <TextBlock x:Name="OnlineVersionText"
-                                                           Text="{DynamicResource CloudUpdate_InitialHint}"
-                                                           FontSize="12" TextWrapping="Wrap"/>
+                                                <!-- Direct download link, shown only once a manifest is parsed.
+                                                     A separate line keeps the URL out of the status text. -->
+                                                <TextBlock x:Name="DownloadLinkPanel" Visibility="Collapsed" Margin="0,6,0,0">
+                                                    <Hyperlink x:Name="DownloadLink" Click="OnDownloadLinkClicked"
+                                                               ToolTip="{DynamicResource CloudUpdate_OpenLinkTip}">
+                                                        <Run x:Name="DownloadLinkText"/>
+                                                    </Hyperlink>
+                                                </TextBlock>
+
                                                 <StackPanel x:Name="InstallProgressPanel" Visibility="Collapsed" Margin="0,8,0,0">
                                                     <ProgressBar x:Name="InstallProgressBar" Height="4"/>
                                                     <TextBlock x:Name="InstallProgressLabel" FontSize="12" Opacity="0.8" TextWrapping="Wrap" Margin="0,6,0,0"/>
