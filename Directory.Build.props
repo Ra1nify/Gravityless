@@ -1,55 +1,18 @@
 <Project>
 
   <!--
-    Version scheme, matching the release tags:
+    Version scheme aligned with Antigravity releases:
+        Version:      <AntigravityVersion>.<Revision>   e.g. 2.29.0.01
+        VersionCode:  Numeric representation            e.g. 229001
 
-        yyMM + major + minor      tag / version code   261102
-        yy.MM.major.minor         display version       26.11.0.2
-
-    The date part comes from the build day, so a release always carries the month it was
-    cut in. A local override may pin the counters without touching this file:
-
-        version.props  ->  <Project><PropertyGroup><VerMajor>3</VerMajor></PropertyGroup></Project>
-
-    That file is gitignored; the defaults below apply when it is absent.
-
-    Implementation note: DateTime.ToString("yyMM") does not work here. Inside an MSBuild
-    property function a bare quote terminates the expression, and escaping it as %22 makes
-    the format string literal, yielding "yyMM" instead of the date. The components are
-    read numerically and padded instead.
+    All versions are manually specified. You can edit them directly here,
+    or override via a local 'version.props' file.
   -->
   <Import Project="version.props" Condition="Exists('version.props')" />
 
   <PropertyGroup>
-    <VerMajor Condition="'$(VerMajor)' == ''">0</VerMajor>
-    <VerMinor Condition="'$(VerMinor)' == ''">0</VerMinor>
-
-    <_VerYear>$([System.DateTime]::UtcNow.Year)</_VerYear>
-    <_VerMonth>$([System.DateTime]::UtcNow.Month)</_VerMonth>
-
-    <!-- Two-digit year: the last two characters of the four-digit year. -->
-    <_VerYY>$(_VerYear.ToString().Substring(2))</_VerYY>
-    <!-- Two-digit month, zero-padded when below October. -->
-    <_VerMM Condition="'$(_VerMonth)' &lt; 10">0$(_VerMonth)</_VerMM>
-    <_VerMM Condition="'$(_VerMonth)' &gt;= 10">$(_VerMonth)</_VerMM>
-
-    <VerDate>$(_VerYY)$(_VerMM)</VerDate>
-  </PropertyGroup>
-
-  <PropertyGroup>
-    <VersionCode>$(VerDate)$(VerMajor)$(VerMinor)</VersionCode>
-    <Version>$(_VerYY).$(_VerMM).$(VerMajor).$(VerMinor)</Version>
-  </PropertyGroup>
-
-  <!--
-    The version code is the same in every configuration: it identifies the source tree,
-    not the build flavour, so a Debug run can check for updates exactly like a release.
-
-    Only the display version is neutralised, so a local build does not advertise itself as
-    a real release in About or in the window title.
-  -->
-  <PropertyGroup Condition="'$(Configuration)' != 'Release'">
-    <Version>0.0.$(VerMajor).$(VerMinor)</Version>
+    <Version Condition="'$(Version)' == ''">2.29.0.01</Version>
+    <VersionCode Condition="'$(VersionCode)' == ''">229001</VersionCode>
   </PropertyGroup>
 
 </Project>

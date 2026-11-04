@@ -16,12 +16,12 @@ param(
 
     [switch]$SkipPublish,
 
-    # Certificate thumbprint; defaults to the Ra1nify code-signing certificate.
-    [string]$Thumbprint = '2095AFBE2EA9362DA8B44C92FAE740BE218031EE',
-
-    # Sign from an exported .pfx instead of the local user store.
+    # Sign from an exported .pfx (default: Gravityless.pfx in script root if present).
     [string]$PfxPath,
-    [string]$PfxPassword
+    [string]$PfxPassword = 'Gravityless',
+
+    # Certificate thumbprint fallback.
+    [string]$Thumbprint = '2095AFBE2EA9362DA8B44C92FAE740BE218031EE'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -30,18 +30,20 @@ $appProject = Join-Path $root 'src\Gravityless.App\Gravityless.App.csproj'
 $issScript = Join-Path $root 'installer\Gravityless.iss'
 $artifacts = Join-Path $root 'artifacts'
 
-# Read the version once so the issue and the output names stay in sync.
+# Read the version directly from C# project / Directory.Build.props.
 $version = $null
-if (Test-Path $appProject) {
-    [xml]$proj = Get-Content $appProject -ErrorAction SilentlyContinue
-    $version = $proj.Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
-}
+try {
+    $version = (dotnet msbuild $appProject -p:Configuration=Release -getProperty:Version -nologo 2>$null).Trim()
+} catch {}
+
 if (-not $version) {
-    try {
-        $version = (dotnet msbuild $appProject -p:Configuration=Release -getProperty:Version -nologo 2>$null).Trim()
-    } catch {}
+    $propsPath = Join-Path $root 'Directory.Build.props'
+    if (Test-Path $propsPath) {
+        [xml]$propsXml = Get-Content $propsPath -ErrorAction SilentlyContinue
+        $version = $propsXml.Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
+    }
 }
-if (-not $version) { throw 'Version not found in Gravityless.App.csproj or Directory.Build.props' }
+if (-not $version) { throw 'Version not found in C# project or Directory.Build.props' }
 
 Write-Host "Gravityless $version" -ForegroundColor Cyan
 
@@ -78,10 +80,17 @@ Write-Host "ISCC: $iscc"
 
 $signtool = $null
 if ($Sign) {
+    $pfX86 = [Environment]::GetFolderPath('ProgramFilesX86')
+    $pf = [Environment]::GetFolderPath('ProgramFiles')
+
     $signtool = @(
-        "${env:ProgramFiles(x86)}\Windows Kits\10\bin\x64\signtool.exe"
-        "${env:ProgramFiles}\Windows Kits\10\bin\x64\signtool.exe"
-    ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+        (Join-Path $pfX86 'Microsoft SDKs\ClickOnce\SignTool\signtool.exe')
+        (Join-Path $pf 'Microsoft SDKs\ClickOnce\SignTool\signtool.exe')
+        (Join-Path $pfX86 'Windows Kits\10\bin\x64\signtool.exe')
+        (Join-Path $pf 'Windows Kits\10\bin\x64\signtool.exe')
+        (Get-ChildItem (Join-Path $pfX86 'Windows Kits\10\bin') -Filter 'signtool.exe' -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match '\\x64\\' } | Select-Object -First 1 -ExpandProperty FullName)
+        (Get-ChildItem (Join-Path $pf 'Windows Kits\10\bin') -Filter 'signtool.exe' -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match '\\x64\\' } | Select-Object -First 1 -ExpandProperty FullName)
+    ) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
 
     if (-not $signtool) {
         $signtool = Get-ChildItem "$env:USERPROFILE\.nuget\packages\microsoft.windows.sdk.buildtools" `
@@ -91,17 +100,28 @@ if ($Sign) {
     }
     if (-not $signtool) { throw 'signtool.exe not found. Install the Windows SDK.' }
 
+    # Auto-detect Gravityless.pfx in repository root if PfxPath was not explicitly specified.
+    if (-not $PfxPath) {
+        $repoPfx = Join-Path $root 'Gravityless.pfx'
+        if (Test-Path $repoPfx) {
+            $PfxPath = $repoPfx
+        }
+    }
+    if ($env:PFX_PASSWORD) {
+        $PfxPassword = $env:PFX_PASSWORD
+    }
+
     if ($PfxPath) {
         if (-not (Test-Path $PfxPath)) { throw "Certificate not found: $PfxPath" }
         $signBase = @('/f', (Resolve-Path $PfxPath).Path)
         if ($PfxPassword) { $signBase += @('/p', $PfxPassword) }
-        Write-Host "Signing with: $PfxPath"
+        Write-Host "Signing with PFX: $PfxPath"
     } else {
         $cert = Get-Item "Cert:\CurrentUser\My\$Thumbprint" -ErrorAction SilentlyContinue
-        if (-not $cert) { throw "Signing certificate $Thumbprint not found in Cert:\CurrentUser\My" }
+        if (-not $cert) { throw "Signing certificate $Thumbprint not found in Cert:\CurrentUser\My and no PFX at $PfxPath" }
         if (-not $cert.HasPrivateKey) { throw "Certificate $Thumbprint has no private key" }
         $signBase = @('/sha1', $Thumbprint)
-        Write-Host "Signing with: $($cert.Subject)"
+        Write-Host "Signing with Cert Store: $($cert.Subject)"
     }
 }
 

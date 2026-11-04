@@ -11,11 +11,11 @@ namespace Gravityless.Core.Models;
 /// </summary>
 public class AppUpdateInfo
 {
-    /// <summary><c>yyMM + major + minor</c>, e.g. 261102. Internal; never displayed.</summary>
+    /// <summary>Numeric version code, e.g. 229001. Internal; used for update comparison.</summary>
     [JsonPropertyName("version_code")]
     public long VersionCode { get; set; }
 
-    /// <summary><c>yy.MM.major.minor</c>, e.g. <c>26.11.0.2</c>.</summary>
+    /// <summary>Display version string, e.g. <c>2.29.0.01</c>.</summary>
     [JsonPropertyName("version")]
     public string Version { get; set; } = string.Empty;
 

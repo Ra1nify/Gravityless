@@ -89,6 +89,7 @@ version.props
 
 # Password / secret sidecars
 *.pfx.password
+SIGNING_KEY.md
 certs/**/*.txt
 certs/**/*.secret
 # OAuth client pair is extracted from the installed core at runtime

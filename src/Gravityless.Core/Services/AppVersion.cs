@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Reflection;
+using System.Text;
 
 namespace Gravityless.Core.Services;
 
@@ -8,12 +9,11 @@ namespace Gravityless.Core.Services;
 ///
 /// Two forms describe the same build:
 ///
-///     version code   yyMM + major + minor   261102
-///     display        yy.MM.major.minor      26.11.0.2
+///     Version:      Display version string, e.g. 2.29.0.01
+///     VersionCode:  Numeric version code, e.g. 229001
 ///
-/// The code is what gets compared; the display form is only ever shown. Comparison is
-/// numeric on purpose: ordinal string ordering happens to match while every code has the
-/// same width, and silently breaks the first time a component gains a digit.
+/// The code is what gets compared for updates (monotonically increasing integer);
+/// the display form is shown in the UI.
 /// </summary>
 public static class AppVersion
 {
@@ -23,10 +23,6 @@ public static class AppVersion
     /// <summary>
     /// Reads the version code baked in at build time. Returns 0 only when the assembly carries
     /// no metadata at all, which callers treat as "cannot compare".
-    ///
-    /// The attribute is emitted on the entry assembly (where the csproj declares it), not on
-    /// this library, so the lookup starts there and falls back to the calling assembly for
-    /// hosts that load Core on its own.
     /// </summary>
     public static long ReadLocalVersionCode()
     {
@@ -62,7 +58,7 @@ public static class AppVersion
         if (entry == null || entry != self) yield return self;
     }
 
-    /// <summary>Reads the informational version, e.g. <c>26.11.0.2</c>.</summary>
+    /// <summary>Reads the informational version, e.g. <c>2.29.0.01</c>.</summary>
     public static string ReadLocalVersionName()
     {
         try
@@ -87,9 +83,9 @@ public static class AppVersion
     }
 
     /// <summary>
-    /// Parses a version code from a tag, a code string or a display version.
-    /// Accepts <c>2611002</c>, <c>v2611002</c>, <c>26.11.0.2</c> and a trailing
-    /// <c>-suffix</c> or <c>+metadata</c>. Returns false for anything non-positive.
+    /// Parses a version code from a code string, tag or display version.
+    /// Accepts <c>229001</c>, <c>v229001</c>, <c>2.29.0.01</c>, etc.
+    /// Returns false for anything non-positive.
     /// </summary>
     public static bool TryParseCode(string? text, out long code)
     {
@@ -103,39 +99,43 @@ public static class AppVersion
         if (cut > 0) raw = raw[..cut];
         if (raw.Length == 0) return false;
 
-        // A dotted form is the display version; flatten it.
-        if (raw.Contains('.'))
+        // Try direct numeric parse first (e.g. "229001")
+        if (long.TryParse(raw, NumberStyles.None, CultureInfo.InvariantCulture, out code) && code > 0)
         {
-            raw = Normalize(raw);
+            return true;
         }
 
-        // NumberStyles.None rejects signs, separators and culture-specific shapes, so
-        // "26,110,02" and "-2611002" cannot slip through as valid codes.
-        return long.TryParse(raw, NumberStyles.None, CultureInfo.InvariantCulture, out code)
-            && code > 0;
+        // If dotted (e.g. "2.29.0.01"), normalize into numeric code
+        if (raw.Contains('.'))
+        {
+            var normalized = Normalize(raw);
+            if (long.TryParse(normalized, NumberStyles.None, CultureInfo.InvariantCulture, out code) && code > 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
-    /// Flattens <c>yy.MM.major.minor</c> into <c>yyMM + major + minor</c>, mirroring the
-    /// build-time concatenation. Returns an empty string when the shape does not match.
+    /// Flattens a dotted version string into a numeric representation.
+    /// E.g. <c>2.29.0.01</c> -> <c>229001</c>.
     /// </summary>
     public static string Normalize(string displayVersion)
     {
         if (string.IsNullOrWhiteSpace(displayVersion)) return string.Empty;
 
         var parts = displayVersion.Trim().TrimStart('v', 'V').Split('.');
-        if (parts.Length != 4) return string.Empty;
+        var sb = new StringBuilder();
 
-        // The four segments are the year, month and the two counters; only the counters may
-        // widen, and they concatenate without padding — the same rule the build uses.
-        if (!IsDigits(parts[0]) || !IsDigits(parts[1]) || !IsDigits(parts[2]) || !IsDigits(parts[3]))
+        foreach (var p in parts)
         {
-            return string.Empty;
+            if (!IsDigits(p)) return string.Empty;
+            sb.Append(p);
         }
 
-        if (parts[0].Length != 2 || parts[1].Length != 2) return string.Empty;
-
-        return parts[0] + parts[1] + parts[2] + parts[3];
+        return sb.ToString();
     }
 
     /// <summary>True when <paramref name="remote"/> is a newer build than <paramref name="local"/>.</summary>

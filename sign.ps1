@@ -1,23 +1,24 @@
-# Sign Gravityless binaries and installers with the self-signed code signing certificate.
+# Sign Gravityless binaries and installers with the code signing certificate.
 #
 # Usage:
-#   .\sign.ps1 -Path artifacts\installer\Gravityless-26.10.99-x64.exe
+#   .\sign.ps1 -Path artifacts\installer\Gravityless-2.29.0.01-x64.exe
 #   .\sign.ps1 -Path artifacts\installer\*.exe,artifacts\win-x64\Gravityless.App.exe
-#   .\sign.ps1 -Path file.exe -Thumbprint 2095AF...
+#   .\sign.ps1 -Path file.exe -PfxPath path\to\cert.pfx -PfxPassword secret
 #
-# The certificate lives in Cert:\CurrentUser\My, so no password is needed while it is
-# in the user store. Pass -PfxPath to sign from an exported .pfx instead.
+# Prioritizes Gravityless.pfx in the repository root if present; falls back
+# to the local Windows certificate store (Cert:\CurrentUser\My).
 
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, Position = 0)]
     [string[]]$Path,
 
-    # Defaults to the Ra1nify / Gravityless Sound Team certificate.
-    [string]$Thumbprint = '2095AFBE2EA9362DA8B44C92FAE740BE218031EE',
-
+    # Sign from an exported .pfx (default: Gravityless.pfx in script root if present).
     [string]$PfxPath,
-    [string]$PfxPassword,
+    [string]$PfxPassword = 'Gravityless',
+
+    # Defaults to the Ra1nify / Gravityless Sound Team certificate thumbprint.
+    [string]$Thumbprint = '2095AFBE2EA9362DA8B44C92FAE740BE218031EE',
 
     # Tried in order. Public timestamp services go down independently, so a single
     # hard-coded host turns every release into a manual retry.
@@ -31,11 +32,18 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-# signtool ships with the Windows SDK; the NuGet build-tools package also carries it.
+# signtool ships with the Windows SDK, ClickOnce SDK, or NuGet build tools.
+$pfX86 = [Environment]::GetFolderPath('ProgramFilesX86')
+$pf = [Environment]::GetFolderPath('ProgramFiles')
+
 $signtool = @(
-    "${env:ProgramFiles(x86)}\Windows Kits\10\bin\x64\signtool.exe"
-    "$env:ProgramFiles\Windows Kits\10\bin\x64\signtool.exe"
-) | Where-Object { Test-Path $_ } | Select-Object -First 1
+    (Join-Path $pfX86 'Microsoft SDKs\ClickOnce\SignTool\signtool.exe')
+    (Join-Path $pf 'Microsoft SDKs\ClickOnce\SignTool\signtool.exe')
+    (Join-Path $pfX86 'Windows Kits\10\bin\x64\signtool.exe')
+    (Join-Path $pf 'Windows Kits\10\bin\x64\signtool.exe')
+    (Get-ChildItem (Join-Path $pfX86 'Windows Kits\10\bin') -Filter 'signtool.exe' -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match '\\x64\\' } | Select-Object -First 1 -ExpandProperty FullName)
+    (Get-ChildItem (Join-Path $pf 'Windows Kits\10\bin') -Filter 'signtool.exe' -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match '\\x64\\' } | Select-Object -First 1 -ExpandProperty FullName)
+) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
 
 if (-not $signtool) {
     $signtool = Get-ChildItem "$env:USERPROFILE\.nuget\packages\microsoft.windows.sdk.buildtools" `
@@ -48,14 +56,30 @@ if (-not $signtool) {
     throw 'signtool.exe not found. Install the Windows 10/11 SDK or the Microsoft.Windows.SDK.BuildTools package.'
 }
 
+# Auto-detect Gravityless.pfx in repository root if PfxPath was not explicitly specified.
+if (-not $PfxPath) {
+    $repoPfx = Join-Path $PSScriptRoot 'Gravityless.pfx'
+    if (Test-Path $repoPfx) {
+        $PfxPath = $repoPfx
+    }
+}
+if ($env:PFX_PASSWORD) {
+    $PfxPassword = $env:PFX_PASSWORD
+}
+
 $signArgs = if ($PfxPath) {
     if (-not (Test-Path $PfxPath)) { throw "Certificate not found: $PfxPath" }
-    @('sign', '/f', (Resolve-Path $PfxPath).Path, '/p', $PfxPassword, '/fd', 'SHA256')
+    Write-Host "Signing using PFX: $PfxPath"
+    $base = @('sign', '/f', (Resolve-Path $PfxPath).Path)
+    if ($PfxPassword) { $base += @('/p', $PfxPassword) }
+    $base += @('/fd', 'SHA256')
+    $base
 } else {
     # Store lookup keeps the private key on the machine instead of in a file.
     $cert = Get-Item "Cert:\CurrentUser\My\$Thumbprint" -ErrorAction SilentlyContinue
-    if (-not $cert) { throw "Certificate $Thumbprint not found in Cert:\CurrentUser\My" }
+    if (-not $cert) { throw "Certificate $Thumbprint not found in Cert:\CurrentUser\My and no PFX at $PfxPath" }
     if (-not $cert.HasPrivateKey) { throw "Certificate $Thumbprint has no private key" }
+    Write-Host "Signing using Certificate Store: $($cert.Subject)"
     @('sign', '/sha1', $Thumbprint, '/fd', 'SHA256')
 }
 
