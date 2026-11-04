@@ -37,7 +37,7 @@ public class MicaPatchService
     private const string ProtocolCallTarget = "electron_1.app.setAsDefaultProtocolClient(PROTOCOL);";
 
     /// <summary>Bump when template semantics change; a stale stamp triggers a rebuild from *.stock and re-injection.</summary>
-    private const int MicaPatchVersion = 40;
+    private const int MicaPatchVersion = 42;
     private static readonly string MicaPatchStamp = $"/* GRAVITYLESS_MICA_PATCH_VERSION: {MicaPatchVersion} */";
 
     /// <summary>Unpacks an Electron ASAR archive into outputDir using only managed code.</summary>
@@ -300,26 +300,122 @@ public class MicaPatchService
             catch { }
         }
 
-        // Patch main.js: replace the protocol self-registration call with a no-op.
+        // Patch main.js: replace the protocol self-registration call with a no-op, inject Chromium lang switch, and localize dialogs/tray.
         if (File.Exists(mainJs))
         {
             try
             {
-                // .stock must stay pristine, so it is only captured once.
-                if (!File.Exists(mainStock))
+                var sourceAsar = File.Exists(appAsar) ? appAsar : (File.Exists(appAsarStock) ? appAsarStock : null);
+
+                // A .stock that already contains the marker was captured after patching; rebuild it from the ASAR if possible.
+                bool mainStockCorrupted = File.Exists(mainStock) &&
+                    File.ReadAllText(mainStock, Encoding.UTF8).Contains(ProtocolOwnerMarker, StringComparison.Ordinal);
+
+                if (!File.Exists(mainStock) || mainStockCorrupted)
                 {
-                    File.Copy(mainJs, mainStock, true);
+                    if (File.Exists(mainJs) && !File.ReadAllText(mainJs, Encoding.UTF8).Contains(ProtocolOwnerMarker, StringComparison.Ordinal))
+                    {
+                        File.Copy(mainJs, mainStock, true);
+                    }
+                    else if (!string.IsNullOrEmpty(sourceAsar))
+                    {
+                        ExtractAsar(sourceAsar, appDir, out _);
+                        if (File.Exists(mainJs))
+                        {
+                            File.Copy(mainJs, mainStock, true);
+                        }
+                    }
                 }
 
-                var mainContent = File.ReadAllText(mainStock, Encoding.UTF8);
-                if (!mainContent.Contains(ProtocolOwnerMarker, StringComparison.Ordinal) &&
-                    mainContent.Contains(ProtocolCallTarget, StringComparison.Ordinal))
+                var mainContent = File.ReadAllText(File.Exists(mainStock) ? mainStock : mainJs, Encoding.UTF8);
+
+                // 1. Intercept protocol self-registration
+                if (!mainContent.Contains(ProtocolOwnerMarker, StringComparison.Ordinal))
                 {
-                    mainContent = mainContent.Replace(
-                        ProtocolCallTarget,
-                        $"{ProtocolOwnerMarker} void 0; // Gravityless owns antigravity://; host must not reclaim it");
-                    File.WriteAllText(mainJs, mainContent, new UTF8Encoding(false));
+                    var protocolRegex = new Regex(@"electron_1\.app\.setAsDefaultProtocolClient\(PROTOCOL[^)]*\);");
+                    if (protocolRegex.IsMatch(mainContent))
+                    {
+                        mainContent = protocolRegex.Replace(
+                            mainContent,
+                            $"{ProtocolOwnerMarker} void 0; // Gravityless owns antigravity://; host must not reclaim it",
+                            1);
+                    }
+                    else if (mainContent.Contains(ProtocolCallTarget, StringComparison.Ordinal))
+                    {
+                        mainContent = mainContent.Replace(
+                            ProtocolCallTarget,
+                            $"{ProtocolOwnerMarker} void 0; // Gravityless owns antigravity://; host must not reclaim it");
+                    }
                 }
+
+                // 2. Inject Chromium UI language switch (--lang)
+                if (!mainContent.Contains("/* GRAVITYLESS_LOCALE_SWITCH */"))
+                {
+                    var fedCmTarget = "electron_1.app.commandLine.appendSwitch('disable-features', 'FedCm');";
+                    if (mainContent.Contains(fedCmTarget, StringComparison.Ordinal))
+                    {
+                        var langSwitch = fedCmTarget + "\n" +
+                            "/* GRAVITYLESS_LOCALE_SWITCH */\n" +
+                            "if (process.env.GRAVITYLESS_LOCALE) {\n" +
+                            "    electron_1.app.commandLine.appendSwitch('lang', process.env.GRAVITYLESS_LOCALE);\n" +
+                            "}";
+                        mainContent = mainContent.Replace(fedCmTarget, langSwitch);
+                    }
+                }
+
+                // 3. Localize exit confirmation dialog
+                if (!mainContent.Contains("/* GRAVITYLESS_QUIT_DIALOG */"))
+                {
+                    var quitDialogPattern = @"const options = \{\s*type: 'question',\s*buttons: \['Cancel', 'Quit'\],\s*defaultId: 1,\s*cancelId: 0,\s*title: 'Confirm Quit',\s*message: 'Are you sure you want to quit\?',\s*detail: 'There may be agents or background tasks running\.',\s*\};";
+                    var quitDialogRegex = new Regex(quitDialogPattern);
+                    if (quitDialogRegex.IsMatch(mainContent))
+                    {
+                        var localizedQuitDialog = "/* GRAVITYLESS_QUIT_DIALOG */\n" +
+                            "    const _isZh = (process.env.GRAVITYLESS_LOCALE || 'zh-CN').startsWith('zh');\n" +
+                            "    const options = {\n" +
+                            "        type: 'question',\n" +
+                            "        buttons: _isZh ? ['取消', '退出'] : ['Cancel', 'Quit'],\n" +
+                            "        defaultId: 1,\n" +
+                            "        cancelId: 0,\n" +
+                            "        title: _isZh ? '确认退出' : 'Confirm Quit',\n" +
+                            "        message: _isZh ? '确定要退出吗？' : 'Are you sure you want to quit?',\n" +
+                            "        detail: _isZh ? '可能仍有 Agent 或后台任务正在运行。' : 'There may be agents or background tasks running.',\n" +
+                            "    };";
+                        mainContent = quitDialogRegex.Replace(mainContent, localizedQuitDialog, 1);
+                    }
+                }
+
+                // 4. Localize tray menu
+                if (!mainContent.Contains("/* GRAVITYLESS_TRAY_I18N */"))
+                {
+                    var trayTarget = @"id: 'running-agents',\s*label: 'No agents running',";
+                    var trayRegex = new Regex(trayTarget);
+                    if (trayRegex.IsMatch(mainContent))
+                    {
+                        var localizedTray = "/* GRAVITYLESS_TRAY_I18N */\n" +
+                            "                id: 'running-agents',\n" +
+                            "                label: (process.env.GRAVITYLESS_LOCALE || 'zh-CN').startsWith('zh') ? '无正在运行的 Agent' : 'No agents running',";
+                        mainContent = trayRegex.Replace(mainContent, localizedTray, 1);
+                    }
+
+                    var trayQuitTarget = @"label: 'Quit',\s*click: \(\) => \{\s*// Triggers 'before-quit'";
+                    var trayQuitRegex = new Regex(trayQuitTarget);
+                    if (trayQuitRegex.IsMatch(mainContent))
+                    {
+                        var localizedTrayQuit = "label: (process.env.GRAVITYLESS_LOCALE || 'zh-CN').startsWith('zh') ? '退出' : 'Quit',\n                click: () => {\n                    // Triggers 'before-quit'";
+                        mainContent = trayQuitRegex.Replace(mainContent, localizedTrayQuit, 1);
+                    }
+
+                    var trayOpenTarget = @"label: `Open \$\{electron_1\.app\.getName\(\)\}`,";
+                    var trayOpenRegex = new Regex(trayOpenTarget);
+                    if (trayOpenRegex.IsMatch(mainContent))
+                    {
+                        var localizedTrayOpen = "label: (process.env.GRAVITYLESS_LOCALE || 'zh-CN').startsWith('zh') ? `打开 ${electron_1.app.getName()}` : `Open ${electron_1.app.getName()}`,";
+                        mainContent = trayOpenRegex.Replace(mainContent, localizedTrayOpen, 1);
+                    }
+                }
+
+                File.WriteAllText(mainJs, mainContent, new UTF8Encoding(false));
             }
             catch { }
         }
@@ -383,41 +479,30 @@ public class MicaPatchService
                 }
             }
 
-            // B. Append the post-creation window hook (DWM material re-apply + CSS injection).
+            // B. Append the post-creation window hook (DWM material + reveal window + CSS injection + i18n).
             if (!utilsContent.Contains(MicaHookMarker))
             {
-                var winCreatedPattern = @"webviewTag:\s*true,\s*\},?\s*\}\);";
-                var winCreatedRgx = new Regex(winCreatedPattern);
-                if (winCreatedRgx.IsMatch(utilsContent))
-                {
-                    var winHook = WinHookTemplate
-                        .Replace("__MICA_HOOK_MARKER__", MicaHookMarker)
-                        .Replace("__INITIAL_MAT__", material)
-                        .Replace("__SAFE_OPACITY__", safeOpacity);
+                var winHook = "\n    " + WinHookTemplate
+                    .Replace("__MICA_HOOK_MARKER__", MicaHookMarker)
+                    .Replace("__SHOW_MARKER__", ShowMarker)
+                    .Replace("__INITIAL_MAT__", material)
+                    .Replace("__SAFE_OPACITY__", safeOpacity);
 
-                    utilsContent = winCreatedRgx.Replace(utilsContent, winHook, 1);
+                var hookAnchor = @"\bhubWindows\.add\(win\);";
+                var match = Regex.Match(utilsContent, hookAnchor);
+                if (match.Success)
+                {
+                    utilsContent = utilsContent.Insert(match.Index + match.Length, winHook);
                 }
-            }
-
-            // B0. Guarantee the window becomes visible.
-            //
-            // The option injection above sets `show: false` so the transparent frame never
-            // flashes, and the hook below is meant to show the window on `ready-to-show`. That
-            // hook anchors on the literal shape of the BrowserWindow call, which changed in
-            // 2.29: the options moved into a variable, so the call now ends with `};` instead of
-            // `});`. When the anchor misses, nothing shows the window and the app appears only
-            // in the tray. This injection anchors on a stable statement instead, so the window is
-            // revealed whether or not the rest of the hook applied.
-            if (!utilsContent.Contains(ShowMarker))
-            {
-                var showAnchor = @"(\bhubWindows\.add\(win\);)";
-                if (Regex.IsMatch(utilsContent, showAnchor))
+                else
                 {
-                    var showBlock = "$1\n    " + ShowMarker + "\n" +
-                        "    // Created hidden to avoid a transparent first frame; reveal on first paint.\n" +
-                        "    win.once('ready-to-show', () => { try { win.show(); } catch (_) {} });";
-
-                    utilsContent = Regex.Replace(utilsContent, showAnchor, showBlock);
+                    var winCreatedPattern = @"webviewTag:\s*true,\s*\},?\s*\}\);";
+                    var winCreatedRgx = new Regex(winCreatedPattern);
+                    var matchLegacy = winCreatedRgx.Match(utilsContent);
+                    if (matchLegacy.Success)
+                    {
+                        utilsContent = utilsContent.Insert(matchLegacy.Index + matchLegacy.Length, winHook);
+                    }
                 }
             }
 
@@ -473,8 +558,7 @@ public class MicaPatchService
                                 LsAppDataArg + "\n            " + GeminiDirMarker + "\n" +
                                 "            ...(process.env.GRAVITYLESS_GEMINI_DIR\n" +
                                 "                ? ['--gemini_dir', process.env.GRAVITYLESS_GEMINI_DIR]\n" +
-                                "                : []),",
-                                1);
+                                "                : []),");
 
                             File.WriteAllText(lsJs, lsContent, utf8NoBom);
                         }
@@ -618,10 +702,8 @@ public class MicaPatchService
     }
 
     private static readonly string WinHookTemplate = """
-webviewTag: true,
-        },
-    });
     __MICA_HOOK_MARKER__
+    __SHOW_MARKER__
     // The window is created hidden so the transparent frame never flashes. Show it as soon
     // as the first frame is ready; this must run regardless of backdrop support.
     win.once('ready-to-show', () => {
@@ -641,7 +723,9 @@ webviewTag: true,
             ? process.env.GRAVITYLESS_MICA_OPACITY
             : '__SAFE_OPACITY__'
     );
-    win.webContents.on('dom-ready', () => {
+    const _wc = (typeof win.webContents !== 'undefined') ? win.webContents : (typeof hubContents !== 'undefined' ? hubContents : null);
+    if (_wc) {
+        _wc.on('dom-ready', () => {
         try {
             if (global.__gravitylessMica) global.__gravitylessMica.attach(win, _initA);
         } catch (_) {}
@@ -844,11 +928,10 @@ webviewTag: true,
                     procSubtree(document.body || document.documentElement);
                 })();
             `;
-            win.webContents.executeJavaScript(_i18nCode).catch(() => {});
+            _wc.executeJavaScript(_i18nCode).catch(() => {});
         } catch (_) {}
-
-
     });
+    }
 """;
 
     private static readonly string SyncHookTemplate = """
@@ -1227,7 +1310,9 @@ ${blurCss}
         const revertAll = (material === 'none');
         // Material 'none' reverts to an opaque window background (otherwise the title-bar overlay leaks the desktop).
         const solidBg = currentLight ? '#ffffff' : '#101010';
-        for (const win of electron_1.BrowserWindow.getAllWindows()) {
+        const baseWins = typeof electron_1.BaseWindow?.getAllWindows === 'function' ? electron_1.BaseWindow.getAllWindows() : [];
+        const browserWins = typeof electron_1.BrowserWindow?.getAllWindows === 'function' ? electron_1.BrowserWindow.getAllWindows() : [];
+        for (const win of [...baseWins, ...browserWins]) {
             try {
                 if (win.isDestroyed()) continue;
                 if (typeof win.setBackgroundMaterial === 'function') {
@@ -1272,7 +1357,9 @@ ${blurCss}
                     currentNewUx = String(theme.newUxTheme).trim().toLowerCase();
                 }
                 applyMaterialToWindows(theme.material);
-                for (const win of electron_1.BrowserWindow.getAllWindows()) attach(win);
+                const baseWins = typeof electron_1.BaseWindow?.getAllWindows === 'function' ? electron_1.BaseWindow.getAllWindows() : [];
+                const browserWins = typeof electron_1.BrowserWindow?.getAllWindows === 'function' ? electron_1.BrowserWindow.getAllWindows() : [];
+                for (const win of [...baseWins, ...browserWins]) attach(win);
             });
         }).on('error', function () {});
     }
@@ -1309,9 +1396,12 @@ ${blurCss}
                     process.env.GRAVITYLESS_LOCALE = newLang;
                     const code = 'if (window.__gravityless_set_lang) { window.__gravityless_set_lang('
                         + JSON.stringify(newLang) + ', ' + JSON.stringify(readDict(newLang)) + '); }';
-                    for (const win of electron_1.BrowserWindow.getAllWindows()) {
+                    const allWc = (electron_1.webContents && typeof electron_1.webContents.getAllWebContents === 'function')
+                        ? electron_1.webContents.getAllWebContents()
+                        : [];
+                    for (const wc of allWc) {
                         try {
-                            if (!win.isDestroyed()) win.webContents.executeJavaScript(code).catch(function () {});
+                            if (!wc.isDestroyed()) wc.executeJavaScript(code).catch(function () {});
                         } catch (_) {}
                     }
                 }

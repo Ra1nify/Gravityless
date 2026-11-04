@@ -31,9 +31,17 @@ $issScript = Join-Path $root 'installer\Gravityless.iss'
 $artifacts = Join-Path $root 'artifacts'
 
 # Read the version once so the issue and the output names stay in sync.
-[xml]$proj = Get-Content $appProject
-$version = $proj.Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
-if (-not $version) { throw 'Version not found in Gravityless.App.csproj' }
+$version = $null
+if (Test-Path $appProject) {
+    [xml]$proj = Get-Content $appProject -ErrorAction SilentlyContinue
+    $version = $proj.Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
+}
+if (-not $version) {
+    try {
+        $version = (dotnet msbuild $appProject -p:Configuration=Release -getProperty:Version -nologo 2>$null).Trim()
+    } catch {}
+}
+if (-not $version) { throw 'Version not found in Gravityless.App.csproj or Directory.Build.props' }
 
 Write-Host "Gravityless $version" -ForegroundColor Cyan
 
