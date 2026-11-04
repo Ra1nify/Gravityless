@@ -69,6 +69,26 @@ public static class ModernDialog
         return dlg.ShowDialog() == true && dlg.Confirmed;
     }
 
+    /// <summary>
+    /// A three-way choice. Returns 1 for primary, 2 for secondary, 3 for tertiary, and 0 when
+    /// the window was closed without pressing a button.
+    /// </summary>
+    public static int Choose(
+        string title,
+        string message,
+        string primaryText,
+        string secondaryText,
+        string tertiaryText,
+        Window? owner = null)
+    {
+        var dlg = new ModernDialogWindow();
+        AttachOwner(dlg, owner);
+        dlg.Configure(title, title, message, ModernDialogType.Question,
+            primaryText, secondaryText, tertiaryText: tertiaryText);
+        dlg.ShowDialog();
+        return dlg.Choice;
+    }
+
     public static string? Prompt(string title, string message, string defaultText = "", string? confirmText = null, string? cancelText = null, Window? owner = null)
     {
         confirmText ??= LocalizationService.GetString("Common_Confirm", "确定");

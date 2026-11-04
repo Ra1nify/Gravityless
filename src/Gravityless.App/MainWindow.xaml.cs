@@ -25,10 +25,10 @@ public partial class MainWindow
     private readonly EngineService _engineService;
 
     /// <summary>Fetches the app's own update manifest from the static info branch.</summary>
-    private readonly AppUpdateService _appUpdate = new();
+    private readonly AppUpdateService _appUpdate;
 
     /// <summary>Downloads and launches the installer.</summary>
-    private readonly AppUpdateInstaller _appInstaller = new();
+    private readonly AppUpdateInstaller _appInstaller;
 
     /// <summary>Manifest from the last successful check; null until one succeeds.</summary>
     private AppUpdateInfo? _pendingAppUpdate;
@@ -44,6 +44,13 @@ public partial class MainWindow
     private readonly ObservableCollection<PluginItem> _pluginsDisplayList = [];
     private readonly ObservableCollection<McpServerItem> _mcpDisplayList = [];
     private UpdateManifest? _currentManifest;
+
+    /// <summary>
+    /// A user-selected installer path for the current core install operation. Null means the
+    /// manifest's download URL is used instead. Stored per operation rather than passed through
+    /// StartUpdateOpAsync's switch, which invokes RunCoreInstallAsync with only a token.
+    /// </summary>
+    private string? _pendingLocalInstallerPath;
     private ProxyConfig _currentProxyConfig = new();
     private readonly string _proxyConfigFile;
     private bool _isInitializingTheme;
@@ -58,6 +65,9 @@ public partial class MainWindow
         if (RepoUrlText != null) RepoUrlText.Text = ProjectUrl;
         var baseDir = AppDomain.CurrentDomain.BaseDirectory;
         _proxyConfigFile = Path.Combine(baseDir, "data", "proxy_config.json");
+        // The proxy setting is editable at runtime. Services read it through this delegate at
+        // request time rather than caching a client built from the startup value.
+        var proxyProvider = new ProxyConfigProvider(() => _currentProxyConfig);
         // Daemon starts before the services that depend on it.
         _daemon = new GravitylessDaemon(baseDir);
         _daemon.Language = LocalizationService.CurrentLanguage;
@@ -68,11 +78,13 @@ public partial class MainWindow
         ThemeService.ApplyTheme(this);
         ApplyHostWindowOpacity(_daemon.MicaOpacity);
         // Shared state lives in the services; slots (instances) only reference it.
-        _engineService = new EngineService(baseDir);
+        _engineService = new EngineService(baseDir, proxyProvider);
         _accountPool = new AccountPoolService(baseDir);
         _projectService = new ProjectService(baseDir);
         _instanceService = new InstanceService(_accountPool, _engineService, _daemon, _projectService, baseDir);
         _proxyService = new ProxyService();
+        _appUpdate = new AppUpdateService(proxyProvider: proxyProvider);
+        _appInstaller = new AppUpdateInstaller(proxyProvider);
         // The shared tool pool must live at <install dir>\shared, matching the InstanceService junctions.
         _toolService = new ToolService(baseDir);
         _instanceService.InstanceStateChanged += _ => Dispatcher.Invoke(() => { RefreshInstancesUi(); UpdateSidebarStatus(); });
@@ -1035,7 +1047,7 @@ public partial class MainWindow
         }
     }
 
-    private void StartInstanceById(string instId)
+    private async Task StartInstanceByIdAsync(string instId)
     {
         SaveCurrentProxyConfigFromUi();
 
@@ -1104,12 +1116,38 @@ public partial class MainWindow
             excludedProjects = projectConflicts.Select(c => c.ProjectId).ToList();
         }
 
-        // A running instance behind the same slot reports conflict; force relaunch is confirmed with the user.
+        // The slot write validates the rendered blob, and a profile with no access token renders
+        // one that is refused. Refresh first so the write is guaranteed to succeed; otherwise the
+        // language server starts against an empty slot and shows the login page.
+        var launchingInst = _instanceService.Instances.FirstOrDefault(i => i.Id == instId);
+        if (launchingInst != null && !string.IsNullOrEmpty(launchingInst.BoundAccountId))
+        {
+            var (tokenOk, tokenMsg) = await _accountPool.EnsureAccessTokenAsync(
+                launchingInst.BoundAccountId, _currentProxyConfig);
+
+            if (!tokenOk)
+            {
+                ModernDialog.ShowWarning(
+                    LocalizationService.GetString("Dialogs_StartInstanceFailedTitle", "启动实例失败"),
+                    tokenMsg,
+                    owner: this.IsVisible ? this : null);
+                return;
+            }
+        }
+
+        // A conflict can mean three different things: this instance is already running, its
+        // account is leased to another instance, or one of its projects is held by another
+        // instance. Only the first can be resolved by restarting, and only the first may
+        // terminate a process. Offering "force" for the others is how a second launch used to
+        // shut down a first one, so the dialog now states the actual reason and only offers the
+        // remedy that fits.
         if (!_instanceService.LaunchInstance(instId, _currentProxyConfig, out var err, force: false, excludedProjects, out var conflict, out var pid))
         {
-            if (conflict)
+            var inst = _instanceService.Instances.FirstOrDefault(i => i.Id == instId);
+            var ownProcessConflict = inst is { IsRunning: true } && pid.HasValue && pid == inst.ProcessId;
+
+            if (conflict && ownProcessConflict)
             {
-                var inst = _instanceService.Instances.FirstOrDefault(i => i.Id == instId);
                 var instName = inst?.Name ?? instId;
                 var riskMsg = string.Format(
                     LocalizationService.GetString("Instances_ForceRestartMessageFormat",
@@ -1142,11 +1180,11 @@ public partial class MainWindow
         }
     }
 
-    private void OnStartInstanceClicked(object sender, RoutedEventArgs e)
+    private async void OnStartInstanceClicked(object sender, RoutedEventArgs e)
     {
         if (sender is FrameworkElement { Tag: string instId })
         {
-            StartInstanceById(instId);
+            await StartInstanceByIdAsync(instId);
         }
     }
 
@@ -1296,7 +1334,7 @@ public partial class MainWindow
                         Header = LocalizationService.GetString("Tray_StartThisInstance", "启动此实例"),
                         Icon = new SymbolIcon { Symbol = SymbolRegular.Play24, Foreground = Palette.Accent }
                     };
-                    startSubItem.Click += (_, _) => StartInstanceById(inst.Id);
+                    startSubItem.Click += async (_, _) => await StartInstanceByIdAsync(inst.Id);
                     instItem.Items.Add(startSubItem);
                 }
                 var openSandboxSubItem = new MenuItem
@@ -1583,6 +1621,60 @@ public partial class MainWindow
             }
         }
     }
+
+    /// <summary>
+    /// Checks that every stored credential still belongs to its account. Read-only: a mismatched
+    /// identity cannot be repaired in place, only reported so the account can be captured again.
+    /// </summary>
+    private async void OnVerifyCredentialsClicked(object sender, RoutedEventArgs e)
+    {
+        SaveCurrentProxyConfigFromUi();
+        AccountsStatusStrip.ShowBusy(LocalizationService.GetString("Accounts_VerifyStatus", "校验凭据归属…"));
+        try
+        {
+            var mismatches = await _accountPool.VerifyCredentialsAsync(
+                _currentProxyConfig,
+                onProgress: (current, total, email) => Dispatcher.Invoke(() =>
+                    AccountsStatusStrip.ShowStep(current, total, email)));
+
+            if (mismatches.Count == 0)
+            {
+                ModernDialog.ShowSuccess(
+                    LocalizationService.GetString("Accounts_VerifyOkTitle", "校验通过"),
+                    LocalizationService.GetString("Accounts_VerifyOkMessage", "所有账号的凭据均与账号一致。"),
+                    owner: this);
+                return;
+            }
+
+            var lines = mismatches.Select(m => m.ActualEmail is null
+                ? $"· {m.AccountEmail} — {DescribeMismatch(m.Reason)}"
+                : $"· {m.AccountEmail} → {m.ActualEmail} — {DescribeMismatch(m.Reason)}");
+
+            ModernDialog.ShowWarning(
+                LocalizationService.GetString("Accounts_VerifyFoundTitle", "发现凭据错乱"),
+                string.Format(
+                    LocalizationService.GetString("Accounts_VerifyFoundFormat",
+                        "以下 {0} 个账号的凭据不属于自己，请重新捕获：\n\n{1}"),
+                    mismatches.Count,
+                    string.Join("\n", lines)),
+                owner: this);
+        }
+        catch (Exception ex)
+        {
+            ModernDialog.ShowError(LocalizationService.GetString("Common_Error", "错误"), ex.Message, owner: this);
+        }
+        finally
+        {
+            AccountsStatusStrip.Clear();
+        }
+    }
+
+    private static string DescribeMismatch(string reason) => reason switch
+    {
+        "no-identity" => LocalizationService.GetString("Accounts_VerifyNoIdentity", "凭据缺少身份信息"),
+        "email-mismatch" => LocalizationService.GetString("Accounts_VerifyEmailMismatch", "凭据属于其他账号"),
+        _ => reason,
+    };
 
     private void OnUnlockAllAccountsClicked(object sender, RoutedEventArgs e)
     {
@@ -1906,13 +1998,29 @@ public partial class MainWindow
         UpdateInfoBar.Message = message;
     }
 
-    /// <summary>Shows or hides the progress row inside the update InfoBar.</summary>
+    /// <summary>Shows or hides the progress row in the details panel below the InfoBar.</summary>
     private void SetUpdateProgressVisible(bool visible)
     {
         if (InstallProgressPanel != null)
         {
             InstallProgressPanel.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
         }
+        SyncUpdateDetailsPanel();
+    }
+
+    /// <summary>
+    /// The details panel is visible when either the download link or the progress row is.
+    /// The InfoBar itself only renders Title and Message, so these extras need their own surface.
+    /// </summary>
+    private void SyncUpdateDetailsPanel()
+    {
+        if (UpdateDetailsPanel == null) return;
+
+        var hasLink = DownloadLinkPanel?.Visibility == Visibility.Visible;
+        var hasProgress = InstallProgressPanel?.Visibility == Visibility.Visible;
+        UpdateDetailsPanel.Visibility = hasLink || hasProgress
+            ? Visibility.Visible
+            : Visibility.Collapsed;
     }
 
     // ---------------------------------------------------------------- app self-update
@@ -2022,9 +2130,16 @@ public partial class MainWindow
 
         try
         {
-            var progress = new Progress<double>(p =>
+            var progress = new Progress<DownloadProgress>(p =>
             {
-                if (AppUpdateProgressBar != null) AppUpdateProgressBar.Value = p * 100;
+                if (AppUpdateProgressBar != null) AppUpdateProgressBar.Value = p.Percent;
+                if (AppUpdateProgressLabel != null)
+                {
+                    AppUpdateProgressLabel.Text = string.Format(
+                        LocalizationService.GetString("Overview_AppUpdateProgressFormat", "下载中 {0}%  {1}"),
+                        p.Percent.ToString("F1"),
+                        p.BytesLabel);
+                }
             });
 
             var (path, error) = await _appInstaller.DownloadAsync(asset, progress);
@@ -2117,8 +2232,8 @@ public partial class MainWindow
     }
 
     /// <summary>
-    /// Moves the InfoBar to a new stage: the title names the step, the label carries its detail.
-    /// Keeps the four install phases distinguishable instead of appending them to one label.
+    /// Moves the InfoBar to a new stage. The title names the step, the message carries its
+    /// detail; the progress label below is reserved for the download percentage and byte count.
     /// </summary>
     private void SetUpdateStage(string title, string detail, InfoBarSeverity severity = InfoBarSeverity.Informational)
     {
@@ -2128,11 +2243,6 @@ public partial class MainWindow
         UpdateInfoBar.Title = title;
         UpdateInfoBar.IsOpen = true;
         UpdateInfoBar.Message = detail;
-
-        if (InstallProgressLabel != null)
-        {
-            InstallProgressLabel.Text = detail;
-        }
     }
 
     /// <summary>Restores the overview controls after an abandoned operation.</summary>
@@ -2252,11 +2362,13 @@ public partial class MainWindow
         {
             DownloadLinkPanel.Visibility = Visibility.Collapsed;
             DownloadLinkText.Text = string.Empty;
+            SyncUpdateDetailsPanel();
             return;
         }
 
         DownloadLinkText.Text = url;
         DownloadLinkPanel.Visibility = Visibility.Visible;
+        SyncUpdateDetailsPanel();
     }
 
     /// <summary>Opens the download URL in the default browser.</summary>
@@ -2277,12 +2389,39 @@ public partial class MainWindow
 
     private async void OnDownloadAndInstallClicked(object sender, RoutedEventArgs e)
     {
+        var choice = ModernDialog.Choose(
+            LocalizationService.GetString("CloudUpdate_InstallSourceTitle", "安装核心"),
+            LocalizationService.GetString("CloudUpdate_InstallSourceMessage", "选择安装包来源。"),
+            LocalizationService.GetString("CloudUpdate_InstallSourceLocal", "从本地文件安装"),
+            LocalizationService.GetString("CloudUpdate_InstallSourceOnline", "在线下载"),
+            LocalizationService.GetString("Common_Cancel", "取消"),
+            this);
+
+        if (choice == 0 || choice == 3) return;
+
+        _pendingLocalInstallerPath = null;
+
+        if (choice == 1)
+        {
+            var ofd = new Microsoft.Win32.OpenFileDialog
+            {
+                Title = LocalizationService.GetString("CloudUpdate_SelectInstallerTitle", "选择安装包"),
+                Filter = "Installer (*.exe)|*.exe",
+                CheckFileExists = true,
+                Multiselect = false,
+            };
+            if (ofd.ShowDialog(this) != true) return;
+            _pendingLocalInstallerPath = ofd.FileName;
+        }
+
         await StartUpdateOpAsync(UpdateOpKind.CoreInstall);
     }
 
     private async Task RunCoreInstallAsync(CancellationToken cancellationToken)
     {
-        if (_currentManifest == null) return;
+        // A locally sideloaded installer needs no manifest; the online path still does.
+        var localPath = _pendingLocalInstallerPath;
+        if (localPath == null && _currentManifest == null) return;
         // Running instances hold file locks on the core directory.
         if (_instanceService.Instances.Any(i => i.IsRunning))
         {
@@ -2301,31 +2440,24 @@ public partial class MainWindow
         CheckUpdateButton.IsEnabled = false;
         if (UninstallCoreButton != null) UninstallCoreButton.IsEnabled = false;
         SetUpdateProgressVisible(true);
-        string? installerPath = null;
+        // Local files are user-selected and must survive the cleanup in finally; only a
+        // downloaded temp file is safe to delete afterwards.
+        var deleteInstallerAfter = localPath == null;
+        string? installerPath = localPath;
         try
         {
-            // Stage 1: download to the system temp directory.
-            InstallProgressBar.IsIndeterminate = false;
-            SetUpdateStage(
-                LocalizationService.GetString("CloudUpdate_Stage1Title", "下载安装包"),
-                LocalizationService.GetString("CloudUpdate_Stage1Download", "正在下载至临时目录…"));
-            TouchUpdateOp();
-            var progress = new Progress<double>(p =>
+            if (localPath == null)
             {
-                TouchUpdateOp();
-                InstallProgressBar.Value = p * 100;
-                InstallProgressLabel.Text = string.Format(
-                    LocalizationService.GetString("CloudUpdate_Stage1PercentFormat", "正在下载安装程序… {0}%"),
-                    (p * 100).ToString("F1"));
-            });
-            installerPath = await _engineService.DownloadInstallerAsync(_currentManifest, progress, cancellationToken);
-            // Stage 2: SHA512 verification happens inside the download call.
-            InstallProgressBar.IsIndeterminate = true;
-            SetUpdateStage(
-                LocalizationService.GetString("CloudUpdate_Stage2Title", "校验安装包"),
-                LocalizationService.GetString("CloudUpdate_Stage2Verified", "SHA512 校验通过。"));
-            TouchUpdateOp();
-            await Task.Delay(200, cancellationToken);
+                installerPath = await DownloadCoreInstallerAsync(cancellationToken);
+            }
+            else
+            {
+                SetUpdateStage(
+                    LocalizationService.GetString("CloudUpdate_SideloadTitle", "本地安装包"),
+                    Path.GetFileName(localPath));
+                InstallProgressBar.IsIndeterminate = true;
+            }
+
             // Stage 3: silent uninstall and cleanup of the core directory.
             SetUpdateStage(
                 LocalizationService.GetString("CloudUpdate_Stage3Title", "卸载旧版核心"),
@@ -2371,15 +2503,52 @@ public partial class MainWindow
         }
         finally
         {
-            if (!string.IsNullOrEmpty(installerPath))
+            // Only a downloaded temp file is disposable. A sideloaded file belongs to the user
+            // and may be their only copy of the installer.
+            if (deleteInstallerAfter && !string.IsNullOrEmpty(installerPath))
             {
                 await EngineService.TryDeleteFileAsync(installerPath);
             }
             await _engineService.CleanTempInstallersAsync();
-            DownloadInstallButton.IsEnabled = _currentManifest != null;
+            _pendingLocalInstallerPath = null;
+            DownloadInstallButton.IsEnabled = _currentManifest != null || localPath != null;
             CheckUpdateButton.IsEnabled = true;
             if (UninstallCoreButton != null) UninstallCoreButton.IsEnabled = _engineService.DetectManagedEngine().IsAvailable;
         }
+    }
+
+    /// <summary>
+    /// Stages 1 and 2 of an online install: download to the temp directory with progress, then
+    /// verify the hash. Kept separate so a sideloaded file can skip straight to deployment.
+    /// </summary>
+    private async Task<string> DownloadCoreInstallerAsync(CancellationToken cancellationToken)
+    {
+        InstallProgressBar.IsIndeterminate = false;
+        SetUpdateStage(
+            LocalizationService.GetString("CloudUpdate_Stage1Title", "下载安装包"),
+            LocalizationService.GetString("CloudUpdate_Stage1Download", "正在下载至临时目录…"));
+        TouchUpdateOp();
+
+        var progress = new Progress<DownloadProgress>(p =>
+        {
+            TouchUpdateOp();
+            InstallProgressBar.Value = p.Percent;
+            InstallProgressLabel.Text = string.Format(
+                LocalizationService.GetString("CloudUpdate_Stage1PercentFormat", "正在下载安装程序… {0}%  {1}"),
+                p.Percent.ToString("F1"),
+                p.BytesLabel);
+        });
+
+        var path = await _engineService.DownloadInstallerAsync(_currentManifest!, progress, cancellationToken);
+
+        InstallProgressBar.IsIndeterminate = true;
+        SetUpdateStage(
+            LocalizationService.GetString("CloudUpdate_Stage2Title", "校验安装包"),
+            LocalizationService.GetString("CloudUpdate_Stage2Verified", "SHA512 校验通过。"));
+        TouchUpdateOp();
+        await Task.Delay(200, cancellationToken);
+
+        return path;
     }
 
     private async void OnUninstallCoreClicked(object sender, RoutedEventArgs e)

@@ -13,21 +13,20 @@ namespace Gravityless.Core.Services;
 /// </summary>
 public class AppUpdateInstaller
 {
-    private readonly HttpClient _http;
+    private readonly ProxyConfigProvider _proxyProvider;
 
-    public AppUpdateInstaller(HttpClient? http = null)
+    public AppUpdateInstaller(ProxyConfigProvider? proxyProvider = null)
     {
-        _http = http ?? new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
-        _http.DefaultRequestHeaders.UserAgent.ParseAdd("Gravityless");
+        _proxyProvider = proxyProvider ?? ProxyConfigProvider.SystemDefault;
     }
 
     /// <summary>
-    /// Downloads <paramref name="asset"/> into the temp directory and verifies its SHA-512.
+    /// Downloads <paramref name="asset"/> into the temp directory and checks its length.
     /// Returns the file path, or null with <paramref name="error"/> set.
     /// </summary>
     public async Task<(string? Path, string? Error)> DownloadAsync(
         AppUpdateAsset asset,
-        IProgress<double>? progress = null,
+        IProgress<DownloadProgress>? progress = null,
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(asset.Url))
@@ -52,7 +51,8 @@ public class AppUpdateInstaller
 
         try
         {
-            using var response = await _http.GetAsync(
+            using var client = ProxyHttpClientFactory.Create(_proxyProvider.Current, TimeSpan.FromMinutes(10));
+            using var response = await client.GetAsync(
                 asset.Url, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
 
             if (!response.IsSuccessStatusCode)
@@ -74,10 +74,10 @@ public class AppUpdateInstaller
                     await target.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
                     received += read;
 
-                    if (total > 0 && progress != null)
-                    {
-                        progress.Report((double)received / total);
-                    }
+                    progress?.Report(new DownloadProgress(
+                        total > 0 ? (double)received / total : 0,
+                        received,
+                        total));
                 }
             }
         }

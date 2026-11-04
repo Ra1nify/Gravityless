@@ -10,24 +10,27 @@ namespace Gravityless.Core.Services;
 public class EngineService : IDisposable
 {
     private const string ManifestUrl = "https://antigravity-hub-auto-updater-974169037036.us-central1.run.app/manifest/latest-x64-win.yml";
-    private readonly HttpClient _httpClient;
     private readonly string _baseDir;
+    private readonly ProxyConfigProvider _proxyProvider;
 
-    public EngineService(string? baseDir = null)
+    /// <summary>
+    /// A client is built per request so the current proxy setting is always used; the user can
+    /// change it on the Proxy page without restarting. Kept for callers that dispose this service.
+    /// </summary>
+    private HttpClient CreateClient(TimeSpan timeout) =>
+        ProxyHttpClientFactory.Create(_proxyProvider.Current, timeout);
+
+    public EngineService(string? baseDir = null, ProxyConfigProvider? proxyProvider = null)
     {
         _baseDir = baseDir ?? AppDomain.CurrentDomain.BaseDirectory;
-
-        // One client for the process lifetime; the manifest fetch is the only use.
-        // A timeout keeps a stalled endpoint from hanging the update check forever.
-        _httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-        _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("Gravityless");
+        _proxyProvider = proxyProvider ?? ProxyConfigProvider.SystemDefault;
 
         _ = CleanTempInstallersAsync(); // Fire-and-forget: constructors cannot await
     }
 
     public void Dispose()
     {
-        _httpClient.Dispose();
+        // Clients are created and disposed per request; nothing is held here.
     }
 
     public string GetManagedCoreDir() => Path.Combine(_baseDir, "core");
@@ -121,7 +124,8 @@ public class EngineService : IDisposable
         using var request = new HttpRequestMessage(HttpMethod.Get, ManifestUrl);
         request.Headers.Add("x-app-version", "1.0.0");
 
-        var response = await _httpClient.SendAsync(request, cancellationToken);
+        using var client = CreateClient(TimeSpan.FromSeconds(30));
+        using var response = await client.SendAsync(request, cancellationToken);
         response.EnsureSuccessStatusCode();
 
         var yamlContent = await response.Content.ReadAsStringAsync(cancellationToken);
@@ -167,7 +171,7 @@ public class EngineService : IDisposable
     /// <summary>Streams the installer into the temp directory; reuses an existing file that matches the SHA512.</summary>
     public async Task<string> DownloadInstallerAsync(
         UpdateManifest manifest, 
-        IProgress<double>? progress = null, 
+        IProgress<DownloadProgress>? progress = null, 
         CancellationToken cancellationToken = default)
     {
         var tempDir = GetTempInstallerDir();
@@ -176,11 +180,12 @@ public class EngineService : IDisposable
 
         if (File.Exists(destFilePath) && VerifySha512(destFilePath, manifest.Sha512))
         {
-            progress?.Report(1.0);
+            progress?.Report(new DownloadProgress(1.0, manifest.Size, manifest.Size));
             return destFilePath;
         }
 
-        using var response = await _httpClient.GetAsync(manifest.DownloadUrl, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        using var client = CreateClient(TimeSpan.FromMinutes(10));
+        using var response = await client.GetAsync(manifest.DownloadUrl, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         response.EnsureSuccessStatusCode();
 
         var totalBytes = response.Content.Headers.ContentLength ?? manifest.Size;
@@ -195,10 +200,10 @@ public class EngineService : IDisposable
             {
                 await fileStream.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
                 totalRead += read;
-                if (totalBytes > 0)
-                {
-                    progress?.Report((double)totalRead / totalBytes);
-                }
+                progress?.Report(new DownloadProgress(
+                    totalBytes > 0 ? (double)totalRead / totalBytes : 0,
+                    totalRead,
+                    totalBytes));
             }
             await fileStream.FlushAsync(cancellationToken);
         }

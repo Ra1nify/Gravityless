@@ -26,12 +26,21 @@ public class AppUpdateService
         PropertyNameCaseInsensitive = true,
     };
 
-    private readonly HttpClient _http;
+    /// <summary>Injected client for tests; when null, one is built per call from the live proxy setting.</summary>
+    private readonly HttpClient? _injectedHttp;
+    private readonly ProxyConfigProvider _proxyProvider;
 
-    public AppUpdateService(HttpClient? http = null)
+    /// <summary>
+    /// A client is created per request so a proxy change on the settings page takes effect
+    /// without restarting. Tests may pass a fixed client instead.
+    /// </summary>
+    private HttpClient CreateClient() =>
+        _injectedHttp ?? ProxyHttpClientFactory.Create(_proxyProvider.Current, TimeSpan.FromSeconds(15));
+
+    public AppUpdateService(HttpClient? http = null, ProxyConfigProvider? proxyProvider = null)
     {
-        _http = http ?? new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
-        _http.DefaultRequestHeaders.UserAgent.ParseAdd("Gravityless");
+        _injectedHttp = http;
+        _proxyProvider = proxyProvider ?? ProxyConfigProvider.SystemDefault;
     }
 
     /// <summary>Builds the URL list to try in order: caller-provided mirrors, then the default.</summary>
@@ -85,53 +94,65 @@ public class AppUpdateService
             return Fail(AppUpdateFailure.NoUrl, "empty url");
         }
 
-        HttpResponseMessage response;
+        // A client is built per call so a proxy change takes effect without a restart; tests
+        // may inject one instead, in which case the caller owns its lifetime.
+        var client = _injectedHttp ?? ProxyHttpClientFactory.Create(_proxyProvider.Current, TimeSpan.FromSeconds(15));
+        var ownsClient = _injectedHttp == null;
+
         try
         {
-            response = await _http.GetAsync(url, cancellationToken).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (HttpRequestException ex)
-        {
-            // A refused or reset connection is local; a proxy denial looks the same, so it is
-            // reported separately.
-            var blocked = ex.InnerException is System.Net.Sockets.SocketException se
-                && se.SocketErrorCode is System.Net.Sockets.SocketError.AccessDenied
-                    or System.Net.Sockets.SocketError.NetworkUnreachable;
-
-            return Fail(blocked ? AppUpdateFailure.Blocked : AppUpdateFailure.Network, ex.Message);
-        }
-        catch (Exception ex)
-        {
-            return Fail(AppUpdateFailure.Network, ex.Message);
-        }
-
-        using (response)
-        {
-            if (response.StatusCode == HttpStatusCode.NotFound)
-            {
-                return Fail(AppUpdateFailure.NotFound, "manifest not found");
-            }
-
-            if (!response.IsSuccessStatusCode)
-            {
-                return Fail(AppUpdateFailure.Http, $"HTTP {(int)response.StatusCode}");
-            }
-
-            string body;
+            HttpResponseMessage response;
             try
             {
-                body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+                response = await client.GetAsync(url, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (HttpRequestException ex)
+            {
+                // A refused or reset connection is local; a proxy denial looks the same, so it is
+                // reported separately.
+                var blocked = ex.InnerException is System.Net.Sockets.SocketException se
+                    && se.SocketErrorCode is System.Net.Sockets.SocketError.AccessDenied
+                        or System.Net.Sockets.SocketError.NetworkUnreachable;
+
+                return Fail(blocked ? AppUpdateFailure.Blocked : AppUpdateFailure.Network, ex.Message);
             }
             catch (Exception ex)
             {
                 return Fail(AppUpdateFailure.Network, ex.Message);
             }
 
-            return Parse(body);
+            using (response)
+            {
+                if (response.StatusCode == HttpStatusCode.NotFound)
+                {
+                    return Fail(AppUpdateFailure.NotFound, "manifest not found");
+                }
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    return Fail(AppUpdateFailure.Http, $"HTTP {(int)response.StatusCode}");
+                }
+
+                string body;
+                try
+                {
+                    body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    return Fail(AppUpdateFailure.Network, ex.Message);
+                }
+
+                return Parse(body);
+            }
+        }
+        finally
+        {
+            if (ownsClient) client.Dispose();
         }
     }
 
@@ -191,7 +212,8 @@ public class AppUpdateService
 
         try
         {
-            var body = await _http.GetStringAsync(url, cancellationToken).ConfigureAwait(false);
+            using var client = CreateClient();
+            var body = await client.GetStringAsync(url, cancellationToken).ConfigureAwait(false);
             return JsonSerializer.Deserialize<AppChangelog>(body, JsonOptions);
         }
         catch

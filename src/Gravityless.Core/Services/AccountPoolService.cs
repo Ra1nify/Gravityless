@@ -1,4 +1,3 @@
-using System.Net;
 using System.Net.Http;
 using System.Diagnostics;
 using System.Text.Json;
@@ -11,6 +10,12 @@ namespace Gravityless.Core.Services;
 
 public class AccountPoolService
 {
+    /// <summary>
+    /// How many token refreshes may be in flight at once. Chosen to hide latency on a normal
+    /// pool without tripping the token endpoint's rate limit.
+    /// </summary>
+    private const int RefreshConcurrency = 4;
+
     private readonly string _baseDir;
     private readonly string _accountsJsonPath;
     private readonly string _accountsStorageDir;
@@ -26,7 +31,7 @@ public class AccountPoolService
     public string? GetSlotOwnerEmail()
     {
         var blob = CredentialManager.ReadCredential();
-        return string.IsNullOrEmpty(blob) ? null : ExtractEmailFromCredBlob(blob);
+        return string.IsNullOrEmpty(blob) ? null : CredentialCodec.ReadEmail(blob);
     }
 
     public AccountPoolService(string? baseDir = null)
@@ -45,28 +50,33 @@ public class AccountPoolService
     private void LoadAccounts()
     {
         _accounts.Clear();
-        if (File.Exists(_accountsJsonPath))
+        if (!File.Exists(_accountsJsonPath)) return;
+
+        try
         {
-            try
+            var json = File.ReadAllText(_accountsJsonPath);
+            var list = JsonSerializer.Deserialize<List<AccountProfile>>(json);
+            if (list == null) return;
+
+            foreach (var acc in list)
             {
-                var json = File.ReadAllText(_accountsJsonPath);
-                var list = JsonSerializer.Deserialize<List<AccountProfile>>(json);
-                if (list != null)
+                // Accounts saved before credentials became typed carry an opaque JSON blob instead
+                // of identity fields. There is nothing to migrate: the blob cannot be trusted to
+                // describe the account it is filed under, which is exactly the bug this model
+                // removes. Such records are dropped and the account must be captured again.
+                if (string.IsNullOrEmpty(acc.RefreshToken))
                 {
-                    foreach (var acc in list)
-                    {
-                        if (acc.DisplayName?.Contains("(系统主号)") == true)
-                        {
-                            acc.DisplayName = acc.DisplayName.Replace(" (系统主号)", "").Replace("(系统主号)", "").Trim();
-                        }
-                    }
-                    _accounts.AddRange(list);
+                    DiagLog.Swallowed("account.load-dropped", new InvalidOperationException(
+                        $"account {acc.Email} has no refresh token; capture it again"));
+                    continue;
                 }
+
+                _accounts.Add(acc);
             }
-            catch
-            {
-                // ignore
-            }
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Swallowed("account.load", ex);
         }
     }
 
@@ -121,14 +131,15 @@ public class AccountPoolService
         {
             try
             {
+                // CredentialCodec accepts both the flat file and the nested blob layout, so the
+                // file can be handed over as-is.
                 var credJson = File.ReadAllText(instOauthCredsPath);
-                var synthesizedBlob = ConvertOauthCredsJsonToCredBlob(credJson);
-                if (!string.IsNullOrEmpty(synthesizedBlob))
-                {
-                    acc.CredentialBlob = synthesizedBlob;
-                }
+                AdoptTokensIfOwned(acc, credJson, "account.checkin-instance");
             }
-            catch { }
+            catch (Exception ex)
+            {
+                DiagLog.Swallowed("account.checkin-read", ex);
+            }
         }
         else
         {
@@ -137,12 +148,7 @@ public class AccountPoolService
             var latestCred = CredentialManager.ReadCredential();
             if (!string.IsNullOrEmpty(latestCred))
             {
-                var emailInCred = ExtractEmailFromCredBlob(latestCred);
-                if (!string.IsNullOrEmpty(emailInCred)
-                    && emailInCred.Equals(acc.Email, StringComparison.OrdinalIgnoreCase))
-                {
-                    acc.CredentialBlob = latestCred;
-                }
+                AdoptTokensIfOwned(acc, latestCred, "account.checkin-slot");
             }
         }
 
@@ -155,6 +161,54 @@ public class AccountPoolService
         var accountDir = GetAccountStorageDir(acc.Id);
         InjectAccountToGeminiDir(accountDir, acc);
     }
+
+    /// <summary>
+    /// Takes the access token from a freshly observed credential, but only when that credential
+    /// belongs to <paramref name="account"/>.
+    ///
+    /// The refresh token is never copied: it is the account's identity and is fixed at capture.
+    /// A credential whose identity cannot be read is refused outright, because accepting it is
+    /// how one account's tokens end up filed under another.
+    /// </summary>
+    private static bool AdoptTokensIfOwned(AccountProfile account, string? candidate, string context)
+    {
+        var cred = CredentialCodec.Parse(candidate);
+
+        if (cred == null || string.IsNullOrEmpty(cred.Email))
+        {
+            DiagLog.Swallowed(context, new InvalidOperationException(
+                $"credential has no identity; not adopted for {account.Email}"));
+            return false;
+        }
+
+        if (!cred.Email.Equals(account.Email, StringComparison.OrdinalIgnoreCase))
+        {
+            DiagLog.Swallowed(context, new InvalidOperationException(
+                $"credential belongs to {cred.Email}; not adopted for {account.Email}"));
+            return false;
+        }
+
+        if (!string.IsNullOrEmpty(cred.AccessToken))
+        {
+            account.AccessToken = cred.AccessToken;
+            account.AccessTokenExpiresAt = cred.Expiry?.UtcDateTime;
+        }
+
+        return true;
+    }
+
+    /// <summary>Turns a freshly captured credential into a profile. Identity is set once, here.</summary>
+    private static AccountProfile NewProfileFrom(CapturedCredential cred) => new()
+    {
+        Email = cred.Email!,
+        DisplayName = cred.Email!.Split('@')[0],
+        RefreshToken = cred.RefreshToken!,
+        IdToken = cred.IdToken,
+        TokenType = cred.TokenType ?? "Bearer",
+        AccessToken = cred.AccessToken,
+        AccessTokenExpiresAt = cred.Expiry?.UtcDateTime,
+        InstallationId = Guid.NewGuid().ToString(),
+    };
 
     /// <summary>Returns (and creates) the per-account credential directory.</summary>
     public string GetAccountStorageDir(string accountId)
@@ -284,7 +338,7 @@ public class AccountPoolService
 
         // Any stored refresh token can certify a candidate pair.
         var refreshToken = _accounts
-            .Select(a => ProxyService.ExtractTokens(a.CredentialBlob).refreshToken)
+            .Select(a => a.RefreshToken)
             .FirstOrDefault(t => !string.IsNullOrWhiteSpace(t));
 
         OAuthClientConfig? resolved = null;
@@ -320,43 +374,41 @@ public class AccountPoolService
     /// <summary>Shared by the refresh path and the OAuth client extractor.</summary>
     public static HttpClient CreateHttpClientForOAuth(ProxyConfig? config) => CreateHttpClient(config);
 
-    private static HttpClient CreateHttpClient(ProxyConfig? config)
+    /// <summary>
+    /// Delegates to the common factory so the bypass list and the Socks5 URI scheme are
+    /// handled the same way for every request the app makes, not just the update checks.
+    /// </summary>
+    private static HttpClient CreateHttpClient(ProxyConfig? config) =>
+        ProxyHttpClientFactory.Create(config, TimeSpan.FromSeconds(12));
+
+    /// <summary>
+    /// Guarantees a usable access token before the account is written to the credential slot.
+    ///
+    /// The slot write validates the rendered blob, and a profile with a null access token renders
+    /// <c>"access_token": null</c>, which is refused — the launch would then run against whatever
+    /// the slot already held, or against nothing. Refreshing here makes the write deterministic.
+    /// </summary>
+    public async Task<(bool ok, string message)> EnsureAccessTokenAsync(
+        string accountId,
+        ProxyConfig? proxyConfig = null,
+        CancellationToken cancellationToken = default)
     {
-        var handler = new SocketsHttpHandler
-        {
-            ConnectTimeout = TimeSpan.FromSeconds(8)
-        };
+        var acc = _accounts.FirstOrDefault(a => a.Id == accountId);
+        if (acc == null) return (false, "找不到指定的账号");
 
-        if (config != null)
+        if (string.IsNullOrEmpty(acc.RefreshToken))
         {
-            if (config.Mode == ProxyMode.Manual)
-            {
-                var proxyUri = $"{config.Protocol.ToString().ToLower()}://{config.Host}:{config.Port}";
-                var webProxy = new WebProxy(proxyUri);
-                if (!string.IsNullOrEmpty(config.Username))
-                {
-                    webProxy.Credentials = new NetworkCredential(config.Username, config.Password);
-                }
-                handler.Proxy = webProxy;
-                handler.UseProxy = true;
-            }
-            else if (config.Mode == ProxyMode.Direct)
-            {
-                handler.UseProxy = false;
-            }
-            else
-            {
-                handler.UseProxy = true;
-            }
-        }
-        else
-        {
-            handler.UseProxy = true;
+            return (false, "账号缺少 Refresh Token，请重新捕获该账号");
         }
 
-        // A new client per call is intentional: the proxy handler differs by configuration
-        // and cannot be shared. Callers dispose it, so no socket is left behind.
-        return new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(12) };
+        // Already fresh: nothing to do, and no network call to wait on.
+        if (!acc.NeedsRefresh && !string.IsNullOrEmpty(acc.AccessToken))
+        {
+            return (true, string.Empty);
+        }
+
+        return await RefreshTokenAsync(accountId, proxyConfig, autoRetry: true, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     /// <summary>Refreshes the account access token; up to 3 attempts, 10s apart, when autoRetry is set.</summary>
@@ -372,7 +424,7 @@ public class AccountPoolService
             return (false, "找不到指定的账号");
         }
 
-        var (accessToken, refreshToken, expiry) = ProxyService.ExtractTokens(acc.CredentialBlob);
+        var refreshToken = acc.RefreshToken;
         if (string.IsNullOrWhiteSpace(refreshToken))
         {
             return (false, "账号未包含 Refresh Token 凭据，无法自动刷新");
@@ -416,7 +468,10 @@ public class AccountPoolService
 
                     if (!string.IsNullOrEmpty(newAccessToken))
                     {
-                        UpdateAccountAccessToken(acc, newAccessToken, expiresIn);
+                        // The refresh token identifies the account, so a token minted from it
+                        // cannot belong anywhere else; storing it is a plain field assignment.
+                        acc.AccessToken = newAccessToken;
+                        acc.AccessTokenExpiresAt = DateTime.UtcNow.AddSeconds(expiresIn);
                         acc.FailedRefreshAttempts = 0;
                         acc.LastActiveAt = DateTime.UtcNow;
 
@@ -483,31 +538,176 @@ public class AccountPoolService
     /// Refreshes every account in turn. Each account exchanges its refresh token for a fresh
     /// access token and then re-reads its quota, so a completed run leaves both current.
     /// </summary>
-    /// <param name="onProgress">Receives (index, total, email) before each account is processed.</param>
+    /// <param name="onProgress">Receives (completed, total, email) after each account finishes.</param>
     public async Task<(int successCount, int failedCount)> RefreshAllTokensAsync(
         ProxyConfig? proxyConfig = null,
         Action<int, int, string>? onProgress = null,
         CancellationToken cancellationToken = default)
     {
+        var accounts = _accounts.ToList();
+        if (accounts.Count == 0) return (0, 0);
+
         int success = 0;
         int failed = 0;
+        int completed = 0;
+        var counterLock = new object();
 
-        var accounts = _accounts.ToList();
-        for (int i = 0; i < accounts.Count; i++)
+        // A few refreshes run at once so a long list does not spend its whole time waiting on
+        // latency, but the degree is capped: the token endpoint rate-limits, and firing twenty
+        // requests together would turn a working batch into a run of 429s.
+        var options = new ParallelOptions
         {
-            var acc = accounts[i];
-            cancellationToken.ThrowIfCancellationRequested();
+            MaxDegreeOfParallelism = RefreshConcurrency,
+            CancellationToken = cancellationToken,
+        };
 
-            onProgress?.Invoke(i + 1, accounts.Count, acc.Email);
-
+        await Parallel.ForEachAsync(accounts, options, async (acc, ct) =>
+        {
             // autoRetry stays on: a transient network fault should not mark an account dead
             // for the rest of the batch.
-            var res = await RefreshTokenAsync(acc.Id, proxyConfig, autoRetry: true, cancellationToken);
-            if (res.success) success++;
-            else failed++;
-        }
+            var res = await RefreshTokenAsync(acc.Id, proxyConfig, autoRetry: true, ct)
+                .ConfigureAwait(false);
+
+            lock (counterLock)
+            {
+                if (res.success) success++;
+                else failed++;
+                completed++;
+                onProgress?.Invoke(completed, accounts.Count, acc.Email);
+            }
+        }).ConfigureAwait(false);
 
         return (success, failed);
+    }
+
+    /// <summary>One account whose stored credentials do not belong to it.</summary>
+    public class CredentialMismatch
+    {
+        public string AccountId { get; set; } = string.Empty;
+        public string AccountEmail { get; set; } = string.Empty;
+
+        /// <summary>Address the refresh token actually belongs to, when it could be read.</summary>
+        public string? ActualEmail { get; set; }
+
+        /// <summary>Short machine-readable reason: no-identity, email-mismatch, refresh-failed.</summary>
+        public string Reason { get; set; } = string.Empty;
+    }
+
+    /// <summary>
+    /// Checks every account's stored identity without changing anything.
+    ///
+    /// Two accounts can end up sharing one token when a blob from one is adopted by the other.
+    /// The damage is not repairable in place — the refresh token is the identity — so this only
+    /// reports which accounts need to be captured again.
+    /// </summary>
+    /// <param name="onProgress">Receives (checked, total, email) as each account is verified.</param>
+    public async Task<List<CredentialMismatch>> VerifyCredentialsAsync(
+        ProxyConfig? proxyConfig = null,
+        Action<int, int, string>? onProgress = null,
+        CancellationToken cancellationToken = default)
+    {
+        var mismatches = new List<CredentialMismatch>();
+        var accounts = _accounts.ToList();
+        if (accounts.Count == 0) return mismatches;
+
+        var oauthClient = LoadOAuthClient(_baseDir);
+        var counterLock = new object();
+        int checkedCount = 0;
+
+        var options = new ParallelOptions
+        {
+            MaxDegreeOfParallelism = RefreshConcurrency,
+            CancellationToken = cancellationToken,
+        };
+
+        await Parallel.ForEachAsync(accounts, options, async (acc, ct) =>
+        {
+            var mismatch = await VerifyOneAsync(acc, oauthClient, proxyConfig, ct).ConfigureAwait(false);
+
+            lock (counterLock)
+            {
+                if (mismatch != null) mismatches.Add(mismatch);
+                checkedCount++;
+                onProgress?.Invoke(checkedCount, accounts.Count, acc.Email);
+            }
+        }).ConfigureAwait(false);
+
+        // Stable order so the report does not shuffle between runs.
+        mismatches.Sort((a, b) => string.CompareOrdinal(a.AccountEmail, b.AccountEmail));
+        return mismatches;
+    }
+
+    private async Task<CredentialMismatch?> VerifyOneAsync(
+        AccountProfile acc,
+        (string ClientId, string ClientSecret) oauthClient,
+        ProxyConfig? proxyConfig,
+        CancellationToken cancellationToken)
+    {
+        CredentialMismatch Flag(string reason, string? actual) => new()
+        {
+            AccountId = acc.Id,
+            AccountEmail = acc.Email,
+            ActualEmail = actual,
+            Reason = reason,
+        };
+
+        var refreshToken = acc.RefreshToken;
+        if (string.IsNullOrWhiteSpace(refreshToken))
+        {
+            return Flag("no-identity", null);
+        }
+
+        // A stored id token is a claim about who this is; it must agree with the account record.
+        var idTokenEmail = CredentialCodec.ReadEmailFromIdToken(acc.IdToken);
+        if (!string.IsNullOrEmpty(idTokenEmail)
+            && !idTokenEmail.Equals(acc.Email, StringComparison.OrdinalIgnoreCase))
+        {
+            return Flag("email-mismatch", idTokenEmail);
+        }
+
+        // The stored identity matches, but the refresh token itself may still belong elsewhere.
+        // Exchanging it and reading the returned id_token is the only way to tell.
+        if (string.IsNullOrEmpty(oauthClient.ClientId) || string.IsNullOrEmpty(oauthClient.ClientSecret))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var client = CreateHttpClient(proxyConfig);
+            using var request = new HttpRequestMessage(HttpMethod.Post, OAuthTokenEndpoint)
+            {
+                Content = new FormUrlEncodedContent(new Dictionary<string, string>
+                {
+                    ["client_id"] = oauthClient.ClientId,
+                    ["client_secret"] = oauthClient.ClientSecret,
+                    ["grant_type"] = "refresh_token",
+                    ["refresh_token"] = refreshToken,
+                }),
+            };
+
+            using var response = await client.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode) return null;   // Network or revocation: not identity damage.
+
+            var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            var node = JsonNode.Parse(body);
+
+            var tokenEmail = node?["id_token_email"]?.ToString();
+            if (string.IsNullOrEmpty(tokenEmail))
+            {
+                tokenEmail = CredentialCodec.ReadEmailFromIdToken(node?["id_token"]?.ToString());
+            }
+
+            if (string.IsNullOrEmpty(tokenEmail)) return null;
+
+            return tokenEmail.Equals(acc.Email, StringComparison.OrdinalIgnoreCase)
+                ? null
+                : Flag("email-mismatch", tokenEmail);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     /// <summary>Queries the quota gateway for the 5h/7d remaining fractions (0.0-1.0) and reset times.</summary>
@@ -519,7 +719,7 @@ public class AccountPoolService
         var acc = _accounts.FirstOrDefault(a => a.Id == accountId);
         if (acc == null) return (false, "找不到指定的账号");
 
-        var (accessToken, _, _) = ProxyService.ExtractTokens(acc.CredentialBlob);
+        var accessToken = acc.AccessToken;
         if (string.IsNullOrWhiteSpace(accessToken))
         {
             return (false, "账号未包含有效的 Access Token，请先刷新 Token");
@@ -843,28 +1043,6 @@ public class AccountPoolService
         public double? Claude7dFraction { get; set; }
         public DateTime? Claude7dReset { get; set; }
     }
-
-    private static void UpdateAccountAccessToken(AccountProfile account, string newAccessToken, int expiresIn)
-    {
-        try
-        {
-            var node = JsonNode.Parse(account.CredentialBlob ?? "{}") ?? new JsonObject();
-            var tokenNode = node["token"] as JsonObject;
-            if (tokenNode == null)
-            {
-                tokenNode = new JsonObject();
-                node["token"] = tokenNode;
-            }
-
-            tokenNode["access_token"] = newAccessToken;
-            tokenNode["expires_in"] = expiresIn;
-            tokenNode["expiry"] = DateTime.UtcNow.AddSeconds(expiresIn).ToString("o");
-
-            account.CredentialBlob = node.ToJsonString();
-        }
-        catch { }
-    }
-
     /// <summary>Captures a new account by running the engine in an isolated sandbox with the protocol handler redirected.</summary>
     public async Task<AccountProfile?> CaptureNewAccountAsync(
         string antigravityExePath, 
@@ -917,21 +1095,11 @@ public class AccountPoolService
                 try
                 {
                     var fileContent = File.ReadAllText(credFile);
-                    var blob = ConvertOauthCredsJsonToCredBlob(fileContent);
-                    if (!string.IsNullOrEmpty(blob))
+                    var cred = CredentialCodec.Parse(fileContent);
+                    if (cred?.HasIdentity == true)
                     {
-                        var email = ExtractEmailFromCredBlob(blob);
-                        if (!string.IsNullOrEmpty(email))
-                        {
-                            tcs.TrySetResult(new AccountProfile
-                            {
-                                Email = email,
-                                DisplayName = email.Split('@')[0],
-                                CredentialBlob = blob,
-                                InstallationId = Guid.NewGuid().ToString()
-                            });
-                            return;
-                        }
+                        tcs.TrySetResult(NewProfileFrom(cred));
+                        return;
                     }
                 }
                 catch { }
@@ -941,16 +1109,10 @@ public class AccountPoolService
             var currentCred = CredentialManager.ReadCredential();
             if (!string.IsNullOrEmpty(currentCred))
             {
-                var email = ExtractEmailFromCredBlob(currentCred);
-                if (!string.IsNullOrEmpty(email))
+                var cred = CredentialCodec.Parse(currentCred);
+                if (cred?.HasIdentity == true)
                 {
-                    tcs.TrySetResult(new AccountProfile
-                    {
-                        Email = email,
-                        DisplayName = email.Split('@')[0],
-                        CredentialBlob = currentCred,
-                        InstallationId = Guid.NewGuid().ToString()
-                    });
+                    tcs.TrySetResult(NewProfileFrom(cred));
                     return;
                 }
             }
@@ -1048,20 +1210,10 @@ public class AccountPoolService
                 {
                     try
                     {
-                        var blob = ConvertOauthCredsJsonToCredBlob(File.ReadAllText(credFile));
-                        if (!string.IsNullOrEmpty(blob))
+                        var cred = CredentialCodec.Parse(File.ReadAllText(credFile));
+                        if (cred?.HasIdentity == true)
                         {
-                            var email = ExtractEmailFromCredBlob(blob);
-                            if (!string.IsNullOrEmpty(email))
-                            {
-                                profile = new AccountProfile
-                                {
-                                    Email = email,
-                                    DisplayName = email.Split('@')[0],
-                                    CredentialBlob = blob,
-                                    InstallationId = Guid.NewGuid().ToString()
-                                };
-                            }
+                            profile = NewProfileFrom(cred);
                         }
                     }
                     catch { }
@@ -1073,7 +1225,13 @@ public class AccountPoolService
                 var existing = _accounts.FirstOrDefault(a => a.Email.Equals(profile.Email, StringComparison.OrdinalIgnoreCase));
                 if (existing != null)
                 {
-                    existing.CredentialBlob = profile.CredentialBlob;
+                    // Re-capturing the same address is an explicit re-login, so the identity
+                    // fields are replaced along with the token cache.
+                    existing.RefreshToken = profile.RefreshToken;
+                    existing.IdToken = profile.IdToken;
+                    existing.TokenType = profile.TokenType;
+                    existing.AccessToken = profile.AccessToken;
+                    existing.AccessTokenExpiresAt = profile.AccessTokenExpiresAt;
                     existing.LastActiveAt = DateTime.UtcNow;
                     profile = existing;
                 }
@@ -1223,155 +1381,14 @@ public class AccountPoolService
         };
         File.WriteAllText(Path.Combine(geminiDir, "google_accounts.json"), accountsObj.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
 
-        // 2. oauth_creds.json
-        if (!string.IsNullOrEmpty(account.CredentialBlob))
-        {
-            var oauthCredsJson = ConvertCredBlobToOauthCredsJson(account.CredentialBlob);
-            if (!string.IsNullOrEmpty(oauthCredsJson))
-            {
-                File.WriteAllText(Path.Combine(geminiDir, "oauth_creds.json"), oauthCredsJson);
-            }
-        }
-
-        // 3. installation_id (isolates the device fingerprint)
+        // 2. installation_id (isolates the device fingerprint)
+        //
+        // oauth_creds.json is deliberately not written. Antigravity 2.29 no longer references
+        // that file at all — the language server reads its token from the Windows credential
+        // slot — so writing it only suggested a channel that no longer exists.
         if (!string.IsNullOrEmpty(account.InstallationId))
         {
             File.WriteAllText(Path.Combine(geminiDir, "installation_id"), account.InstallationId);
         }
-    }
-
-    /// <summary>Converts a CredentialBlob into .gemini/oauth_creds.json format.</summary>
-    public static string? ConvertCredBlobToOauthCredsJson(string blob)
-    {
-        try
-        {
-            var node = JsonNode.Parse(blob);
-            var tokenNode = node?["token"];
-            var idToken = node?["id_token"]?.ToString();
-
-            var accessToken = tokenNode?["access_token"]?.ToString();
-            var tokenType = tokenNode?["token_type"]?.ToString() ?? "Bearer";
-            var refreshToken = tokenNode?["refresh_token"]?.ToString();
-            var expiryStr = tokenNode?["expiry"]?.ToString();
-
-            long expiryDate = 0;
-            if (!string.IsNullOrEmpty(expiryStr) && DateTimeOffset.TryParse(expiryStr, out var dto))
-            {
-                expiryDate = dto.ToUnixTimeMilliseconds();
-            }
-
-            var obj = new JsonObject
-            {
-                ["access_token"] = accessToken,
-                ["token_type"] = tokenType,
-                ["refresh_token"] = refreshToken,
-                ["expiry_date"] = expiryDate,
-                ["id_token"] = idToken
-            };
-
-            return obj.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    /// <summary>Converts .gemini/oauth_creds.json into the CredentialBlob shape used by Windows Credential Manager.</summary>
-    public static string? ConvertOauthCredsJsonToCredBlob(string json)
-    {
-        try
-        {
-            var node = JsonNode.Parse(json);
-
-            // Accept both flat oauth_creds.json and the nested { token: {...} } blob form.
-            var source = node?["token"] is JsonNode nested ? nested : node;
-            if (source == null) return null;
-
-            var accessToken = source["access_token"]?.ToString();
-            var tokenType = source["token_type"]?.ToString() ?? "Bearer";
-            var refreshToken = source["refresh_token"]?.ToString();
-            var idToken = node?["id_token"]?.ToString() ?? source["id_token"]?.ToString();
-            var expiryDate = source["expiry_date"]?.GetValue<long>() ?? 0;
-
-            var expiry = expiryDate > 0
-                ? DateTimeOffset.FromUnixTimeMilliseconds(expiryDate).ToString("o")
-                : DateTimeOffset.UtcNow.AddHours(1).ToString("o");
-
-            var tokenObj = new JsonObject
-            {
-                ["access_token"] = accessToken,
-                ["token_type"] = tokenType,
-                ["refresh_token"] = refreshToken,
-                ["expiry"] = expiry,
-                ["expires_in"] = 3599
-            };
-
-            var root = new JsonObject
-            {
-                ["token"] = tokenObj,
-                ["auth_method"] = "consumer",
-                ["id_token"] = idToken
-            };
-
-            // Newer builds resolve the account from id_token_email instead of decoding id_token.
-            var email = ExtractEmailFromIdToken(idToken) ?? node?["id_token_email"]?.ToString();
-            if (!string.IsNullOrEmpty(email))
-            {
-                root["id_token_email"] = email;
-            }
-
-            return root.ToJsonString();
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    public static string? ExtractEmailFromCredBlob(string blob)
-    {
-        try
-        {
-            var node = JsonNode.Parse(blob);
-
-            // Newer builds store the account address directly and omit id_token.
-            var email = node?["id_token_email"]?.ToString();
-            if (!string.IsNullOrEmpty(email)) return email;
-
-            var idToken = node?["id_token"]?.ToString();
-            return ExtractEmailFromIdToken(idToken);
-        }
-        catch
-        {
-            // ignore
-        }
-
-        return null;
-    }
-
-    public static string? ExtractEmailFromIdToken(string? idToken)
-    {
-        if (string.IsNullOrEmpty(idToken)) return null;
-
-        try
-        {
-            var parts = idToken.Split('.');
-            if (parts.Length >= 2)
-            {
-                var payload = parts[1];
-                payload = payload.PadRight(payload.Length + (4 - payload.Length % 4) % 4, '=');
-                var bytes = Convert.FromBase64String(payload.Replace('-', '+').Replace('_', '/'));
-                var claimsJson = System.Text.Encoding.UTF8.GetString(bytes);
-                var claimsNode = JsonNode.Parse(claimsJson);
-                return claimsNode?["email"]?.ToString();
-            }
-        }
-        catch
-        {
-            // ignore
-        }
-
-        return null;
     }
 }

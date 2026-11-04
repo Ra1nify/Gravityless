@@ -32,7 +32,7 @@
     <sys:String x:Key="CoreStatus_PathTooltip">在文件资源管理器中打开核心目录</sys:String>
     <sys:String x:Key="CoreStatus_UninstallBtn">卸载核心</sys:String>
     <sys:String x:Key="CloudUpdate_CheckBtn">检查更新</sys:String>
-    <sys:String x:Key="CloudUpdate_InstallBtn">下载并安装</sys:String>
+    <sys:String x:Key="CloudUpdate_InstallBtn">安装</sys:String>
     <sys:String x:Key="CloudUpdate_InitialHint">点击「检查更新」查看最新版本</sys:String>
 
     <!-- Instances View -->
@@ -326,7 +326,7 @@
     <sys:String x:Key="CloudUpdate_RunningConfirmTitle">升级前确认</sys:String>
     <sys:String x:Key="CloudUpdate_RunningConfirmMessage">有实例正在运行，部署前需先停止。</sys:String>
     <sys:String x:Key="CloudUpdate_Stage1Download">阶段 1/4: 下载安装包至临时目录…</sys:String>
-    <sys:String x:Key="CloudUpdate_Stage1PercentFormat">阶段 1/4: 下载安装程序… {0}%</sys:String>
+    <sys:String x:Key="CloudUpdate_Stage1PercentFormat">正在下载安装程序… {0}%  {1}</sys:String>
     <sys:String x:Key="CloudUpdate_Stage2Verified">阶段 2/4: 安装包已下载，SHA512 校验通过。</sys:String>
     <sys:String x:Key="CloudUpdate_Stage3Uninstall">阶段 3/4: 卸载旧版核心，清理运行目录…</sys:String>
     <sys:String x:Key="CloudUpdate_Stage4Install">阶段 4/4: 部署 Managed 便携核心…</sys:String>
@@ -596,4 +596,21 @@
     <sys:String x:Key="Overview_AppUpdateErrInvalid">更新清单内容不完整。</sys:String>
     <sys:String x:Key="Overview_AppUpdateErrUnknown">检查更新失败。</sys:String>
     <sys:String x:Key="CloudUpdate_OpenLinkTip">在浏览器中打开下载链接</sys:String>
+    <sys:String x:Key="Overview_AppUpdateProgressFormat">下载中 {0}%  {1}</sys:String>
+    <sys:String x:Key="CloudUpdate_InstallSourceTitle">安装核心</sys:String>
+    <sys:String x:Key="CloudUpdate_InstallSourceMessage">选择安装包来源。</sys:String>
+    <sys:String x:Key="CloudUpdate_InstallSourceLocal">从本地文件安装</sys:String>
+    <sys:String x:Key="CloudUpdate_InstallSourceOnline">在线下载</sys:String>
+    <sys:String x:Key="CloudUpdate_SelectInstallerTitle">选择安装包</sys:String>
+    <sys:String x:Key="CloudUpdate_SideloadTitle">本地安装包</sys:String>
+    <sys:String x:Key="Accounts_VerifyBtn">校验凭据</sys:String>
+    <sys:String x:Key="Accounts_VerifyStatus">校验凭据归属…</sys:String>
+    <sys:String x:Key="Accounts_VerifyOkTitle">校验通过</sys:String>
+    <sys:String x:Key="Accounts_VerifyOkMessage">所有账号的凭据均与账号一致。</sys:String>
+    <sys:String x:Key="Accounts_VerifyFoundTitle">发现凭据错乱</sys:String>
+    <sys:String x:Key="Accounts_VerifyFoundFormat">以下 {0} 个账号的凭据不属于自己，请重新捕获：
+
+{1}</sys:String>
+    <sys:String x:Key="Accounts_VerifyNoIdentity">凭据缺少身份信息</sys:String>
+    <sys:String x:Key="Accounts_VerifyEmailMismatch">凭据属于其他账号</sys:String>
 </ResourceDictionary>

@@ -25,10 +25,66 @@ public class InstanceService
     private static TimeSpan CredentialSlotTtl => CredentialManager.SlotLockTtl;
 
     /// <summary>
-    /// How long to let the language server finish adopting the credential before the slot is
-    /// cleared. The read happens during LS startup, well inside this window.
+    /// Tolerance when matching a process start time against the recorded one. The record is
+    /// written immediately after the process starts, so the two differ by milliseconds; anything
+    /// beyond this is a different process wearing a recycled PID.
     /// </summary>
-    private const int CredentialReadWindowMs = 8000;
+    private const int ProcessIdentityToleranceSeconds = 10;
+
+    /// <summary>
+    /// True when <paramref name="processId"/> still refers to the process recorded at
+    /// <paramref name="startedAt"/>.
+    ///
+    /// A PID is not an identity: Windows recycles numbers, so once a recorded process exits its
+    /// number can be handed to an unrelated one — including another instance's Antigravity.
+    /// Treating that as "still running" reports a phantom conflict and, on force restart,
+    /// terminates the wrong instance. The recorded start time pins the identity.
+    /// </summary>
+    private static bool IsRecordedProcessAlive(int? processId, DateTime? startedAt)
+    {
+        if (processId is not { } pid || pid <= 0) return false;
+
+        try
+        {
+            using var proc = Process.GetProcessById(pid);
+            if (proc.HasExited) return false;
+
+            if (startedAt is { } recorded)
+            {
+                var started = proc.StartTime.ToUniversalTime();
+                return Math.Abs((started - recorded).TotalSeconds) <= ProcessIdentityToleranceSeconds;
+            }
+
+            // Records written before the timestamp existed: the executable name at least rejects
+            // a recycled PID that landed on an unrelated program.
+            return proc.ProcessName.Equals("Antigravity", StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            // Gone, or not ours to inspect. Never claim a process we cannot identify.
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Kills the recorded process only when it is still the one we started. Killing a recycled
+    /// PID would take down whatever inherited the number.
+    /// </summary>
+    private static void TerminateRecordedProcess(int? processId, DateTime? startedAt)
+    {
+        if (!IsRecordedProcessAlive(processId, startedAt)) return;
+
+        try
+        {
+            using var proc = Process.GetProcessById(processId!.Value);
+            proc.Kill(entireProcessTree: true);
+            proc.WaitForExit(2000);
+        }
+        catch
+        {
+            // Already gone or protected; the caller clears the record either way.
+        }
+    }
 
     public IReadOnlyList<InstanceProfile> Instances => _instances.AsReadOnly();
 
@@ -278,21 +334,15 @@ public class InstanceService
         // Instance's own process still alive?
         if (inst.IsRunning)
         {
-            bool isProcessAlive = false;
-            if (inst.ProcessId.HasValue)
-            {
-                try
-                {
-                    var proc = Process.GetProcessById(inst.ProcessId.Value);
-                    if (!proc.HasExited) isProcessAlive = true;
-                }
-                catch { }
-            }
+            var isProcessAlive = IsRecordedProcessAlive(inst.ProcessId, inst.StartedAt);
 
             if (!isProcessAlive)
             {
+                // Either it exited or the number now belongs to something else. Clearing the
+                // record is safe: a process we cannot identify is not one we may manage.
                 inst.IsRunning = false;
                 inst.ProcessId = null;
+                inst.StartedAt = null;
                 SaveInstances();
             }
             else if (!force)
@@ -304,22 +354,11 @@ public class InstanceService
             }
             else
             {
-                try
-                {
-                    if (inst.ProcessId.HasValue)
-                    {
-                        var proc = Process.GetProcessById(inst.ProcessId.Value);
-                        if (!proc.HasExited)
-                        {
-                            proc.Kill(true);
-                            proc.WaitForExit(1000);
-                        }
-                    }
-                }
-                catch { }
+                TerminateRecordedProcess(inst.ProcessId, inst.StartedAt);
 
                 inst.IsRunning = false;
                 inst.ProcessId = null;
+                inst.StartedAt = null;
                 SaveInstances();
             }
         }
@@ -365,57 +404,29 @@ public class InstanceService
         {
             if (proj.IsRunning)
             {
-                bool isProjProcAlive = false;
-                if (proj.ProcessId.HasValue)
-                {
-                    try
-                    {
-                        var proc = Process.GetProcessById(proj.ProcessId.Value);
-                        if (!proc.HasExited) isProjProcAlive = true;
-                    }
-                    catch { }
-                }
+                // Same PID-reuse guard as the instance check: a recycled number must not make a
+                // free project look busy, nor let a force restart kill an unrelated process.
+                var isProjProcAlive = IsRecordedProcessAlive(proj.ProcessId, proj.StartedAt);
 
                 if (!isProjProcAlive)
                 {
                     proj.IsRunning = false;
                     proj.RunningInstanceId = null;
                     proj.ProcessId = null;
+                    proj.StartedAt = null;
                     _projectService.SaveProjects();
                 }
                 else if (proj.RunningInstanceId != inst.Id)
                 {
-                    if (!force)
-                    {
-                        // Report the conflict and stop. The caller may relaunch with the
-                        // conflicting projects excluded instead of killing the holder.
-                        _accountPool.CheckInAccount(inst.BoundAccountId, Path.Combine(_instancesStorageDir, inst.Id, ".gemini"));
-                        conflictDetected = true;
-                        conflictingPid = proj.ProcessId;
-                        errorMessage = $"目标项目【{proj.Name}】当前已被另一实例占用运行中 (PID: {proj.ProcessId})！为防止 SQLite 记忆库损坏，严禁并发多写。";
-                        return false;
-                    }
-                    else
-                    {
-                        try
-                        {
-                            if (proj.ProcessId.HasValue)
-                            {
-                                var proc = Process.GetProcessById(proj.ProcessId.Value);
-                                if (!proc.HasExited)
-                                {
-                                    proc.Kill(true);
-                                    proc.WaitForExit(1000);
-                                }
-                            }
-                        }
-                        catch { }
-
-                        proj.IsRunning = false;
-                        proj.RunningInstanceId = null;
-                        proj.ProcessId = null;
-                        _projectService.SaveProjects();
-                    }
+                    // A project belongs to the instance that opened it. Taking it over by killing
+                    // that process would let a second launch silently terminate a first one, so the
+                    // conflict is reported regardless of `force`: the caller's remedy is to exclude
+                    // the project for this launch, not to stop the holder.
+                    _accountPool.CheckInAccount(inst.BoundAccountId, Path.Combine(_instancesStorageDir, inst.Id, ".gemini"));
+                    conflictDetected = true;
+                    conflictingPid = proj.ProcessId;
+                    errorMessage = $"目标项目【{proj.Name}】当前已被另一实例占用运行中 (PID: {proj.ProcessId})！为防止 SQLite 记忆库损坏，严禁并发多写。";
+                    return false;
                 }
             }
         }
@@ -438,10 +449,10 @@ public class InstanceService
         // Mount the memory stores of bound projects (one or many).
         SetupProjectMemoryMount(inst, boundProjects, instGemini, instAntigravity, instUserData);
 
-        // Inject credentials. The slot is global, so:
-        //   - take the instance lock (TTL-bounded) so two launches cannot interleave writes;
-        //   - refuse a blob whose email belongs to another account.
-        if (!string.IsNullOrEmpty(account.CredentialBlob))
+        // Inject credentials. The slot is global, so take the instance lock (TTL-bounded) so two
+        // launches cannot interleave writes. The blob is rendered from the profile, whose identity
+        // fields are immutable, so it cannot describe any account but this one.
+        if (!string.IsNullOrEmpty(account.RefreshToken))
         {
             var acquired = CredentialSlotLock.Wait(CredentialSlotTtl);
             if (!acquired)
@@ -452,21 +463,11 @@ public class InstanceService
 
             try
             {
-                var blobEmail = AccountPoolService.ExtractEmailFromCredBlob(account.CredentialBlob);
-                if (string.IsNullOrEmpty(blobEmail)
-                    || blobEmail.Equals(account.Email, StringComparison.OrdinalIgnoreCase))
+                // A rejected blob means the rendered credential is unusable; the launch must fail
+                // rather than run with whatever account the slot currently holds.
+                if (!CredentialManager.WriteCredential(CredentialCodec.RenderBlob(account)))
                 {
-                    // A rejected blob means the stored credential is corrupt; the launch must fail
-                    // rather than run with whatever account the slot currently holds.
-                    if (!CredentialManager.WriteCredential(account.CredentialBlob))
-                    {
-                        errorMessage = "账号凭证格式无效，已取消启动（请重新捕获该账号）";
-                        return false;
-                    }
-                }
-                else
-                {
-                    errorMessage = $"账号凭证归属不匹配（凭证属于 {blobEmail}，实例绑定 {account.Email}）";
+                    errorMessage = "账号凭证格式无效，已取消启动（请重新捕获该账号）";
                     return false;
                 }
             }
@@ -584,11 +585,14 @@ public class InstanceService
             proc.EnableRaisingEvents = true;
             proc.Exited += (_, _) => OnInstanceProcessExited(inst.Id, instGemini, boundProjects);
 
-            // The language server reads the credential slot during its own startup and then
-            // keeps the token in memory. Clearing the slot afterwards frees it for the next
-            // account, which is the only way to run several accounts on one machine.
-            _ = ReleaseCredentialSlotAsync(inst);
-
+            // The slot is deliberately left populated until this instance exits.
+            //
+            // 2.29 removed the per-instance credential file, so the slot is the only channel the
+            // language server can read, and it reads it during its own startup — which happens
+            // seconds after Process.Start returns, with no way to observe when. A timed clear
+            // raced that read and produced an unauthenticated window. Overwriting on the next
+            // launch is enough for concurrency: each language server keeps its token in memory
+            // afterwards and refreshes independently.
             SaveInstances();
             InstanceStateChanged?.Invoke(inst);
             return true;
@@ -628,6 +632,8 @@ public class InstanceService
 
         if (_runningProcesses.TryGetValue(instanceId, out var proc))
         {
+            // The handle came from Process.Start, so it still refers to our process even if the
+            // PID has since been reused.
             try
             {
                 if (!proc.HasExited)
@@ -636,45 +642,14 @@ public class InstanceService
                 }
             }
             catch { }
+            return;
         }
+
+        // No handle in this session — the app was restarted while the instance kept running.
+        // Fall back to the recorded PID, which is only acted on when the identity still matches.
+        TerminateRecordedProcess(inst.ProcessId, inst.StartedAt);
     }
 
-    /// <summary>
-    /// Waits for the language server to adopt the credential, then clears the global slot.
-    /// The read happens within a few seconds of process start; the delay only has to cover it.
-    /// </summary>
-    private async Task ReleaseCredentialSlotAsync(InstanceProfile inst)
-    {
-        try
-        {
-            await Task.Delay(CredentialReadWindowMs).ConfigureAwait(false);
-
-            // A process that died early never adopted the token; keep the slot for a retry.
-            if (!_runningProcesses.TryGetValue(inst.Id, out var proc) || proc.HasExited) return;
-
-            var account = _accountPool.Accounts.FirstOrDefault(a => a.Id == inst.BoundAccountId);
-            if (account == null) return;
-
-            if (!CredentialSlotLock.Wait(0)) return;
-            try
-            {
-                if (CredentialManager.ClearSlotIfOwnedBy(account.Email))
-                {
-                    inst.CredentialSlotReleased = true;
-                    SaveInstances();
-                    CredentialSlotReleased?.Invoke(inst);
-                }
-            }
-            finally
-            {
-                CredentialSlotLock.Release();
-            }
-        }
-        catch
-        {
-            // Releasing the slot is best-effort; a failure leaves the previous behaviour.
-        }
-    }
 
     /// <summary>Raised after an instance has consumed and released the global credential slot.</summary>
     public event Action<InstanceProfile>? CredentialSlotReleased;
@@ -750,6 +725,16 @@ public class InstanceService
                 try
                 {
                     _accountPool.CheckInAccount(inst.BoundAccountId, instanceGeminiDir);
+
+                    // The instance is gone, so its token no longer needs to sit in the slot.
+                    // This only removes a credential that still belongs to this account; when a
+                    // second instance has since overwritten it, that account keeps its slot.
+                    var account = _accountPool.Accounts.FirstOrDefault(a => a.Id == inst.BoundAccountId);
+                    if (account != null && CredentialManager.ClearSlotIfOwnedBy(account.Email))
+                    {
+                        inst.CredentialSlotReleased = true;
+                        CredentialSlotReleased?.Invoke(inst);
+                    }
                 }
                 finally
                 {

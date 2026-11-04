@@ -45,6 +45,7 @@
         </Grid>
 
         <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="24,0,24,0">
+            <ui:Button x:Name="TertiaryBtn" Content="" Click="OnTertiaryClicked" Appearance="Secondary" Margin="0,0,10,0" Visibility="Collapsed" MinWidth="80"/>
             <ui:Button x:Name="SecondaryBtn" Content="取消" Click="OnSecondaryClicked" Appearance="Secondary" Margin="0,0,10,0" Visibility="Collapsed" MinWidth="80"/>
             <ui:Button x:Name="PrimaryBtn" Content="确定" Click="OnPrimaryClicked" Appearance="Primary" MinWidth="80"/>
         </StackPanel>

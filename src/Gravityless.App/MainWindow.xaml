@@ -226,19 +226,27 @@
                                                    Icon="{ui:SymbolIcon Symbol=ArrowDownload24}"/>
                                     </StackPanel>
 
-                                    <!-- Same pattern as the core update bar: the message rides the
-                                         InfoBar's own Message property; content holds only extras. -->
+                                    <!-- The InfoBar template renders only Title and Message; it has no
+                                         ContentPresenter, so extras live in a separate surface. -->
                                     <ui:InfoBar x:Name="AppUpdateInfoBar"
                                                 Severity="Informational"
                                                 Title="{DynamicResource Overview_AppUpdateStatusTitle}"
                                                 IsOpen="False"
-                                                IsClosable="True">
-                                        <ui:InfoBar.Content>
-                                            <StackPanel x:Name="AppUpdateProgressPanel" Visibility="Collapsed" Margin="0,8,0,0">
-                                                <ProgressBar x:Name="AppUpdateProgressBar" Height="4" Minimum="0" Maximum="100"/>
-                                            </StackPanel>
-                                        </ui:InfoBar.Content>
-                                    </ui:InfoBar>
+                                                IsClosable="True"/>
+
+                                    <Border x:Name="AppUpdateProgressPanel"
+                                            Background="{DynamicResource SubtleFillColorSecondaryBrush}"
+                                            BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                                            BorderThickness="1"
+                                            CornerRadius="6"
+                                            Padding="12,10"
+                                            Margin="0,8,0,0"
+                                            Visibility="Collapsed">
+                                        <StackPanel>
+                                            <TextBlock x:Name="AppUpdateProgressLabel" FontSize="12" Opacity="0.85" TextWrapping="Wrap" Margin="0,0,0,6"/>
+                                            <ProgressBar x:Name="AppUpdateProgressBar" Height="4" Minimum="0" Maximum="100"/>
+                                        </StackPanel>
+                                    </Border>
                                 </StackPanel>
                             </ui:Card>
 
@@ -293,31 +301,38 @@
                                     </StackPanel>
 
                                     <!-- Update status. The message rides the InfoBar's own Message
-                                         property; content holds the download link and progress row. -->
+                                         property; the template does not reliably render Content,
+                                         so the link and progress live in their own surface below. -->
                                     <ui:InfoBar x:Name="UpdateInfoBar"
                                                 Severity="Informational"
                                                 Title="{DynamicResource CloudUpdate_StatusTitle}"
                                                 IsOpen="True"
                                                 IsClosable="False"
-                                                Margin="0,0,0,0">
-                                        <ui:InfoBar.Content>
-                                            <StackPanel>
-                                                <!-- Direct download link, shown only once a manifest is parsed.
-                                                     A separate line keeps the URL out of the status text. -->
-                                                <TextBlock x:Name="DownloadLinkPanel" Visibility="Collapsed" Margin="0,6,0,0">
-                                                    <Hyperlink x:Name="DownloadLink" Click="OnDownloadLinkClicked"
-                                                               ToolTip="{DynamicResource CloudUpdate_OpenLinkTip}">
-                                                        <Run x:Name="DownloadLinkText"/>
-                                                    </Hyperlink>
-                                                </TextBlock>
+                                                Margin="0,0,0,0"/>
 
-                                                <StackPanel x:Name="InstallProgressPanel" Visibility="Collapsed" Margin="0,8,0,0">
-                                                    <ProgressBar x:Name="InstallProgressBar" Height="4"/>
-                                                    <TextBlock x:Name="InstallProgressLabel" FontSize="12" Opacity="0.8" TextWrapping="Wrap" Margin="0,6,0,0"/>
-                                                </StackPanel>
+                                    <Border x:Name="UpdateDetailsPanel"
+                                            Background="{DynamicResource SubtleFillColorSecondaryBrush}"
+                                            BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                                            BorderThickness="1"
+                                            CornerRadius="6"
+                                            Padding="12,10"
+                                            Margin="0,8,0,0"
+                                            Visibility="Collapsed">
+                                        <StackPanel>
+                                            <!-- Direct download link, shown only once a manifest is parsed. -->
+                                            <TextBlock x:Name="DownloadLinkPanel" Visibility="Collapsed">
+                                                <Hyperlink x:Name="DownloadLink" Click="OnDownloadLinkClicked"
+                                                           ToolTip="{DynamicResource CloudUpdate_OpenLinkTip}">
+                                                    <Run x:Name="DownloadLinkText"/>
+                                                </Hyperlink>
+                                            </TextBlock>
+
+                                            <StackPanel x:Name="InstallProgressPanel" Visibility="Collapsed" Margin="0,6,0,0">
+                                                <ProgressBar x:Name="InstallProgressBar" Height="4"/>
+                                                <TextBlock x:Name="InstallProgressLabel" FontSize="12" Opacity="0.85" TextWrapping="Wrap" Margin="0,6,0,0"/>
                                             </StackPanel>
-                                        </ui:InfoBar.Content>
-                                    </ui:InfoBar>
+                                        </StackPanel>
+                                    </Border>
                                 </StackPanel>
                             </ui:Card>
                         </StackPanel>
@@ -839,7 +854,8 @@
                             <StackPanel Grid.Column="0" Orientation="Horizontal">
                                 <ui:Button AutomationProperties.AutomationId="AccountsCaptureBtn" Content="{DynamicResource Accounts_CaptureBtn}" Click="OnCaptureAccountClicked" Appearance="Primary" Margin="0,0,10,0" Icon="{ui:SymbolIcon Symbol=Add24}"/>
                                 <ui:Button AutomationProperties.AutomationId="AccountsRefreshAllTokensBtn" Content="{DynamicResource Accounts_RefreshAllTokensBtn}" Click="OnRefreshAllTokensClicked" Appearance="Secondary" Margin="0,0,10,0" Icon="{ui:SymbolIcon Symbol=ArrowSync24}"/>
-                                <ui:Button AutomationProperties.AutomationId="AccountsUnlockAllBtn" Content="{DynamicResource Accounts_UnlockAllBtn}" Click="OnUnlockAllAccountsClicked" Appearance="Secondary" Icon="{ui:SymbolIcon Symbol=LockOpen24}"/>
+                                <ui:Button AutomationProperties.AutomationId="AccountsUnlockAllBtn" Content="{DynamicResource Accounts_UnlockAllBtn}" Click="OnUnlockAllAccountsClicked" Appearance="Secondary" Margin="0,0,10,0" Icon="{ui:SymbolIcon Symbol=LockOpen24}"/>
+                                <ui:Button AutomationProperties.AutomationId="AccountsVerifyBtn" Content="{DynamicResource Accounts_VerifyBtn}" Click="OnVerifyCredentialsClicked" Appearance="Secondary" Icon="{ui:SymbolIcon Symbol=ShieldCheckmark24}"/>
                             </StackPanel>
                             <ctrl:PageStatusStrip Grid.Column="1" x:Name="AccountsStatusStrip" Margin="12,0,0,0" VerticalAlignment="Center"/>
                         </Grid>

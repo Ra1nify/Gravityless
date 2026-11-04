@@ -226,7 +226,7 @@ public class ProxyService
             }
 
             var accountList = (candidateAccounts ?? accountPoolService?.Accounts)?
-                .Where(a => !string.IsNullOrWhiteSpace(a.CredentialBlob))
+                .Where(a => !string.IsNullOrWhiteSpace(a.RefreshToken))
                 .ToList();
 
             if (accountList == null || accountList.Count == 0)
@@ -248,7 +248,9 @@ public class ProxyService
             {
                 result.TestedAccountEmail = chosenAccount.Email;
                 result.TestedAccountAlias = AccountAlias(chosenAccount);
-                var (accessToken, refreshToken, expiry) = ExtractTokens(chosenAccount.CredentialBlob);
+                var accessToken = chosenAccount.AccessToken;
+                var refreshToken = chosenAccount.RefreshToken;
+                var expiry = chosenAccount.AccessTokenExpiresAt;
 
                 // Refresh when the token is missing or expires within two minutes
                 if ((string.IsNullOrWhiteSpace(accessToken) || (expiry.HasValue && expiry.Value <= DateTimeOffset.UtcNow.AddMinutes(2))) && !string.IsNullOrWhiteSpace(refreshToken))
@@ -263,7 +265,7 @@ public class ProxyService
                                 var refreshedAcc = accountPoolService.Accounts.FirstOrDefault(a => a.Id == chosenAccount.Id);
                                 if (refreshedAcc != null)
                                 {
-                                    var (newAt, _, _) = ExtractTokens(refreshedAcc.CredentialBlob);
+                                    var newAt = refreshedAcc.AccessToken;
                                     if (!string.IsNullOrWhiteSpace(newAt)) accessToken = newAt;
                                 }
                             }
@@ -314,8 +316,7 @@ public class ProxyService
                                 var refreshedAcc = accountPoolService.Accounts.FirstOrDefault(a => a.Id == chosenAccount.Id);
                                 if (refreshedAcc != null)
                                 {
-                                    var (newAt, _, _) = ExtractTokens(refreshedAcc.CredentialBlob);
-                                    refreshedToken = newAt;
+                                    refreshedToken = refreshedAcc.AccessToken;
                                 }
                             }
                         }
@@ -470,31 +471,6 @@ public class ProxyService
         catch { }
         return null;
     }
-
-    /// <summary>Extracts access token, refresh token and expiry; accepts them nested under "token" or at the root.</summary>
-    public static (string? accessToken, string? refreshToken, DateTimeOffset? expiry) ExtractTokens(string? blob)
-    {
-        if (string.IsNullOrWhiteSpace(blob)) return (null, null, null);
-        try
-        {
-            var node = JsonNode.Parse(blob);
-            var tokenNode = node?["token"];
-            var accessToken = tokenNode?["access_token"]?.ToString() ?? node?["access_token"]?.ToString();
-            var refreshToken = tokenNode?["refresh_token"]?.ToString() ?? node?["refresh_token"]?.ToString();
-            var expiryStr = tokenNode?["expiry"]?.ToString() ?? node?["expiry"]?.ToString();
-            DateTimeOffset? expiry = null;
-            if (!string.IsNullOrEmpty(expiryStr) && DateTimeOffset.TryParse(expiryStr, out var dto))
-            {
-                expiry = dto;
-            }
-            return (accessToken, refreshToken, expiry);
-        }
-        catch
-        {
-            return (null, null, null);
-        }
-    }
-
     /// <summary>Writes Antigravity-Proxy config.json into <paramref name="targetDir"/>.</summary>
     public static void WriteProxyConfigFile(string targetDir, ProxyConfig config)
     {

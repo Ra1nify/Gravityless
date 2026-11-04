@@ -11,6 +11,22 @@ public class MicaPatchService
     private const string MicaMarker = "/* GRAVITYLESS_MICA_PATCH */";
 
     private const string MicaHookMarker = "/* GRAVITYLESS_MICA_WIN_HOOK */";
+
+    /// <summary>
+    /// Marks the independent "reveal the window" injection. Kept separate from
+    /// <see cref="MicaHookMarker"/> because that block anchors on a call shape upstream changes,
+    /// while this one must survive on its own.
+    /// </summary>
+    private const string ShowMarker = "/* GRAVITYLESS_SHOW_ON_READY */";
+
+    /// <summary>Marks the language-server argument injection in <c>languageServer.js</c>.</summary>
+    private const string GeminiDirMarker = "/* GRAVITYLESS_GEMINI_DIR */";
+
+    /// <summary>
+    /// The argument pair the language server spawn is anchored on. Everything after it is left
+    /// untouched; the Gemini directory override is inserted immediately following.
+    /// </summary>
+    private const string LsAppDataArg = "'--app_data_dir',\n            (0, paths_1.getAppDataDirName)(),";
     private const string MicaSyncMarker = "/* GRAVITYLESS_MICA_DAEMON_SYNC */";
     private const string BridgeMarker = "/* GRAVITYLESS_DAEMON_BRIDGE */";
 
@@ -21,7 +37,7 @@ public class MicaPatchService
     private const string ProtocolCallTarget = "electron_1.app.setAsDefaultProtocolClient(PROTOCOL);";
 
     /// <summary>Bump when template semantics change; a stale stamp triggers a rebuild from *.stock and re-injection.</summary>
-    private const int MicaPatchVersion = 39;
+    private const int MicaPatchVersion = 40;
     private static readonly string MicaPatchStamp = $"/* GRAVITYLESS_MICA_PATCH_VERSION: {MicaPatchVersion} */";
 
     /// <summary>Unpacks an Electron ASAR archive into outputDir using only managed code.</summary>
@@ -383,6 +399,28 @@ public class MicaPatchService
                 }
             }
 
+            // B0. Guarantee the window becomes visible.
+            //
+            // The option injection above sets `show: false` so the transparent frame never
+            // flashes, and the hook below is meant to show the window on `ready-to-show`. That
+            // hook anchors on the literal shape of the BrowserWindow call, which changed in
+            // 2.29: the options moved into a variable, so the call now ends with `};` instead of
+            // `});`. When the anchor misses, nothing shows the window and the app appears only
+            // in the tray. This injection anchors on a stable statement instead, so the window is
+            // revealed whether or not the rest of the hook applied.
+            if (!utilsContent.Contains(ShowMarker))
+            {
+                var showAnchor = @"(\bhubWindows\.add\(win\);)";
+                if (Regex.IsMatch(utilsContent, showAnchor))
+                {
+                    var showBlock = "$1\n    " + ShowMarker + "\n" +
+                        "    // Created hidden to avoid a transparent first frame; reveal on first paint.\n" +
+                        "    win.once('ready-to-show', () => { try { win.show(); } catch (_) {} });";
+
+                    utilsContent = Regex.Replace(utilsContent, showAnchor, showBlock);
+                }
+            }
+
             // C. Append the main-process daemon sync block (uses native Node, no sandbox limits).
             if (!utilsContent.Contains(MicaSyncMarker))
             {
@@ -394,6 +432,59 @@ public class MicaPatchService
 
             var utf8NoBom = new UTF8Encoding(false);
             File.WriteAllText(utilsJs, utilsContent, utf8NoBom);
+
+            // Patch languageServer.js so the language server is told which Gemini directory to
+            // use.
+            //
+            // The Electron layer hardcodes --app_data_dir from os.homedir() and never passes
+            // --gemini_dir, so every instance resolves its data root to the same host directory:
+            // installation_id, config.json and state are shared machine-wide. That defeats the
+            // per-account device fingerprint this app maintains. The argument is appended from an
+            // environment variable the launcher sets, and omitted when unset, which leaves the
+            // stock behaviour intact.
+            try
+            {
+                var lsJs = Path.Combine(appDir, "dist", "languageServer.js");
+                var lsStock = lsJs + ".stock";
+
+                if (File.Exists(lsJs))
+                {
+                    // Capture a pristine copy the first time; a .stock that already carries the
+                    // marker means it was taken after patching and must be recaptured.
+                    var stockIsPatched = File.Exists(lsStock) &&
+                        File.ReadAllText(lsStock, Encoding.UTF8).Contains(GeminiDirMarker, StringComparison.Ordinal);
+
+                    if (!File.Exists(lsStock) || stockIsPatched)
+                    {
+                        var current = File.ReadAllText(lsJs, Encoding.UTF8);
+                        if (!current.Contains(GeminiDirMarker, StringComparison.Ordinal))
+                        {
+                            File.Copy(lsJs, lsStock, true);
+                        }
+                    }
+
+                    if (File.Exists(lsStock))
+                    {
+                        var lsContent = File.ReadAllText(lsStock, Encoding.UTF8);
+                        if (!lsContent.Contains(GeminiDirMarker, StringComparison.Ordinal)
+                            && lsContent.Contains(LsAppDataArg, StringComparison.Ordinal))
+                        {
+                            lsContent = lsContent.Replace(LsAppDataArg,
+                                LsAppDataArg + "\n            " + GeminiDirMarker + "\n" +
+                                "            ...(process.env.GRAVITYLESS_GEMINI_DIR\n" +
+                                "                ? ['--gemini_dir', process.env.GRAVITYLESS_GEMINI_DIR]\n" +
+                                "                : []),",
+                                1);
+
+                            File.WriteAllText(lsJs, lsContent, utf8NoBom);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                DiagLog.Swallowed("patch.gemini-dir", ex);
+            }
 
             // Take over the ASAR: app.asar becomes app.asar.stock so resources/app is loaded.
             bool asarLocked = false;

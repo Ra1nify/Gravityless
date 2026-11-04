@@ -17,6 +17,10 @@ public enum ModernDialogType
 public partial class ModernDialogWindow : FluentWindow
 {
     public bool Confirmed { get; private set; }
+
+    /// <summary>Which button was pressed. 1 = primary, 2 = secondary, 3 = tertiary.</summary>
+    public int Choice { get; private set; }
+
     public string InputText => DialogInputBox.Text;
 
     public ModernDialogWindow()
@@ -30,11 +34,12 @@ public partial class ModernDialogWindow : FluentWindow
         string heading, 
         string message, 
         ModernDialogType type, 
-        string primaryText = "确定", 
+        string primaryText = "确定",
         string? secondaryText = null,
         bool isDestructive = false,
         bool showInput = false,
-        string? defaultInput = null)
+        string? defaultInput = null,
+        string? tertiaryText = null)
     {
         DialogTitleBar.Title = title;
         DialogHeadingText.Text = heading;
@@ -54,6 +59,16 @@ public partial class ModernDialogWindow : FluentWindow
         else
         {
             SecondaryBtn.Visibility = Visibility.Collapsed;
+        }
+
+        if (!string.IsNullOrEmpty(tertiaryText))
+        {
+            TertiaryBtn.Content = tertiaryText;
+            TertiaryBtn.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            TertiaryBtn.Visibility = Visibility.Collapsed;
         }
 
         if (showInput)
@@ -93,12 +108,21 @@ public partial class ModernDialogWindow : FluentWindow
     private void OnPrimaryClicked(object sender, RoutedEventArgs e)
     {
         Confirmed = true;
+        Choice = 1;
         TryClose(true);
     }
 
     private void OnSecondaryClicked(object sender, RoutedEventArgs e)
     {
         Confirmed = false;
+        Choice = 2;
+        TryClose(false);
+    }
+
+    private void OnTertiaryClicked(object sender, RoutedEventArgs e)
+    {
+        Confirmed = false;
+        Choice = 3;
         TryClose(false);
     }
 

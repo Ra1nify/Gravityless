@@ -63,7 +63,8 @@ public partial class AccountDetailsDialog
             CopyInstanceIdBtn.Visibility = Visibility.Collapsed;
         }
 
-        var (accessToken, refreshToken, expiry) = ProxyService.ExtractTokens(_account.CredentialBlob);
+        var refreshToken = _account.RefreshToken;
+        var expiry = _account.AccessTokenExpiresAt;
         bool hasRefresh = !string.IsNullOrWhiteSpace(refreshToken);
 
         if (hasRefresh)

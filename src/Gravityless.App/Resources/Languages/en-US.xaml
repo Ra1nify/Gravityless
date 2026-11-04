@@ -32,7 +32,7 @@
     <sys:String x:Key="CoreStatus_PathTooltip">Open core directory in File Explorer</sys:String>
     <sys:String x:Key="CoreStatus_UninstallBtn">Uninstall Core</sys:String>
     <sys:String x:Key="CloudUpdate_CheckBtn">Check Update</sys:String>
-    <sys:String x:Key="CloudUpdate_InstallBtn">Download &amp; Install</sys:String>
+    <sys:String x:Key="CloudUpdate_InstallBtn">Install</sys:String>
     <sys:String x:Key="CloudUpdate_InitialHint">Click Check for updates to see the latest version</sys:String>
 
     <!-- Instances View -->
@@ -326,7 +326,7 @@
     <sys:String x:Key="CloudUpdate_RunningConfirmTitle">Before upgrading</sys:String>
     <sys:String x:Key="CloudUpdate_RunningConfirmMessage">An instance is running. It must stop before deployment.</sys:String>
     <sys:String x:Key="CloudUpdate_Stage1Download">Stage 1/4: downloading installer to temp…</sys:String>
-    <sys:String x:Key="CloudUpdate_Stage1PercentFormat">Stage 1/4: downloading installer… {0}%</sys:String>
+    <sys:String x:Key="CloudUpdate_Stage1PercentFormat">Downloading installer… {0}%  {1}</sys:String>
     <sys:String x:Key="CloudUpdate_Stage2Verified">Stage 2/4: installer downloaded, SHA512 verified.</sys:String>
     <sys:String x:Key="CloudUpdate_Stage3Uninstall">Stage 3/4: removing old core and clearing its directory…</sys:String>
     <sys:String x:Key="CloudUpdate_Stage4Install">Stage 4/4: deploying managed portable core…</sys:String>
@@ -596,4 +596,21 @@
     <sys:String x:Key="Overview_AppUpdateErrInvalid">Update manifest is incomplete.</sys:String>
     <sys:String x:Key="Overview_AppUpdateErrUnknown">Update check failed.</sys:String>
     <sys:String x:Key="CloudUpdate_OpenLinkTip">Open the download link in your browser</sys:String>
+    <sys:String x:Key="Overview_AppUpdateProgressFormat">Downloading {0}%  {1}</sys:String>
+    <sys:String x:Key="CloudUpdate_InstallSourceTitle">Install core</sys:String>
+    <sys:String x:Key="CloudUpdate_InstallSourceMessage">Choose an installer source.</sys:String>
+    <sys:String x:Key="CloudUpdate_InstallSourceLocal">Install from local file</sys:String>
+    <sys:String x:Key="CloudUpdate_InstallSourceOnline">Download online</sys:String>
+    <sys:String x:Key="CloudUpdate_SelectInstallerTitle">Select installer</sys:String>
+    <sys:String x:Key="CloudUpdate_SideloadTitle">Local installer</sys:String>
+    <sys:String x:Key="Accounts_VerifyBtn">Verify credentials</sys:String>
+    <sys:String x:Key="Accounts_VerifyStatus">Verifying credential ownership…</sys:String>
+    <sys:String x:Key="Accounts_VerifyOkTitle">Verification passed</sys:String>
+    <sys:String x:Key="Accounts_VerifyOkMessage">Every account's credentials belong to it.</sys:String>
+    <sys:String x:Key="Accounts_VerifyFoundTitle">Credential mismatch found</sys:String>
+    <sys:String x:Key="Accounts_VerifyFoundFormat">{0} account(s) hold credentials that are not theirs. Capture them again:
+
+{1}</sys:String>
+    <sys:String x:Key="Accounts_VerifyNoIdentity">credential has no identity</sys:String>
+    <sys:String x:Key="Accounts_VerifyEmailMismatch">credential belongs to another account</sys:String>
 </ResourceDictionary>
