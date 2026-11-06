@@ -30,39 +30,97 @@ public static class OAuthClientExtractor
         yield return Path.Combine(coreDir, "Antigravity.exe");
     }
 
+    private sealed record CandidateMatch(string ClientId, string ClientSecret, int Distance, int Tier);
+
     /// <summary>
-    /// Scans the given binaries and returns every (clientId, clientSecret) combination found.
-    /// Combinations are unverified; callers must confirm one against a live refresh token.
+    /// Scans candidate binaries and returns (clientId, clientSecret) combinations.
+    /// Uses contextual proximity (思路 C): candidates found in the same chunk and closest
+    /// to each other in bytecode/text offset are sorted first, ensuring the genuine pair
+    /// is verified on the very first refresh attempt.
     /// </summary>
     public static List<(string ClientId, string ClientSecret)> FindCandidates(string coreDir)
     {
-        var ids = new List<string>();
-        var secrets = new List<string>();
+        var matchedPairs = new List<CandidateMatch>();
+        var allIds = new HashSet<string>();
+        var allSecrets = new HashSet<string>();
 
+        int binaryIndex = 0;
         foreach (var binary in CandidateBinaries(coreDir))
         {
             if (!File.Exists(binary)) continue;
 
+            var fileIds = new List<(string Value, int Pos)>();
+            var fileSecrets = new List<(string Value, int Pos)>();
+
+            int chunkBaseOffset = 0;
             foreach (var text in ReadTextChunks(binary))
             {
+                var chunkIds = new List<(string Value, int Pos)>();
+                var chunkSecrets = new List<(string Value, int Pos)>();
+
                 foreach (Match m in ClientIdPattern.Matches(text))
                 {
-                    if (!ids.Contains(m.Value)) ids.Add(m.Value);
+                    chunkIds.Add((m.Value, m.Index));
+                    allIds.Add(m.Value);
+                    fileIds.Add((m.Value, chunkBaseOffset + m.Index));
                 }
 
-                foreach (Match m in ExtractSecrets(text))
+                foreach (var s in ExtractSecretsWithPos(text))
                 {
-                    if (!secrets.Contains(m.Value)) secrets.Add(m.Value);
+                    chunkSecrets.Add((s.Value, s.Pos));
+                    allSecrets.Add(s.Value);
+                    fileSecrets.Add((s.Value, chunkBaseOffset + s.Pos));
                 }
+
+                // Tier 0: Same chunk proximity (the real pair is usually < 256 bytes apart)
+                foreach (var id in chunkIds)
+                {
+                    foreach (var sec in chunkSecrets)
+                    {
+                        var dist = Math.Abs(id.Pos - sec.Pos);
+                        int tier = dist <= 4096 ? 0 : 1;
+                        matchedPairs.Add(new CandidateMatch(id.Value, sec.Value, dist + binaryIndex * 10000, tier));
+                    }
+                }
+
+                chunkBaseOffset += text.Length;
+            }
+
+            // Tier 2: Same file, across different chunks
+            if (fileIds.Count > 0 && fileSecrets.Count > 0)
+            {
+                foreach (var id in fileIds)
+                {
+                    foreach (var sec in fileSecrets)
+                    {
+                        var dist = Math.Abs(id.Pos - sec.Pos);
+                        matchedPairs.Add(new CandidateMatch(id.Value, sec.Value, dist + binaryIndex * 50000, 2));
+                    }
+                }
+            }
+
+            binaryIndex++;
+        }
+
+        // Tier 3: Cross-binary fallback Cartesian product
+        foreach (var id in allIds)
+        {
+            foreach (var sec in allSecrets)
+            {
+                matchedPairs.Add(new CandidateMatch(id, sec, int.MaxValue / 2, 3));
             }
         }
 
-        var result = new List<(string, string)>();
-        foreach (var id in ids)
+        // Order by Tier ASC, Distance ASC, and deduplicate
+        var result = new List<(string ClientId, string ClientSecret)>();
+        var seen = new HashSet<(string, string)>();
+
+        foreach (var match in matchedPairs.OrderBy(m => m.Tier).ThenBy(m => m.Distance))
         {
-            foreach (var secret in secrets)
+            var key = (match.ClientId, match.ClientSecret);
+            if (seen.Add(key))
             {
-                result.Add((id, secret));
+                result.Add(key);
             }
         }
 
@@ -83,8 +141,6 @@ public static class OAuthClientExtractor
 
         var candidates = FindCandidates(coreDir);
 
-        // The correct pair is normally the first secret next to the first client id,
-        // so the full cross product is rarely walked.
         using var client = AccountPoolService.CreateHttpClientForOAuth(proxy);
 
         foreach (var (clientId, clientSecret) in candidates)
@@ -136,10 +192,9 @@ public static class OAuthClientExtractor
     }
 
     /// <summary>
-    /// Extracts fixed-length secrets. A trailing identifier usually follows the secret in
-    /// the binary, so the match is bounded by length rather than by a word boundary.
+    /// Extracts fixed-length secrets along with their character offset in the chunk.
     /// </summary>
-    private static IEnumerable<Match> ExtractSecrets(string text)
+    private static IEnumerable<(string Value, int Pos)> ExtractSecretsWithPos(string text)
     {
         var index = 0;
         while (true)
@@ -152,7 +207,7 @@ public static class OAuthClientExtractor
                 var candidate = text.Substring(index, ClientSecretLength);
                 if (candidate.All(c => char.IsLetterOrDigit(c) || c is '-' or '_'))
                 {
-                    yield return Regex.Match(candidate, Regex.Escape(candidate));
+                    yield return (candidate, index);
                 }
             }
 

@@ -95,6 +95,9 @@
     <sys:String x:Key="Proxy_BypassLabel">直连白名单:</sys:String>
     <sys:String x:Key="Proxy_TestBtn">连通性测试 (双向探测 Gemini / Antigravity)</sys:String>
     <sys:String x:Key="Proxy_SaveBtn">保存并应用</sys:String>
+    <sys:String x:Key="Proxy_AuthCardTitle">身份验证 (可选)</sys:String>
+    <sys:String x:Key="Proxy_UsernameLabel">用户名:</sys:String>
+    <sys:String x:Key="Proxy_PasswordLabel">密码:</sys:String>
 
     <!-- Accounts View -->
     <sys:String x:Key="Accounts_CaptureBtn">沙盒捕获账号</sys:String>

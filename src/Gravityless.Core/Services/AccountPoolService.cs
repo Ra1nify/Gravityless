@@ -1154,17 +1154,7 @@ public class AccountPoolService
             psi.EnvironmentVariables["APPDATA"] = tempRoaming;
             psi.EnvironmentVariables["LOCALAPPDATA"] = tempLocal;
 
-            if (proxy != null && proxy.Mode == ProxyMode.Manual)
-            {
-                var proxyUrl = $"{proxy.Protocol.ToString().ToLower()}://{proxy.Host}:{proxy.Port}";
-                psi.EnvironmentVariables["ALL_PROXY"] = proxyUrl;
-                psi.EnvironmentVariables["HTTP_PROXY"] = proxyUrl;
-                psi.EnvironmentVariables["HTTPS_PROXY"] = proxyUrl;
-                if (!string.IsNullOrEmpty(proxy.BypassList))
-                {
-                    psi.EnvironmentVariables["NO_PROXY"] = proxy.BypassList;
-                }
-            }
+            ProxyService.ApplyProxyToProcess(psi, proxy);
 
             // Register the route before starting the process so callbacks always resolve.
             WriteCaptureRoute(routeFile, antigravityExePath, tempUserData);

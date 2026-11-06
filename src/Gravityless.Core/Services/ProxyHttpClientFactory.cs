@@ -76,7 +76,31 @@ public static class ProxyHttpClientFactory
                 return;
 
             default:
-                // System: let SocketsHttpHandler read the OS proxy. Bypass is handled by the OS.
+                // System: inspect WinINet registry for explicit endpoint and apply credentials
+                var sys = ProxyService.GetSystemProxyDetails();
+                if (sys.Enabled && !string.IsNullOrWhiteSpace(sys.Host) && sys.Port > 0)
+                {
+                    var sysScheme = sys.Protocol switch
+                    {
+                        ProxyProtocol.Socks5 => "socks5",
+                        ProxyProtocol.Https => "https",
+                        _ => "http",
+                    };
+                    var sysUri = $"{sysScheme}://{sys.Host}:{sys.Port}";
+                    var sysWebProxy = new WebProxy(sysUri);
+                    if (!string.IsNullOrWhiteSpace(config?.Username))
+                    {
+                        sysWebProxy.Credentials = new NetworkCredential(config.Username, config.Password);
+                    }
+                    ApplyBypass(sysWebProxy, sys.Bypass);
+                    if (!string.IsNullOrWhiteSpace(config?.BypassList))
+                    {
+                        ApplyBypass(sysWebProxy, config.BypassList);
+                    }
+                    handler.Proxy = sysWebProxy;
+                    handler.UseProxy = true;
+                    return;
+                }
                 handler.UseProxy = true;
                 return;
         }
@@ -86,7 +110,7 @@ public static class ProxyHttpClientFactory
     {
         if (string.IsNullOrWhiteSpace(bypassList)) return;
 
-        foreach (var entry in bypassList.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        foreach (var entry in bypassList.Split(new[] { ';', ',' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
             // WebProxy understands "<local>" as "no proxy for bare hostnames"; other entries
             // are treated as regex fragments. Escape them so dots and dashes stay literal.
@@ -96,7 +120,8 @@ public static class ProxyHttpClientFactory
             }
             else
             {
-                proxy.BypassArrayList.Add(Regex.Escape(entry));
+                var pattern = "^" + Regex.Escape(entry).Replace(@"\*", ".*") + "$";
+                proxy.BypassArrayList.Add(pattern);
             }
         }
     }

@@ -498,38 +498,55 @@ public partial class MainWindow
         ProxyHostBox.Text = _currentProxyConfig.Host;
         ProxyPortBox.Text = _currentProxyConfig.Port.ToString();
         ProxyBypassBox.Text = _currentProxyConfig.BypassList;
-        ManualProxyCard.Visibility = _currentProxyConfig.Mode == ProxyMode.Manual ? Visibility.Visible : Visibility.Collapsed;
+        ProxyUsernameBox.Text = _currentProxyConfig.Username ?? string.Empty;
+        ProxyPasswordBox.Password = _currentProxyConfig.Password ?? string.Empty;
+        UpdateProxyCardsVisibility();
     }
 
     private void OnProxyModeRadioChanged(object sender, RoutedEventArgs e)
     {
-        if (ManualProxyCard == null) return;
-        ManualProxyCard.Visibility = ProxyManualRadio.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+        UpdateProxyCardsVisibility();
     }
 
-    private void SaveCurrentProxyConfigFromUi()
+    private void UpdateProxyCardsVisibility()
     {
-        _currentProxyConfig.Mode = ProxyDirectRadio.IsChecked == true 
-            ? ProxyMode.Direct 
-            : ProxySystemRadio.IsChecked == true 
-                ? ProxyMode.System 
-                : ProxyMode.Manual;
-        _currentProxyConfig.Protocol = ProxyProtocolCombo.SelectedIndex switch
+        if (ManualProxyCard == null || ProxyAuthCard == null) return;
+        var isManual = ProxyManualRadio.IsChecked == true;
+        var isSystem = ProxySystemRadio.IsChecked == true;
+
+        ManualProxyCard.Visibility = isManual ? Visibility.Visible : Visibility.Collapsed;
+        ProxyAuthCard.Visibility = (isManual || isSystem) ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private ProxyConfig ReadProxyConfigFromUi()
+    {
+        var config = new ProxyConfig
         {
-            1 => ProxyProtocol.Http,
-            2 => ProxyProtocol.Https,
-            _ => ProxyProtocol.Socks5
+            Mode = ProxyDirectRadio.IsChecked == true
+                ? ProxyMode.Direct
+                : ProxySystemRadio.IsChecked == true
+                    ? ProxyMode.System
+                    : ProxyMode.Manual,
+            Protocol = ProxyProtocolCombo.SelectedIndex switch
+            {
+                1 => ProxyProtocol.Http,
+                2 => ProxyProtocol.Https,
+                _ => ProxyProtocol.Socks5
+            },
+            Host = ProxyHostBox.Text.Trim(),
+            BypassList = ProxyBypassBox.Text.Trim(),
+            Username = ProxyUsernameBox.Text.Trim(),
+            Password = ProxyPasswordBox.Password
         };
-        _currentProxyConfig.Host = ProxyHostBox.Text.Trim();
         if (int.TryParse(ProxyPortBox.Text.Trim(), out var port))
         {
-            _currentProxyConfig.Port = port;
+            config.Port = port;
         }
-        _currentProxyConfig.BypassList = ProxyBypassBox.Text.Trim();
-        var dir = Path.GetDirectoryName(_proxyConfigFile)!;
-        Directory.CreateDirectory(dir);
-        var json = JsonSerializer.Serialize(_currentProxyConfig, new JsonSerializerOptions { WriteIndented = true });
-        File.WriteAllText(_proxyConfigFile, json);
+        else
+        {
+            config.Port = _currentProxyConfig?.Port ?? 3993;
+        }
+        return config;
     }
 
     private void RefreshEngineStatus()
@@ -1049,7 +1066,6 @@ public partial class MainWindow
 
     private async Task StartInstanceByIdAsync(string instId)
     {
-        SaveCurrentProxyConfigFromUi();
 
         // Launching an account that differs from whoever holds the shared credential slot can
         // leave both instances refreshing against the wrong token. Confirm before rotating.
@@ -1457,7 +1473,6 @@ public partial class MainWindow
                 this);
             return;
         }
-        SaveCurrentProxyConfigFromUi();
         AccountsStatusStrip.ShowStep(1, 3, LocalizationService.GetString("Accounts_CaptureStage1", "正在启动登录窗口..."));
         try
         {
@@ -1504,8 +1519,7 @@ public partial class MainWindow
         {
             var acc = _accountPool.Accounts.FirstOrDefault(a => a.Id == accId);
             if (acc == null) return;
-            SaveCurrentProxyConfigFromUi();
-            var dlg = new AccountDetailsDialog(acc, _accountPool, _instanceService, _currentProxyConfig)
+                var dlg = new AccountDetailsDialog(acc, _accountPool, _instanceService, _currentProxyConfig)
             {
                 Owner = this
             };
@@ -1518,8 +1532,7 @@ public partial class MainWindow
     {
         if (sender is FrameworkElement { Tag: string accId })
         {
-            SaveCurrentProxyConfigFromUi();
-            AccountsStatusStrip.ShowBusy(LocalizationService.GetString("Accounts_RefreshStatus", "刷新 Token…"));
+                AccountsStatusStrip.ShowBusy(LocalizationService.GetString("Accounts_RefreshStatus", "刷新 Token…"));
             try
             {
                 var (success, msg) = await _accountPool.RefreshTokenAsync(accId, _currentProxyConfig);
@@ -1546,7 +1559,6 @@ public partial class MainWindow
 
     private async void OnRefreshAllTokensClicked(object sender, RoutedEventArgs e)
     {
-        SaveCurrentProxyConfigFromUi();
         AccountsStatusStrip.ShowBusy(LocalizationService.GetString("Accounts_RefreshAllStatus", "批量刷新 Token…"));
         try
         {
@@ -1628,7 +1640,6 @@ public partial class MainWindow
     /// </summary>
     private async void OnVerifyCredentialsClicked(object sender, RoutedEventArgs e)
     {
-        SaveCurrentProxyConfigFromUi();
         AccountsStatusStrip.ShowBusy(LocalizationService.GetString("Accounts_VerifyStatus", "校验凭据归属…"));
         try
         {
@@ -1712,13 +1723,15 @@ public partial class MainWindow
 
     private async void OnTestProxyClicked(object sender, RoutedEventArgs e)
     {
-        SaveCurrentProxyConfigFromUi();
+        // Detached draft configuration from current form state
+        var draftConfig = ReadProxyConfigFromUi();
 
         ProxyTestResultGrid.Visibility = Visibility.Visible;
         ResetProxyTestGrid();
         ProxyRegionValue.Text = LocalizationService.GetString("Proxy_TestingStatus", "测试连接…");
 
-        var result = await _proxyService.TestConnectionAsync(_currentProxyConfig, _accountPool.Accounts, _accountPool);
+        // Dynamic test using draftConfig without saving to disk or touching global state
+        var result = await _proxyService.TestConnectionAsync(draftConfig, _accountPool.Accounts, _accountPool);
 
         ProxyRegionValue.Text = result.FormattedLocation;
 
@@ -1789,11 +1802,26 @@ public partial class MainWindow
 
     private void OnSaveProxyClicked(object sender, RoutedEventArgs e)
     {
-        SaveCurrentProxyConfigFromUi();
-        ModernDialog.ShowSuccess(
-            LocalizationService.GetString("Proxy_SavedTitle", "保存成功"),
-            LocalizationService.GetString("Proxy_SavedMessage", "已保存。新启动的实例将使用该代理。"),
-            this);
+        _currentProxyConfig = ReadProxyConfigFromUi();
+        try
+        {
+            var dir = Path.GetDirectoryName(_proxyConfigFile)!;
+            Directory.CreateDirectory(dir);
+            var json = JsonSerializer.Serialize(_currentProxyConfig, new JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText(_proxyConfigFile, json);
+
+            ModernDialog.ShowSuccess(
+                LocalizationService.GetString("Proxy_SavedTitle", "保存成功"),
+                LocalizationService.GetString("Proxy_SavedMessage", "新启动的实例将使用该代理。"),
+                this);
+        }
+        catch (Exception ex)
+        {
+            ModernDialog.ShowError(
+                LocalizationService.GetString("Common_Error", "错误"),
+                ex.Message,
+                this);
+        }
     }
 
     // Overview update operations share one TTL-guarded exclusive lock: a concurrent request is
@@ -2471,7 +2499,7 @@ public partial class MainWindow
                 LocalizationService.GetString("CloudUpdate_Stage4Title", "部署核心"),
                 LocalizationService.GetString("CloudUpdate_Stage4Install", "正在部署 Managed 便携核心…"));
             TouchUpdateOp();
-            await _engineService.InstallToManagedCoreAsync(installerPath, cancellationToken);
+            await _engineService.InstallToManagedCoreAsync(installerPath!, cancellationToken);
             InstallProgressBar.IsIndeterminate = false;
             InstallProgressBar.Value = 100;
             SetUpdateStage(
@@ -3215,18 +3243,21 @@ public class InstanceDisplayItem
 
     public bool IsRunning => _profile.IsRunning;
 
-    public string PortText
+    public string PortText => string.Empty;
+    /*
+    public string ObsoletePortText
     {
         get
         {
             if (_profile.IsRunning)
             {
                 var label = LocalizationService.GetString("Instances_PortLabel", "端口:");
-                return $"{label} {_profile.ListeningPort ?? 0}";
+                return string.Empty;
             }
             return LocalizationService.GetString("Instances_NoPort", "未分配端口");
         }
     }
+    */
     public bool ShowStart => !_profile.IsRunning;
     public bool ShowStop => _profile.IsRunning;
 

@@ -386,7 +386,7 @@ public class EngineService : IDisposable
         }
         try
         {
-            MicaPatchService.ApplyMicaPatch(exePath, out _);
+            PatchService.ApplyPatch(exePath, out _);
         }
         catch { }
     }

@@ -134,7 +134,7 @@ public class InstanceService
                     {
                         inst.IsRunning = false;
                         inst.ProcessId = null;
-                        inst.ListeningPort = null;
+
                         ReconcileAndHarvestProjects(inst);
                     }
                     _instances.AddRange(list);
@@ -530,11 +530,11 @@ public class InstanceService
             // Re-inject when not unpacked, or when the injected stamp is stale and a .stock exists.
             var stockJs = Path.Combine(appDist, "utils.js.stock");
             var needsMicaPatch = !Directory.Exists(appDist)
-                || (!MicaPatchService.IsMicaPatchCurrent(managedExe) && File.Exists(stockJs));
+                || !PatchService.IsPatchCurrent(managedExe);
 
             if (needsMicaPatch && (File.Exists(asar) || File.Exists(asarStock) || Directory.Exists(appDist)))
             {
-                MicaPatchService.ApplyMicaPatch(managedExe, _daemon.MicaMaterial, _daemon.MicaOpacity, out _);
+                PatchService.ApplyPatch(managedExe, _daemon.MicaMaterial, _daemon.MicaOpacity, out _);
             }
 
             // Swap app.asar to app.asar.stock so Electron loads resources/app.
@@ -549,17 +549,8 @@ public class InstanceService
         }
         catch { }
 
-        if (proxy.Mode == ProxyMode.Manual)
-        {
-            var proxyUrl = $"{proxy.Protocol.ToString().ToLower()}://{proxy.Host}:{proxy.Port}";
-            psi.EnvironmentVariables["ALL_PROXY"] = proxyUrl;
-            psi.EnvironmentVariables["HTTP_PROXY"] = proxyUrl;
-            psi.EnvironmentVariables["HTTPS_PROXY"] = proxyUrl;
-            if (!string.IsNullOrEmpty(proxy.BypassList))
-            {
-                psi.EnvironmentVariables["NO_PROXY"] = proxy.BypassList;
-            }
-        }
+        ProxyService.ApplyProxyToProcess(psi, proxy);
+
 
         try
         {
@@ -765,7 +756,7 @@ public class InstanceService
 
         inst.IsRunning = false;
         inst.ProcessId = null;
-        inst.ListeningPort = null;
+
         SaveInstances();
         InstanceStateChanged?.Invoke(inst);
     }

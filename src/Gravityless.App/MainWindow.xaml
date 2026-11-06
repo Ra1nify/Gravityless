@@ -394,7 +394,7 @@
                                                         </Style>
                                                     </TextBlock.Style>
                                                 </TextBlock>
-                                                <TextBlock Text="{Binding PortText}" FontSize="11" Opacity="0.55" Margin="8,0,0,0" VerticalAlignment="Center"/>
+
                                             </StackPanel>
                                             <TextBlock Text="{Binding BoundProjectText}" FontSize="11" Opacity="0.65" TextTrimming="CharacterEllipsis" Margin="0,3,0,0"/>
                                         </StackPanel>
@@ -774,6 +774,34 @@
                                         </Grid.ColumnDefinitions>
                                         <TextBlock Text="{DynamicResource Proxy_BypassLabel}" VerticalAlignment="Center" Opacity="0.8"/>
                                         <ui:TextBox Grid.Column="1" x:Name="ProxyBypassBox" Text="localhost;127.0.0.1;&lt;local&gt;"/>
+                                    </Grid>
+                                </StackPanel>
+                            </ui:Card>
+
+                            <!-- Shown for both System and Manual modes: proxy authentication credentials (optional) -->
+                            <ui:Card x:Name="ProxyAuthCard" Margin="0,0,0,16" Padding="18">
+                                <StackPanel>
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                                        <ui:SymbolIcon Symbol="Password24" FontSize="16" Foreground="{DynamicResource BrandAccentBrush}" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                                        <TextBlock Text="{DynamicResource Proxy_AuthCardTitle}" FontWeight="Bold" FontSize="15" VerticalAlignment="Center"/>
+                                    </StackPanel>
+
+                                    <Grid Margin="0,0,0,12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="120"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="{DynamicResource Proxy_UsernameLabel}" VerticalAlignment="Center" Opacity="0.8"/>
+                                        <ui:TextBox AutomationProperties.AutomationId="ProxyUsernameBox" Grid.Column="1" x:Name="ProxyUsernameBox"/>
+                                    </Grid>
+
+                                    <Grid Margin="0,0,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="120"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="{DynamicResource Proxy_PasswordLabel}" VerticalAlignment="Center" Opacity="0.8"/>
+                                        <ui:PasswordBox AutomationProperties.AutomationId="ProxyPasswordBox" Grid.Column="1" x:Name="ProxyPasswordBox"/>
                                     </Grid>
                                 </StackPanel>
                             </ui:Card>

@@ -11,8 +11,8 @@
   <Import Project="version.props" Condition="Exists('version.props')" />
 
   <PropertyGroup>
-    <Version Condition="'$(Version)' == ''">2.29.0.01</Version>
-    <VersionCode Condition="'$(VersionCode)' == ''">229001</VersionCode>
+    <Version Condition="'$(Version)' == ''">2.29.0.001</Version>
+    <VersionCode Condition="'$(VersionCode)' == ''">2290001</VersionCode>
   </PropertyGroup>
 
 </Project>

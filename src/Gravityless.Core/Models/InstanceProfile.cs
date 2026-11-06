@@ -43,6 +43,5 @@ public class InstanceProfile
     // Runtime state
     public bool IsRunning { get; set; }
     public int? ProcessId { get; set; }
-    public int? ListeningPort { get; set; }
     public DateTime? StartedAt { get; set; }
 }

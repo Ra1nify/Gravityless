@@ -95,6 +95,9 @@
     <sys:String x:Key="Proxy_BypassLabel">Bypass List:</sys:String>
     <sys:String x:Key="Proxy_TestBtn">Test Connection (Probe Gemini &amp; Antigravity)</sys:String>
     <sys:String x:Key="Proxy_SaveBtn">Save and apply</sys:String>
+    <sys:String x:Key="Proxy_AuthCardTitle">Authentication (Optional)</sys:String>
+    <sys:String x:Key="Proxy_UsernameLabel">Username:</sys:String>
+    <sys:String x:Key="Proxy_PasswordLabel">Password:</sys:String>
 
     <!-- Accounts View -->
     <sys:String x:Key="Accounts_CaptureBtn">Capture account</sys:String>

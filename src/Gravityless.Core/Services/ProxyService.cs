@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Microsoft.Win32;
 using Gravityless.Core.Models;
 
 namespace Gravityless.Core.Services;
@@ -156,7 +157,27 @@ public class ProxyService
             }
             else
             {
-                handler.UseProxy = true; // System proxy
+                // System proxy: inspect WinINet registry for explicit endpoint and apply credentials
+                var sys = GetSystemProxyDetails();
+                if (sys.Enabled && !string.IsNullOrWhiteSpace(sys.Host) && sys.Port > 0)
+                {
+                    var proxyUri = $"{sys.Protocol.ToString().ToLowerInvariant()}://{sys.Host}:{sys.Port}";
+                    var webProxy = new WebProxy(proxyUri);
+                    if (!string.IsNullOrEmpty(config.Username))
+                    {
+                        webProxy.Credentials = new NetworkCredential(config.Username, config.Password);
+                    }
+                    handler.Proxy = webProxy;
+                    handler.UseProxy = true;
+                }
+                else
+                {
+                    handler.UseProxy = true;
+                    if (!string.IsNullOrEmpty(config.Username))
+                    {
+                        handler.DefaultProxyCredentials = new NetworkCredential(config.Username, config.Password);
+                    }
+                }
             }
 
             // Built per probe so each run uses its own proxy handler; disposed below.
@@ -501,8 +522,209 @@ public class ProxyService
             }
             root["proxy"] = proxyObj;
         }
+        else if (config.Mode == ProxyMode.System)
+        {
+            var sys = GetSystemProxyDetails();
+            if (sys.Enabled && !string.IsNullOrWhiteSpace(sys.Host) && sys.Port > 0)
+            {
+                var proxyObj = new JsonObject
+                {
+                    ["type"] = sys.Protocol.ToString().ToLowerInvariant(),
+                    ["host"] = sys.Host,
+                    ["port"] = sys.Port
+                };
+                if (!string.IsNullOrEmpty(config.Username))
+                {
+                    proxyObj["username"] = config.Username;
+                    proxyObj["password"] = config.Password;
+                }
+                root["proxy"] = proxyObj;
+            }
+        }
 
         var options = new JsonSerializerOptions { WriteIndented = true };
         File.WriteAllText(configPath, root.ToJsonString(options));
     }
+
+    /// <summary>
+    /// Reads Windows system proxy configuration from the WinINet registry.
+    /// </summary>
+    public static SystemProxyDetails GetSystemProxyDetails()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return new SystemProxyDetails(false, null, null, 0, ProxyProtocol.Http, null);
+        }
+
+        try
+        {
+            using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Internet Settings");
+            if (key == null) return new SystemProxyDetails(false, null, null, 0, ProxyProtocol.Http, null);
+
+            var proxyEnable = key.GetValue("ProxyEnable");
+            var enabled = proxyEnable is int val && val == 1;
+            var proxyServer = key.GetValue("ProxyServer") as string;
+            var proxyOverride = key.GetValue("ProxyOverride") as string;
+
+            if (!enabled || string.IsNullOrWhiteSpace(proxyServer))
+            {
+                return new SystemProxyDetails(false, proxyServer, null, 0, ProxyProtocol.Http, proxyOverride);
+            }
+
+            string? targetEndpoint = null;
+            var protocol = ProxyProtocol.Http;
+
+            if (proxyServer.Contains('='))
+            {
+                var parts = proxyServer.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                var httpPart = parts.FirstOrDefault(p => p.StartsWith("http=", StringComparison.OrdinalIgnoreCase));
+                var httpsPart = parts.FirstOrDefault(p => p.StartsWith("https=", StringComparison.OrdinalIgnoreCase));
+                var socksPart = parts.FirstOrDefault(p => p.StartsWith("socks=", StringComparison.OrdinalIgnoreCase));
+
+                if (httpPart != null)
+                {
+                    targetEndpoint = httpPart["http=".Length..].Trim();
+                    protocol = ProxyProtocol.Http;
+                }
+                else if (httpsPart != null)
+                {
+                    targetEndpoint = httpsPart["https=".Length..].Trim();
+                    protocol = ProxyProtocol.Https;
+                }
+                else if (socksPart != null)
+                {
+                    targetEndpoint = socksPart["socks=".Length..].Trim();
+                    protocol = ProxyProtocol.Socks5;
+                }
+                else if (parts.Length > 0)
+                {
+                    var kv = parts[0].Split('=', 2);
+                    targetEndpoint = kv.Length == 2 ? kv[1] : kv[0];
+                }
+            }
+            else
+            {
+                targetEndpoint = proxyServer.Trim();
+            }
+
+            if (string.IsNullOrWhiteSpace(targetEndpoint))
+            {
+                return new SystemProxyDetails(false, proxyServer, null, 0, ProxyProtocol.Http, proxyOverride);
+            }
+
+            if (targetEndpoint.Contains("://"))
+            {
+                if (Uri.TryCreate(targetEndpoint, UriKind.Absolute, out var uri))
+                {
+                    var detectedProto = uri.Scheme.ToLowerInvariant() switch
+                    {
+                        "socks5" => ProxyProtocol.Socks5,
+                        "https" => ProxyProtocol.Https,
+                        _ => ProxyProtocol.Http
+                    };
+                    return new SystemProxyDetails(true, proxyServer, uri.Host, uri.Port, detectedProto, proxyOverride);
+                }
+            }
+
+            var lastColon = targetEndpoint.LastIndexOf(':');
+            if (lastColon > 0 && int.TryParse(targetEndpoint[(lastColon + 1)..], out var port))
+            {
+                var host = targetEndpoint[..lastColon].Trim('[', ']');
+                return new SystemProxyDetails(true, proxyServer, host, port, protocol, proxyOverride);
+            }
+
+            return new SystemProxyDetails(true, proxyServer, targetEndpoint, 80, protocol, proxyOverride);
+        }
+        catch
+        {
+            return new SystemProxyDetails(false, null, null, 0, ProxyProtocol.Http, null);
+        }
+    }
+
+    /// <summary>
+    /// Configures environment variables on a ProcessStartInfo for Antigravity and language_server.exe.
+    /// Handles Direct (clean isolation), Manual, and System proxy modes with optional credentials.
+    /// </summary>
+    public static void ApplyProxyToProcess(ProcessStartInfo psi, ProxyConfig? proxy)
+    {
+        if (proxy == null || proxy.Mode == ProxyMode.Direct)
+        {
+            // Direct mode: Clean direct connection matching stock Antigravity.
+            ClearProxyEnvironmentVariables(psi);
+            return;
+        }
+
+        string? proxyUrl = null;
+        string? bypassList = proxy.BypassList;
+
+        if (proxy.Mode == ProxyMode.Manual)
+        {
+            var auth = (!string.IsNullOrEmpty(proxy.Username))
+                ? $"{Uri.EscapeDataString(proxy.Username)}:{Uri.EscapeDataString(proxy.Password)}@"
+                : "";
+            var scheme = proxy.Protocol.ToString().ToLowerInvariant();
+            proxyUrl = $"{scheme}://{auth}{proxy.Host}:{proxy.Port}";
+        }
+        else if (proxy.Mode == ProxyMode.System)
+        {
+            var sys = GetSystemProxyDetails();
+            if (sys.Enabled && !string.IsNullOrWhiteSpace(sys.Host) && sys.Port > 0)
+            {
+                var auth = (!string.IsNullOrEmpty(proxy.Username))
+                    ? $"{Uri.EscapeDataString(proxy.Username)}:{Uri.EscapeDataString(proxy.Password)}@"
+                    : "";
+                var scheme = sys.Protocol.ToString().ToLowerInvariant();
+                proxyUrl = $"{scheme}://{auth}{sys.Host}:{sys.Port}";
+                if (!string.IsNullOrWhiteSpace(sys.Bypass))
+                {
+                    bypassList = string.IsNullOrWhiteSpace(bypassList)
+                        ? sys.Bypass
+                        : $"{sys.Bypass};{bypassList}";
+                }
+            }
+        }
+
+        if (!string.IsNullOrEmpty(proxyUrl))
+        {
+            psi.EnvironmentVariables["ALL_PROXY"] = proxyUrl;
+            psi.EnvironmentVariables["HTTP_PROXY"] = proxyUrl;
+            psi.EnvironmentVariables["HTTPS_PROXY"] = proxyUrl;
+            psi.EnvironmentVariables["all_proxy"] = proxyUrl;
+            psi.EnvironmentVariables["http_proxy"] = proxyUrl;
+            psi.EnvironmentVariables["https_proxy"] = proxyUrl;
+
+            // Loopback must always be excluded from proxy to prevent local IPC routing failure
+            var finalBypass = string.IsNullOrWhiteSpace(bypassList)
+                ? "localhost,127.0.0.1,::1,<-loopback>"
+                : $"localhost,127.0.0.1,::1,<-loopback>,{bypassList.Replace(';', ',')}";
+
+            psi.EnvironmentVariables["NO_PROXY"] = finalBypass;
+            psi.EnvironmentVariables["no_proxy"] = finalBypass;
+        }
+        else
+        {
+            ClearProxyEnvironmentVariables(psi);
+        }
+    }
+
+    private static void ClearProxyEnvironmentVariables(ProcessStartInfo psi)
+    {
+        psi.EnvironmentVariables.Remove("ALL_PROXY");
+        psi.EnvironmentVariables.Remove("all_proxy");
+        psi.EnvironmentVariables.Remove("HTTP_PROXY");
+        psi.EnvironmentVariables.Remove("http_proxy");
+        psi.EnvironmentVariables.Remove("HTTPS_PROXY");
+        psi.EnvironmentVariables.Remove("https_proxy");
+        psi.EnvironmentVariables.Remove("NO_PROXY");
+        psi.EnvironmentVariables.Remove("no_proxy");
+    }
 }
+
+public record SystemProxyDetails(
+    bool Enabled,
+    string? Server,
+    string? Host,
+    int Port,
+    ProxyProtocol Protocol,
+    string? Bypass
+);
