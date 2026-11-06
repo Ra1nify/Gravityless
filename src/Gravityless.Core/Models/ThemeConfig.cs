@@ -10,7 +10,7 @@ public class ThemeConfig
     /// <summary>"auto" (follow system) / "light" / "dark".</summary>
     public string ThemeMode { get; set; } = "auto";
 
-    /// <summary>New UX preset: "" (off) / alabaster / tahoe / atelier / studio / planes.</summary>
+    /// <summary>New UX preset: "" (off) / "onyx" (official Antigravity dark skin).</summary>
     public string NewUxTheme { get; set; } = string.Empty;
 
     /// <summary>Tint hover/selection states with the system accent color.</summary>

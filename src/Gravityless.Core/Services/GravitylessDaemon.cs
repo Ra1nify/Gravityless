@@ -24,7 +24,7 @@ public class GravitylessDaemon : IDisposable
     public string MicaMaterial { get; set; } = "mica"; // "mica" | "tabbed" | "acrylic" | "none"
     /// <summary>"auto" (follow system) / "light" / "dark".</summary>
     public string ThemeMode { get; set; } = "auto";
-    /// <summary>New UX preset: "" (off) / alabaster / tahoe / atelier / studio / planes.</summary>
+    /// <summary>New UX preset: "" (off) / "onyx" (official Antigravity dark skin).</summary>
     public string NewUxTheme { get; set; } = string.Empty;
     public bool AccentInteraction { get; set; } = true;
 
@@ -49,7 +49,7 @@ public class GravitylessDaemon : IDisposable
             _ => "mica"
         };
 
-    private static readonly string[] NewUxThemes = ["alabaster", "tahoe", "atelier", "studio", "planes"];
+    private static readonly string[] NewUxThemes = ["onyx"];
 
     /// <summary>Returns "" for anything outside the preset whitelist.</summary>
     public static string NormalizeNewUxTheme(string? theme)

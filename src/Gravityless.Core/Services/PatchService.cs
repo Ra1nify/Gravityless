@@ -15,7 +15,7 @@ public class PatchService
     /// Version stamp for the runtime bootstrap script. Bump whenever template semantics change
     /// to trigger re-generation of gravityless-bootstrap.js.
     /// </summary>
-    private const int PatchVersion = 52;
+    private const int PatchVersion = 53;
     private static readonly string PatchStamp = $"/* GRAVITYLESS_BOOTSTRAP_VERSION: {PatchVersion} */";
 
     /// <summary>Unpacks an Electron ASAR archive into outputDir using only managed code.</summary>
@@ -826,8 +826,8 @@ ${blurCss}
     function applyNewUx(wc) {
         try {
             const setCode = currentNewUx
-                ? 'var b=document.body;if(b){b.setAttribute("data-agy-theme","1");b.setAttribute("data-newux-theme",' + JSON.stringify(currentNewUx) + ');}'
-                : 'var b=document.body;if(b){b.removeAttribute("data-agy-theme");b.removeAttribute("data-newux-theme");}';
+                ? 'var b=document.body;if(b){b.setAttribute("data-agy-theme","1");b.setAttribute("data-agy-home-glow","1");b.setAttribute("data-newux-theme",' + JSON.stringify(currentNewUx) + ');}'
+                : 'var b=document.body;if(b){b.removeAttribute("data-agy-theme");b.removeAttribute("data-agy-home-glow");b.removeAttribute("data-newux-theme");}';
             wc.executeJavaScript(setCode).catch(function () {});
         } catch (_) {}
     }

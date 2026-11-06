@@ -517,11 +517,7 @@
     <sys:String x:Key="Appearance_MaterialAcrylicUnsupported">需要 Windows 11 22H2 及以上版本</sys:String>
     <sys:String x:Key="Appearance_NewUxLabel">Antigravity 皮肤</sys:String>
     <sys:String x:Key="Appearance_NewUxOff">关闭（默认）</sys:String>
-    <sys:String x:Key="Appearance_NewUxAlabaster">Alabaster（输入区高不透明）</sys:String>
-    <sys:String x:Key="Appearance_NewUxTahoe">Tahoe（壳层彩色雾，削弱 Mica）</sys:String>
-    <sys:String x:Key="Appearance_NewUxAtelier">Atelier（圆角/描边微调）</sys:String>
-    <sys:String x:Key="Appearance_NewUxStudio">Studio（最小改动）</sys:String>
-    <sys:String x:Key="Appearance_NewUxPlanes">Planes（侧栏行实底 + 高光）</sys:String>
+    <sys:String x:Key="Appearance_NewUxOnyx">Onyx（官方高质感拟物黑）</sys:String>
 
     <sys:String x:Key="Appearance_MaterialNone">关闭</sys:String>
     <sys:String x:Key="Appearance_MaterialNoneHint">关闭材质并停用注入，用于观察原生外观</sys:String>

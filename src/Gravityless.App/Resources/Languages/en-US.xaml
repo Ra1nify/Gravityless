@@ -517,11 +517,7 @@
     <sys:String x:Key="Appearance_MaterialAcrylicUnsupported">Requires Windows 11 22H2 or later</sys:String>
     <sys:String x:Key="Appearance_NewUxLabel">Antigravity skin</sys:String>
     <sys:String x:Key="Appearance_NewUxOff">Off (default)</sys:String>
-    <sys:String x:Key="Appearance_NewUxAlabaster">Alabaster (near-opaque composer)</sys:String>
-    <sys:String x:Key="Appearance_NewUxTahoe">Tahoe (color wash, weakens Mica)</sys:String>
-    <sys:String x:Key="Appearance_NewUxAtelier">Atelier (radius/border tweaks)</sys:String>
-    <sys:String x:Key="Appearance_NewUxStudio">Studio (minimal changes)</sys:String>
-    <sys:String x:Key="Appearance_NewUxPlanes">Planes (solid sidebar rows + highlight)</sys:String>
+    <sys:String x:Key="Appearance_NewUxOnyx">Onyx (official deep skeumorphic dark)</sys:String>
 
     <sys:String x:Key="Appearance_MaterialNone">None</sys:String>
     <sys:String x:Key="Appearance_MaterialNoneHint">Disables material and injection, for observing the native look</sys:String>

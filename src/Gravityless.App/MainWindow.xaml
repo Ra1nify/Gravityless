@@ -1036,11 +1036,7 @@
                                                   HorizontalAlignment="Left" MinWidth="240" VerticalAlignment="Center"
                                                   SelectionChanged="OnNewUxThemeChanged">
                                             <ComboBoxItem Content="{DynamicResource Appearance_NewUxOff}" Tag=""/>
-                                            <ComboBoxItem Content="{DynamicResource Appearance_NewUxAlabaster}" Tag="alabaster"/>
-                                            <ComboBoxItem Content="{DynamicResource Appearance_NewUxTahoe}" Tag="tahoe"/>
-                                            <ComboBoxItem Content="{DynamicResource Appearance_NewUxAtelier}" Tag="atelier"/>
-                                            <ComboBoxItem Content="{DynamicResource Appearance_NewUxStudio}" Tag="studio"/>
-                                            <ComboBoxItem Content="{DynamicResource Appearance_NewUxPlanes}" Tag="planes"/>
+                                            <ComboBoxItem Content="{DynamicResource Appearance_NewUxOnyx}" Tag="onyx"/>
                                         </ComboBox>
                                     </Grid>
 
