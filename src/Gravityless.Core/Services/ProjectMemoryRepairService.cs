@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using System.Text.Json;
 using Gravityless.Core.Models;
 using Microsoft.Data.Sqlite;
@@ -22,8 +22,14 @@ public class ProjectMemoryIssue
 
     public int StepCount { get; set; }
 
+    /// <summary>True when conversations/{id}.db exists and is a valid checkpoint database.</summary>
+    public bool HasCheckpoint { get; set; }
+
     /// <summary>True when the conversation is only in brain/ and has no summary row at all.</summary>
     public bool MissingFromIndex { get; set; }
+
+    /// <summary>True when conversation_summaries.db was missing or corrupted.</summary>
+    public bool DatabaseCorrupted { get; set; }
 }
 
 /// <summary>
@@ -46,7 +52,7 @@ public class ProjectMemoryRepairService
         _baseDir = baseDir ?? AppDomain.CurrentDomain.BaseDirectory;
     }
 
-    /// <summary>Reports every conversation whose checkpoint database is missing.</summary>
+    /// <summary>Reports every conversation whose checkpoint database or index row is missing/corrupted.</summary>
     public List<ProjectMemoryIssue> Scan()
     {
         var issues = new List<ProjectMemoryIssue>();
@@ -57,6 +63,9 @@ public class ProjectMemoryRepairService
 
             var memoryDir = _projectService.GetProjectMemoryDir(project.Id);
             if (!Directory.Exists(memoryDir)) continue;
+
+            var dbPath = Path.Combine(memoryDir, "conversation_summaries.db");
+            bool dbCorrupted = !File.Exists(dbPath) || !ProjectService.IsUsableSqlite(dbPath);
 
             var indexed = ReadIndex(memoryDir);
             var brainDir = Path.Combine(memoryDir, "brain");
@@ -75,7 +84,10 @@ public class ProjectMemoryRepairService
                     ConversationId = row.Id,
                     Title = row.Title,
                     HasBrainData = Directory.Exists(brainPath),
-                    StepCount = CountTranscriptSteps(brainPath)
+                    HasCheckpoint = false,
+                    StepCount = CountTranscriptSteps(brainPath),
+                    MissingFromIndex = false,
+                    DatabaseCorrupted = dbCorrupted
                 });
             }
 
@@ -88,6 +100,9 @@ public class ProjectMemoryRepairService
                     var cid = Path.GetFileName(dir);
                     if (indexed.Any(r => r.Id.Equals(cid, StringComparison.OrdinalIgnoreCase))) continue;
 
+                    var checkpoint = Path.Combine(convoDir, $"{cid}.db");
+                    bool hasCheckpoint = File.Exists(checkpoint) && new FileInfo(checkpoint).Length > 512;
+
                     issues.Add(new ProjectMemoryIssue
                     {
                         ProjectId = project.Id,
@@ -95,8 +110,38 @@ public class ProjectMemoryRepairService
                         ConversationId = cid,
                         Title = string.Empty,
                         HasBrainData = true,
+                        HasCheckpoint = hasCheckpoint,
                         StepCount = CountTranscriptSteps(dir),
-                        MissingFromIndex = true
+                        MissingFromIndex = true,
+                        DatabaseCorrupted = dbCorrupted
+                    });
+                }
+            }
+
+            // conversations/ files with no summary row and no brain directory: checkpoint is intact
+            if (Directory.Exists(convoDir))
+            {
+                foreach (var f in Directory.EnumerateFiles(convoDir, "*.db"))
+                {
+                    var cid = Path.GetFileNameWithoutExtension(f);
+                    if (indexed.Any(r => r.Id.Equals(cid, StringComparison.OrdinalIgnoreCase))) continue;
+                    if (issues.Any(i => i.ProjectId == project.Id && i.ConversationId.Equals(cid, StringComparison.OrdinalIgnoreCase))) continue;
+
+                    bool hasCheckpoint = new FileInfo(f).Length > 512;
+                    var bPath = Path.Combine(brainDir, cid);
+                    bool hasBrain = Directory.Exists(bPath);
+
+                    issues.Add(new ProjectMemoryIssue
+                    {
+                        ProjectId = project.Id,
+                        ProjectName = project.Name,
+                        ConversationId = cid,
+                        Title = string.Empty,
+                        HasBrainData = hasBrain,
+                        HasCheckpoint = hasCheckpoint,
+                        StepCount = hasBrain ? CountTranscriptSteps(bPath) : 0,
+                        MissingFromIndex = true,
+                        DatabaseCorrupted = dbCorrupted
                     });
                 }
             }
@@ -113,11 +158,24 @@ public class ProjectMemoryRepairService
     public string Repair(IEnumerable<ProjectMemoryIssue> issues, Action<int, int, string>? onProgress = null)
     {
         var list = issues.ToList();
-        int exported = 0, registered = 0, failed = 0;
+        int exported = 0, registered = 0, restoredPlayable = 0, failed = 0;
+        var affectedProjectIds = new HashSet<string>();
+
+        // Ensure corrupted summary DBs are fixed first
+        foreach (var projId in list.Select(i => i.ProjectId).Distinct())
+        {
+            var memDir = _projectService.GetProjectMemoryDir(projId);
+            var db = Path.Combine(memDir, "conversation_summaries.db");
+            if (!File.Exists(db) || !ProjectService.IsUsableSqlite(db))
+            {
+                ProjectService.CreateBlankSummaryDb(db);
+            }
+        }
 
         for (int i = 0; i < list.Count; i++)
         {
             var issue = list[i];
+            affectedProjectIds.Add(issue.ProjectId);
             onProgress?.Invoke(i + 1, list.Count, issue.Title.Length > 0 ? issue.Title : issue.ConversationId);
 
             try
@@ -125,10 +183,16 @@ public class ProjectMemoryRepairService
                 var memoryDir = _projectService.GetProjectMemoryDir(issue.ProjectId);
                 var brainPath = Path.Combine(memoryDir, "brain", issue.ConversationId);
 
-                if (issue.MissingFromIndex && issue.HasBrainData)
+                if (issue.MissingFromIndex)
                 {
-                    if (ReindexConversation(memoryDir, issue.ProjectId, issue.ConversationId, brainPath))
+                    if (ReindexConversation(memoryDir, issue.ProjectId, issue.ConversationId, brainPath, issue.HasCheckpoint))
+                    {
                         registered++;
+                        if (issue.HasCheckpoint)
+                        {
+                            restoredPlayable++;
+                        }
+                    }
                 }
 
                 if (issue.HasBrainData)
@@ -143,11 +207,30 @@ public class ProjectMemoryRepairService
             }
         }
 
+        foreach (var pid in affectedProjectIds)
+        {
+            var proj = _projectService.Projects.FirstOrDefault(p => p.Id == pid);
+            if (proj != null)
+            {
+                _projectService.RefreshProjectMemoryStats(proj);
+            }
+        }
+        _projectService.TrySaveProjects();
+
         var sb = new StringBuilder();
-        sb.AppendLine($"恢复报告：导出 {exported} 条，补登记 {registered} 条，失败 {failed} 条。");
-        sb.AppendLine();
-        sb.AppendLine("说明：对话本体（checkpoint 数据库）已丢失，无法重新打开。");
-        sb.AppendLine("导出内容保存在各对话 brain 目录下的 conversation-export.md。");
+        if (restoredPlayable > 0)
+        {
+            sb.AppendLine($"恢复报告：成功恢复 {restoredPlayable} 条完整会话（可在 Antigravity 中直接继续对话）！");
+            sb.AppendLine($"补登记 {registered} 条，导出 {exported} 条 Markdown 备份记录，失败 {failed} 条。");
+        }
+        else
+        {
+            sb.AppendLine($"恢复报告：补登记 {registered} 条，导出 {exported} 条 Markdown 备份记录，失败 {failed} 条。");
+            sb.AppendLine();
+            sb.AppendLine("说明：对话本体（checkpoint 数据库）已丢失，无法重新打开。");
+            sb.AppendLine("导出内容保存在各对话 brain 目录下的 conversation-export.md。");
+        }
+
         return sb.ToString().TrimEnd();
     }
 
@@ -157,7 +240,7 @@ public class ProjectMemoryRepairService
     {
         var rows = new List<IndexRow>();
         var db = Path.Combine(memoryDir, "conversation_summaries.db");
-        if (!File.Exists(db)) return rows;
+        if (!File.Exists(db) || !ProjectService.IsUsableSqlite(db)) return rows;
 
         try
         {
@@ -208,17 +291,19 @@ public class ProjectMemoryRepairService
     /// Adds a summary row for a brain directory the index does not know about, so the
     /// conversation reappears in Antigravity's list.
     /// </summary>
-    private bool ReindexConversation(string memoryDir, string projectId, string conversationId, string brainPath)
+    private bool ReindexConversation(string memoryDir, string projectId, string conversationId, string brainPath, bool hasCheckpoint)
     {
         var db = Path.Combine(memoryDir, "conversation_summaries.db");
-        if (!File.Exists(db)) return false;
+        if (!File.Exists(db) || !ProjectService.IsUsableSqlite(db))
+        {
+            ProjectService.CreateBlankSummaryDb(db);
+        }
 
-        var transcript = ReadTranscript(brainPath);
-        if (transcript.Count == 0) return false;
-
+        var transcript = Directory.Exists(brainPath) ? ReadTranscript(brainPath) : [];
         var firstUser = transcript.FirstOrDefault(s => s.Type == "USER_INPUT");
         var title = ExtractTitle(firstUser?.Content) ?? "Recovered conversation";
-        var lastTime = transcript[^1].CreatedAt;
+        var lastTime = transcript.Count > 0 ? transcript[^1].CreatedAt : DateTime.UtcNow;
+        if (lastTime == DateTime.MinValue) lastTime = DateTime.UtcNow;
 
         try
         {
@@ -226,23 +311,41 @@ public class ProjectMemoryRepairService
             conn.Open();
             using var cmd = conn.CreateCommand();
 
-            // project_id and workspace_uris keep the row inside this project, which is where
-            // the brain directory already lives.
+            var status = hasCheckpoint ? "" : "RECOVERED";
+
             cmd.CommandText = @"
-                INSERT OR IGNORE INTO conversation_summaries
+                INSERT OR REPLACE INTO conversation_summaries
                     (conversation_id, title, preview, step_count, last_modified_time,
                      workspace_uris, status, source, project_id, agent_name,
                      last_user_input_time)
                 VALUES (@cid, @title, @title, @steps, @time,
-                        @uris, 'RECOVERED', '', @proj, '',
+                        @uris, @status, '', @proj, '',
                         @time)";
             cmd.Parameters.AddWithValue("@cid", conversationId);
             cmd.Parameters.AddWithValue("@title", title);
             cmd.Parameters.AddWithValue("@steps", transcript.Count);
-            cmd.Parameters.AddWithValue("@time", lastTime);
+            cmd.Parameters.AddWithValue("@time", lastTime.ToString("yyyy-MM-dd HH:mm:ss.fff"));
             cmd.Parameters.AddWithValue("@uris", WorkspaceUrisFor(projectId));
+            cmd.Parameters.AddWithValue("@status", status);
             cmd.Parameters.AddWithValue("@proj", projectId);
-            return cmd.ExecuteNonQuery() > 0;
+            var rows = cmd.ExecuteNonQuery();
+
+            try
+            {
+                using var ftsCmd = conn.CreateCommand();
+                ftsCmd.CommandText = @"
+                    INSERT OR REPLACE INTO conversations_fts 
+                        (conversation_id, title, workspace, project)
+                    VALUES (@cid, @title, @uris, @proj)";
+                ftsCmd.Parameters.AddWithValue("@cid", conversationId);
+                ftsCmd.Parameters.AddWithValue("@title", title);
+                ftsCmd.Parameters.AddWithValue("@uris", WorkspaceUrisFor(projectId));
+                ftsCmd.Parameters.AddWithValue("@proj", projectId);
+                ftsCmd.ExecuteNonQuery();
+            }
+            catch { }
+
+            return rows > 0;
         }
         catch (Exception ex)
         {

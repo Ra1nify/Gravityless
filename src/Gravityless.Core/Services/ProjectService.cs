@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -305,6 +305,132 @@ public class ProjectService
     }
     public string GetProjectConversationsDir(string projectId) => Path.Combine(GetProjectMemoryDir(projectId), "conversations");
     public string GetProjectSummaryDbPath(string projectId) => Path.Combine(GetProjectMemoryDir(projectId), "conversation_summaries.db");
+    public string GetProjectSummariesPbPath(string projectId) => Path.Combine(GetProjectMemoryDir(projectId), "agyhub_summaries_proto.pb");
+
+    public static readonly string[] SqliteSiblingSuffixes = [ "-wal", "-shm", "-journal" ];
+    public static readonly byte[] SqliteHeader = "SQLite format 3\0"u8.ToArray();
+
+    public static void DeleteSqliteSiblings(string dbPath)
+    {
+        foreach (var suffix in SqliteSiblingSuffixes)
+        {
+            try
+            {
+                var path = dbPath + suffix;
+                if (File.Exists(path)) File.Delete(path);
+            }
+            catch (Exception ex)
+            {
+                DiagLog.Swallowed("sqlite-sibling-delete", ex);
+            }
+        }
+    }
+
+    /// <summary>Checks whether a file exists and is a valid, readable SQLite database.</summary>
+    public static bool IsUsableSqlite(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return false;
+        try
+        {
+            var info = new FileInfo(path);
+            if (info.Length <= 512) return false;
+
+            using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+            {
+                Span<byte> header = stackalloc byte[16];
+                int read = fs.Read(header);
+                if (read < 16) return false;
+                ReadOnlySpan<byte> expected = "SQLite format 3\0"u8;
+                if (!header.SequenceEqual(expected)) return false;
+            }
+
+            using var conn = new SqliteConnection($"Data Source={path};Mode=ReadOnly");
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT 1 FROM sqlite_master LIMIT 1;";
+            cmd.ExecuteScalar();
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Creates a clean Antigravity 2.29+ conversation_summaries.db schema with WAL and FTS5 search index.</summary>
+    public static void CreateBlankSummaryDb(string dbPath)
+    {
+        var dir = Path.GetDirectoryName(dbPath);
+        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+
+        SqliteConnection.ClearAllPools();
+        DeleteSqliteSiblings(dbPath);
+        if (File.Exists(dbPath))
+        {
+            try { File.Delete(dbPath); } catch { }
+        }
+
+        using var conn = new SqliteConnection($"Data Source={dbPath}");
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+            PRAGMA journal_mode=WAL;
+
+            CREATE TABLE IF NOT EXISTS search_schema_version (
+                version INTEGER PRIMARY KEY
+            );
+            INSERT OR REPLACE INTO search_schema_version (version) VALUES (1);
+
+            CREATE TABLE IF NOT EXISTS `conversation_summaries` (
+                `conversation_id` text,
+                `title` text NOT NULL DEFAULT '',
+                `preview` text NOT NULL DEFAULT '',
+                `step_count` integer NOT NULL DEFAULT 0,
+                `last_modified_time` datetime NOT NULL,
+                `workspace_uris` text NOT NULL,
+                `status` text NOT NULL DEFAULT '',
+                `source` text NOT NULL DEFAULT '',
+                `project_id` text NOT NULL DEFAULT '',
+                `agent_name` text NOT NULL DEFAULT '',
+                `parent_conversation_id` text NOT NULL DEFAULT '',
+                `nesting_depth` integer NOT NULL DEFAULT 0,
+                `battle_id` text NOT NULL DEFAULT '',
+                `winning_conversation_id` text NOT NULL DEFAULT '',
+                `not_fully_idle` numeric NOT NULL DEFAULT false,
+                `killed` numeric NOT NULL DEFAULT false,
+                `last_user_input_time` datetime NOT NULL,
+                `last_user_input_step_index` integer NOT NULL DEFAULT -1,
+                `app_data_dir` text NOT NULL DEFAULT '',
+                `raw_summary` blob,
+                `group_id` text NOT NULL DEFAULT '',
+                PRIMARY KEY (`conversation_id`)
+            );
+
+            CREATE INDEX IF NOT EXISTS `idx_conversation_summaries_last_modified_time` ON `conversation_summaries`(`last_modified_time`);
+            CREATE INDEX IF NOT EXISTS `idx_conversation_summaries_last_user_input_time` ON `conversation_summaries`(`last_user_input_time`);
+
+            CREATE VIRTUAL TABLE IF NOT EXISTS conversations_fts USING fts5(
+                conversation_id UNINDEXED,
+                chunk_index UNINDEXED,
+                chunk_first_step UNINDEXED,
+                chunk_last_step UNINDEXED,
+                last_modified_time UNINDEXED,
+                step_count UNINDEXED,
+                last_step_created_at UNINDEXED,
+                archived UNINDEXED,
+                user_step_byte_offsets UNINDEXED,
+                agent_step_byte_offsets UNINDEXED,
+                title,
+                workspace,
+                project,
+                user_body,
+                agent_body,
+                tokenize = 'unicode61 remove_diacritics 2',
+                prefix = '1 2 3'
+            );
+        ";
+        cmd.ExecuteNonQuery();
+    }
 
     /// <summary>Consistent snapshot copy through the SQLite online backup API (never a raw File.Copy of a live DB).</summary>
     public static bool CopySqliteSnapshot(string sourceDb, string destDb)
@@ -322,6 +448,19 @@ public class ProjectService
                 Directory.CreateDirectory(dir);
             }
 
+            // Passive WAL checkpoint on the source to bring committed pages into main DB
+            try
+            {
+                using var chkConn = new SqliteConnection($"Data Source={sourceDb}");
+                chkConn.Open();
+                using var chkCmd = chkConn.CreateCommand();
+                chkCmd.CommandText = "PRAGMA wal_checkpoint(PASSIVE);";
+                chkCmd.ExecuteNonQuery();
+            }
+            catch { }
+
+            SqliteConnection.ClearAllPools();
+            DeleteSqliteSiblings(destDb);
             if (File.Exists(destDb))
             {
                 try { File.Delete(destDb); } catch { }
@@ -434,38 +573,46 @@ public class ProjectService
         SaveProjects();
     }
 
-    private void InitSummaryDb(string projectId)
+    public void InitSummaryDb(string projectId)
     {
         var destDb = GetProjectSummaryDbPath(projectId);
-        if (File.Exists(destDb)) return;
+        if (File.Exists(destDb) && IsUsableSqlite(destDb)) return;
 
         var hostGemini = GetRealHostGeminiDir();
         var stockDb = Path.Combine(hostGemini, "antigravity", "conversation_summaries.db");
-        if (File.Exists(stockDb))
+        if (File.Exists(stockDb) && IsUsableSqlite(stockDb))
         {
             try
             {
-                if (!CopySqliteSnapshot(stockDb, destDb))
+                if (CopySqliteSnapshot(stockDb, destDb))
                 {
+                    using var conn = new SqliteConnection($"Data Source={destDb}");
+                    conn.Open();
+                    using (var tx = conn.BeginTransaction())
+                    {
+                        using var cmd = conn.CreateCommand();
+                        cmd.Transaction = tx;
+                        cmd.CommandText = "DELETE FROM conversation_summaries; DELETE FROM conversations_fts;";
+                        cmd.ExecuteNonQuery();
+                        tx.Commit();
+                    }
+
+                    using var vacuum = conn.CreateCommand();
+                    vacuum.CommandText = "VACUUM;";
+                    vacuum.ExecuteNonQuery();
                     return;
                 }
-
-                using var conn = new SqliteConnection($"Data Source={destDb}");
-                conn.Open();
-                using (var tx = conn.BeginTransaction())
-                {
-                    using var cmd = conn.CreateCommand();
-                    cmd.Transaction = tx;
-                    cmd.CommandText = "DELETE FROM conversation_summaries; DELETE FROM conversations_fts;";
-                    cmd.ExecuteNonQuery();
-                    tx.Commit();
-                }
-
-                using var vacuum = conn.CreateCommand();
-                vacuum.CommandText = "VACUUM;";
-                vacuum.ExecuteNonQuery();
             }
             catch (Exception ex) { DiagLog.Swallowed("project.vacuum", ex); }
+        }
+
+        try
+        {
+            CreateBlankSummaryDb(destDb);
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Swallowed("project.create-blank-summary", ex);
         }
     }
 
@@ -1059,6 +1206,7 @@ public class ProjectService
                     using var vacuum = conn.CreateCommand();
                     vacuum.CommandText = "VACUUM;";
                     vacuum.ExecuteNonQuery();
+
                 }
                 catch { }
             }
@@ -1148,6 +1296,13 @@ public class ProjectService
             if (Directory.Exists(brainDir))
             {
                 try { Directory.Delete(brainDir, true); } catch { }
+            }
+
+            var convoFile = Path.Combine(GetProjectConversationsDir(projectId), $"{conversationId}.db");
+            if (File.Exists(convoFile))
+            {
+                try { File.Delete(convoFile); } catch { }
+                DeleteSqliteSiblings(convoFile);
             }
 
             var proj = _projects.FirstOrDefault(p => p.Id == projectId);
@@ -1373,6 +1528,13 @@ public class ProjectService
             }
         }
 
+        var srcConvoFile = Path.Combine(GetProjectConversationsDir(projectId), $"{sourceConversationId}.db");
+        var destConvoFile = Path.Combine(GetProjectConversationsDir(projectId), $"{newConversationId}.db");
+        if (File.Exists(srcConvoFile))
+        {
+            try { CopySqliteSnapshot(srcConvoFile, destConvoFile); } catch { }
+        }
+
         var proj = _projects.FirstOrDefault(p => p.Id == projectId);
         if (proj != null)
         {
@@ -1387,6 +1549,11 @@ public class ProjectService
     {
         var dbPath = GetProjectSummaryDbPath(projectId);
         if (!File.Exists(dbPath)) return [];
+
+        if (!IsUsableSqlite(dbPath))
+        {
+            InitSummaryDb(projectId);
+        }
 
         var result = new List<ConversationSummaryItem>();
         try

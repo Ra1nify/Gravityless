@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Data.Sqlite;
@@ -734,8 +734,12 @@ public class InstanceService
             }
         }
 
-        // Multi-project mode: write back conversations created during the session.
-        if (boundProjects.Count > 1)
+        // Write back conversations created during the session (single or multi project).
+        if (boundProjects.Count == 1)
+        {
+            SyncSingleProjectOutput(inst, boundProjects[0], instanceGeminiDir);
+        }
+        else if (boundProjects.Count > 1)
         {
             SyncMultiProjectOutput(inst, boundProjects, instanceGeminiDir);
         }
@@ -859,6 +863,7 @@ public class InstanceService
             var projBrain = _projectService.GetProjectBrainDir(proj.Id);
             var projConvos = _projectService.GetProjectConversationsDir(proj.Id);
             var projSummaryDb = _projectService.GetProjectSummaryDbPath(proj.Id);
+            var projPb = _projectService.GetProjectSummariesPbPath(proj.Id);
 
             Directory.CreateDirectory(projBrain);
             Directory.CreateDirectory(projConvos);
@@ -866,21 +871,25 @@ public class InstanceService
             JunctionService.CreateJunction(instBrain, projBrain);
             JunctionService.CreateJunction(instConvos, projConvos);
 
-            if (File.Exists(projSummaryDb))
+            _projectService.InitSummaryDb(proj.Id);
+
+            if (File.Exists(projSummaryDb) && ProjectService.IsUsableSqlite(projSummaryDb))
             {
-                JunctionService.CreateFileHardLink(instSummaryDb, projSummaryDb);
-                var shm = projSummaryDb + "-shm";
-                var wal = projSummaryDb + "-wal";
-                if (File.Exists(shm)) JunctionService.CreateFileHardLink(instSummaryDb + "-shm", shm);
-                if (File.Exists(wal)) JunctionService.CreateFileHardLink(instSummaryDb + "-wal", wal);
+                ProjectService.CopySqliteSnapshot(projSummaryDb, instSummaryDb);
+            }
+            else
+            {
+                InitInstanceSummaryDb(instSummaryDb);
+            }
+
+            var instPb = Path.Combine(instAntigravity, "agyhub_summaries_proto.pb");
+            if (File.Exists(projPb))
+            {
+                try { File.Copy(projPb, instPb, true); } catch { }
             }
 
             // Single-project binding: keep project_id and metadata aligned as well.
             AlignSummaryProjectIds(instSummaryDb, boundProjects);
-            if (File.Exists(projSummaryDb))
-            {
-                AlignSummaryProjectIds(projSummaryDb, boundProjects);
-            }
 
             SetupProjectMetadata(boundProjects, instGemini, instUserData);
         }
@@ -1000,38 +1009,46 @@ public class InstanceService
 
     private static void InitInstanceSummaryDb(string destDb)
     {
-        if (File.Exists(destDb))
+        if (File.Exists(destDb) && ProjectService.IsUsableSqlite(destDb))
         {
             return;
         }
 
         var hostGemini = ProjectService.GetRealHostGeminiDir();
         var stockDb = Path.Combine(hostGemini, "antigravity", "conversation_summaries.db");
-        if (File.Exists(stockDb))
+        if (File.Exists(stockDb) && ProjectService.IsUsableSqlite(stockDb))
         {
             try
             {
-                if (!ProjectService.CopySqliteSnapshot(stockDb, destDb))
+                if (ProjectService.CopySqliteSnapshot(stockDb, destDb))
                 {
+                    using var conn = new SqliteConnection($"Data Source={destDb}");
+                    conn.Open();
+                    using (var tx = conn.BeginTransaction())
+                    {
+                        using var cmd = conn.CreateCommand();
+                        cmd.Transaction = tx;
+                        cmd.CommandText = "DELETE FROM conversation_summaries; DELETE FROM conversations_fts;";
+                        cmd.ExecuteNonQuery();
+                        tx.Commit();
+                    }
+
+                    using var vacuum = conn.CreateCommand();
+                    vacuum.CommandText = "VACUUM;";
+                    vacuum.ExecuteNonQuery();
                     return;
                 }
-
-                using var conn = new SqliteConnection($"Data Source={destDb}");
-                conn.Open();
-                using (var tx = conn.BeginTransaction())
-                {
-                    using var cmd = conn.CreateCommand();
-                    cmd.Transaction = tx;
-                    cmd.CommandText = "DELETE FROM conversation_summaries; DELETE FROM conversations_fts;";
-                    cmd.ExecuteNonQuery();
-                    tx.Commit();
-                }
-
-                using var vacuum = conn.CreateCommand();
-                vacuum.CommandText = "VACUUM;";
-                vacuum.ExecuteNonQuery();
             }
             catch (Exception ex) { DiagLog.Swallowed("instance.vacuum", ex); }
+        }
+
+        try
+        {
+            ProjectService.CreateBlankSummaryDb(destDb);
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Swallowed("instance.create-blank-summary", ex);
         }
     }
 
@@ -1107,6 +1124,35 @@ public class InstanceService
         catch (Exception ex) { DiagLog.Swallowed("instance.merge-summaries", ex); }
     }
 
+    private void SyncSingleProjectOutput(InstanceProfile inst, ProjectProfile proj, string instGeminiDir)
+    {
+        var instAntigravity = Path.Combine(instGeminiDir, "antigravity");
+        var instSummaryDb = Path.Combine(instAntigravity, "conversation_summaries.db");
+        var instPb = Path.Combine(instAntigravity, "agyhub_summaries_proto.pb");
+
+        var projSummaryDb = _projectService.GetProjectSummaryDbPath(proj.Id);
+        var projPb = _projectService.GetProjectSummariesPbPath(proj.Id);
+
+        if (File.Exists(instSummaryDb) && ProjectService.IsUsableSqlite(instSummaryDb))
+        {
+            ProjectService.CopySqliteSnapshot(instSummaryDb, projSummaryDb);
+        }
+
+        if (File.Exists(instPb))
+        {
+            try
+            {
+                var dir = Path.GetDirectoryName(projPb);
+                if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+                File.Copy(instPb, projPb, true);
+            }
+            catch (Exception ex)
+            {
+                DiagLog.Swallowed("instance.sync-single-pb", ex);
+            }
+        }
+    }
+
     private void SyncMultiProjectOutput(InstanceProfile inst, List<ProjectProfile> boundProjects, string instGeminiDir)
     {
         var instAntigravity = Path.Combine(instGeminiDir, "antigravity");
@@ -1158,6 +1204,22 @@ public class InstanceService
                     }
                 }
             }
+
+            var instPb = Path.Combine(instAntigravity, "agyhub_summaries_proto.pb");
+            if (File.Exists(instPb))
+            {
+                foreach (var proj in boundProjects)
+                {
+                    var pPb = _projectService.GetProjectSummariesPbPath(proj.Id);
+                    try
+                    {
+                        var pDir = Path.GetDirectoryName(pPb);
+                        if (!string.IsNullOrEmpty(pDir)) Directory.CreateDirectory(pDir);
+                        File.Copy(instPb, pPb, true);
+                    }
+                    catch { }
+                }
+            }
         }
         catch { }
     }
@@ -1202,40 +1264,10 @@ public class InstanceService
     /// SQLite keeps committed-but-unmerged pages in companion files next to the database.
     /// Moving the .db alone would silently drop them, so the whole family travels together.
     /// </summary>
-    private static readonly string[] SqliteSiblingSuffixes = ["-wal", "-shm"];
+    private static readonly string[] SqliteSiblingSuffixes = ProjectService.SqliteSiblingSuffixes;
+    private static readonly byte[] SqliteHeader = ProjectService.SqliteHeader;
 
-    /// <summary>Header every SQLite 3 database starts with.</summary>
-    private static readonly byte[] SqliteHeader = "SQLite format 3\0"u8.ToArray();
-
-    /// <summary>
-    /// True when the path holds a database that is safe to keep and to link against.
-    /// File.Exists alone is not enough: a process killed before checkpointing leaves a
-    /// zero-length file that still reports as present, and treating it as real is what
-    /// destroys the only good copy.
-    /// </summary>
-    private static bool IsUsableSqlite(string path)
-    {
-        try
-        {
-            var info = new FileInfo(path);
-            if (!info.Exists) return false;
-
-            // A valid database needs at least one page plus the header.
-            if (info.Length <= 512) return false;
-
-            using var stream = File.OpenRead(path);
-            var header = new byte[SqliteHeader.Length];
-            var read = stream.Read(header, 0, header.Length);
-            if (read != SqliteHeader.Length) return false;
-
-            return header.AsSpan().SequenceEqual(SqliteHeader);
-        }
-        catch (Exception ex)
-        {
-            DiagLog.Swallowed("instance.sqlite-probe", ex);
-            return false;
-        }
-    }
+    private static bool IsUsableSqlite(string path) => ProjectService.IsUsableSqlite(path);
 
     private static void MoveSqliteWithSiblings(string sourceDb, string destDb)
     {

@@ -1,4 +1,4 @@
-<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+﻿<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                     xmlns:sys="clr-namespace:System;assembly=mscorlib">
 
@@ -71,8 +71,8 @@
     <sys:String x:Key="Projects_RepairNothingTitle">无需修复</sys:String>
     <sys:String x:Key="Projects_RepairNothingMessage">所有项目记忆都完整。</sys:String>
     <sys:String x:Key="Projects_RepairFoundTitle">发现可修复项</sys:String>
-    <sys:String x:Key="Projects_RepairFoundFormat">共 {0} 条记录缺少对话本体，其中 {1} 条可从 brain 导出内容。</sys:String>
-    <sys:String x:Key="Projects_RepairConfirmMessageFormat">{0}&#x0a;&#x0a;修复会：&#x0a;1. 把 brain 中未登记的记忆补回项目列表&#x0a;2. 将对话记录导出为 Markdown 保存在各对话目录&#x0a;&#x0a;注意：对话本体已丢失，修复后仍无法在 Antigravity 中打开。</sys:String>
+    <sys:String x:Key="Projects_RepairFoundFormat">共发现 {0} 条需修复项（其中 {1} 条对话本体完好可恢复至 Antigravity，{2} 条可导出 Markdown 记录）。</sys:String>
+    <sys:String x:Key="Projects_RepairConfirmMessageFormat">{0}&#x0a;&#x0a;修复会：&#x0a;1. 修复/重建损坏的项目会话索引库&#x0a;2. 将完整的会话重新登记回项目（可在 Antigravity 中直接继续对话）&#x0a;3. 将丢失本体但保留记录的会话导出为 Markdown 备份</sys:String>
     <sys:String x:Key="Projects_RepairConfirmBtn">开始修复</sys:String>
     <sys:String x:Key="Projects_RepairDoneTitle">修复完成</sys:String>
     <sys:String x:Key="Projects_Desc">项目代码工作区与记忆库。实例退出时自动写回。</sys:String>

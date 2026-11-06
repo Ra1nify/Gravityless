@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
@@ -768,17 +768,18 @@ public partial class MainWindow
             return;
         }
 
-        var recoverable = issues.Count(i => i.HasBrainData);
+        var fullyRestorable = issues.Count(i => i.MissingFromIndex && i.HasCheckpoint);
+        var exportOnly = issues.Count(i => !i.HasCheckpoint && i.HasBrainData);
         var found = string.Format(
             LocalizationService.GetString("Projects_RepairFoundFormat",
-                "共 {0} 条记录缺少对话本体，其中 {1} 条可从 brain 导出内容。"),
-            issues.Count, recoverable);
+                "共发现 {0} 条需修复项（其中 {1} 条对话本体完好可恢复至 Antigravity，{2} 条可导出 Markdown 记录）。"),
+            issues.Count, fullyRestorable, exportOnly);
 
         if (!ModernDialog.Confirm(
                 LocalizationService.GetString("Projects_RepairFoundTitle", "发现可修复项"),
                 string.Format(
                     LocalizationService.GetString("Projects_RepairConfirmMessageFormat",
-                        "{0}\n\n修复会：\n1. 把 brain 中未登记的记忆补回项目列表\n2. 将对话记录导出为 Markdown 保存在各对话目录\n\n注意：对话本体已丢失，修复后仍无法在 Antigravity 中打开。"),
+                        "{0}\n\n修复会：\n1. 修复/重建损坏的项目会话索引库\n2. 将完整的会话重新登记回项目（可在 Antigravity 中直接继续对话）\n3. 将丢失本体但保留记录的会话导出为 Markdown 备份"),
                     found),
                 confirmText: LocalizationService.GetString("Projects_RepairConfirmBtn", "开始修复"),
                 cancelText: LocalizationService.GetString("Common_Cancel", "取消"),
