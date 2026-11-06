@@ -16,7 +16,7 @@ param(
 
     [switch]$SkipPublish,
 
-    # Sign from an exported .pfx (default: Gravityless.pfx in script root if present).
+    # Sign from an exported .pfx (default: Gravityless.pfx in script root or certs\ if present).
     [string]$PfxPath,
     [string]$PfxPassword = 'Gravityless',
 
@@ -25,10 +25,28 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$root = $PSScriptRoot
+$root = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 $appProject = Join-Path $root 'src\Gravityless.App\Gravityless.App.csproj'
 $issScript = Join-Path $root 'installer\Gravityless.iss'
 $artifacts = Join-Path $root 'artifacts'
+
+# ---------------------------------------------------------------------------
+# Tool discovery / Environment preparation
+# ---------------------------------------------------------------------------
+
+# Ensure dotnet CLI is in PATH
+if (-not (Get-Command 'dotnet' -ErrorAction SilentlyContinue)) {
+    $dotnetDir = @(
+        (Join-Path $env:USERPROFILE '.dotnet')
+        'C:\Users\aka\.dotnet'
+        "${env:ProgramFiles}\dotnet"
+        "${env:ProgramFiles(x86)}\dotnet"
+    ) | Where-Object { $_ -and (Test-Path (Join-Path $_ 'dotnet.exe')) } | Select-Object -First 1
+
+    if ($dotnetDir) {
+        $env:PATH = "$dotnetDir;$env:PATH"
+    }
+}
 
 # Read the version directly from C# project / Directory.Build.props.
 $version = $null
@@ -40,17 +58,19 @@ if (-not $version) {
     $propsPath = Join-Path $root 'Directory.Build.props'
     if (Test-Path $propsPath) {
         [xml]$propsXml = Get-Content $propsPath -ErrorAction SilentlyContinue
-        $version = $propsXml.Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
+        $vNode = $propsXml.Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
+        if ($vNode -is [System.Xml.XmlElement]) {
+            $version = $vNode.InnerText.Trim()
+        } elseif ($vNode) {
+            $version = "$vNode".Trim()
+        }
     }
 }
 if (-not $version) { throw 'Version not found in C# project or Directory.Build.props' }
 
 Write-Host "Gravityless $version" -ForegroundColor Cyan
 
-# ---------------------------------------------------------------------------
-# Tool discovery
-# ---------------------------------------------------------------------------
-
+# Locate Inno Setup Compiler (ISCC.exe)
 $iscc = @(
     "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
     "${env:ProgramFiles}\Inno Setup 6\ISCC.exe"
@@ -74,11 +94,17 @@ if (-not $iscc) {
 }
 
 if (-not $iscc) {
+    $cmd = Get-Command 'ISCC.exe' -ErrorAction SilentlyContinue
+    if ($cmd) { $iscc = $cmd.Source }
+}
+
+if (-not $iscc) {
     throw 'ISCC.exe not found. Install Inno Setup 6 or 7.'
 }
 Write-Host "ISCC: $iscc"
 
 $signtool = $null
+$certObj = $null
 if ($Sign) {
     $pfX86 = [Environment]::GetFolderPath('ProgramFilesX86')
     $pf = [Environment]::GetFolderPath('ProgramFiles')
@@ -93,35 +119,69 @@ if ($Sign) {
     ) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
 
     if (-not $signtool) {
-        $signtool = Get-ChildItem "$env:USERPROFILE\.nuget\packages\microsoft.windows.sdk.buildtools" `
-            -Filter 'signtool.exe' -Recurse -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -match '\\x64\\' } |
-            Select-Object -First 1 -ExpandProperty FullName
-    }
-    if (-not $signtool) { throw 'signtool.exe not found. Install the Windows SDK.' }
-
-    # Auto-detect Gravityless.pfx in repository root if PfxPath was not explicitly specified.
-    if (-not $PfxPath) {
-        $repoPfx = Join-Path $root 'Gravityless.pfx'
-        if (Test-Path $repoPfx) {
-            $PfxPath = $repoPfx
+        $nugetDirs = @(
+            "$env:USERPROFILE\.nuget\packages\microsoft.windows.sdk.buildtools",
+            "C:\Users\aka\.nuget\packages\microsoft.windows.sdk.buildtools"
+        ) | Where-Object { $_ -and (Test-Path $_) }
+        foreach ($nd in $nugetDirs) {
+            $signtool = Get-ChildItem $nd -Filter 'signtool.exe' -Recurse -ErrorAction SilentlyContinue |
+                Where-Object { $_.FullName -match '\\x64\\' } |
+                Select-Object -First 1 -ExpandProperty FullName
+            if ($signtool) { break }
         }
     }
-    if ($env:PFX_PASSWORD) {
+    if (-not $signtool) {
+        $cmd = Get-Command 'signtool.exe' -ErrorAction SilentlyContinue
+        if ($cmd) { $signtool = $cmd.Source }
+    }
+
+    # Auto-detect Gravityless.pfx in repository root, certs\, or external drive
+    if (-not $PfxPath) {
+        $candidates = @(
+            (Join-Path $root 'Gravityless.pfx'),
+            (Join-Path $root 'certs\Gravityless.pfx'),
+            'F:\Gravityless.pfx'
+        )
+        foreach ($c in $candidates) {
+            if (Test-Path $c) {
+                $PfxPath = $c
+                break
+            }
+        }
+    }
+    if ($env:GRAVITYLESS_PFX_PASSWORD) {
+        $PfxPassword = $env:GRAVITYLESS_PFX_PASSWORD
+    } elseif ($env:PFX_PASSWORD) {
         $PfxPassword = $env:PFX_PASSWORD
     }
 
     if ($PfxPath) {
         if (-not (Test-Path $PfxPath)) { throw "Certificate not found: $PfxPath" }
-        $signBase = @('/f', (Resolve-Path $PfxPath).Path)
+        $resolvedPfx = (Resolve-Path $PfxPath).Path
+        try {
+            $certObj = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($resolvedPfx, $PfxPassword)
+        } catch {
+            Write-Warning "Failed to load certificate directly from PFX with given password: $_"
+        }
+        $signBase = @('/f', $resolvedPfx)
         if ($PfxPassword) { $signBase += @('/p', $PfxPassword) }
-        Write-Host "Signing with PFX: $PfxPath"
+        Write-Host "Signing with PFX: $resolvedPfx"
     } else {
         $cert = Get-Item "Cert:\CurrentUser\My\$Thumbprint" -ErrorAction SilentlyContinue
         if (-not $cert) { throw "Signing certificate $Thumbprint not found in Cert:\CurrentUser\My and no PFX at $PfxPath" }
         if (-not $cert.HasPrivateKey) { throw "Certificate $Thumbprint has no private key" }
+        $certObj = $cert
         $signBase = @('/sha1', $Thumbprint)
         Write-Host "Signing with Cert Store: $($cert.Subject)"
+    }
+
+    if (-not $signtool -and -not $certObj) {
+        throw 'Neither signtool.exe nor a valid PowerShell certificate object could be resolved for signing.'
+    }
+    if ($signtool) {
+        Write-Host "signtool: $signtool"
+    } else {
+        Write-Host "signtool not found, using PowerShell Set-AuthenticodeSignature fallback." -ForegroundColor Yellow
     }
 }
 
@@ -140,15 +200,35 @@ $timestampServers = @(
 function Invoke-SignFile {
     param([string]$FilePath)
 
-    foreach ($server in $timestampServers) {
-        & $signtool sign @signBase '/fd' 'SHA256' '/tr' $server '/td' 'SHA256' $FilePath 2>&1 | Out-Null
-        if ($LASTEXITCODE -eq 0) { return }
-        Write-Host "  timestamp server unavailable: $server" -ForegroundColor DarkYellow
+    if ($signtool) {
+        foreach ($server in $timestampServers) {
+            & $signtool sign @signBase '/fd' 'SHA256' '/tr' $server '/td' 'SHA256' $FilePath 2>&1 | Out-Null
+            if ($LASTEXITCODE -eq 0) { return }
+            Write-Host "  timestamp server unavailable: $server" -ForegroundColor DarkYellow
+        }
+
+        & $signtool sign @signBase '/fd' 'SHA256' $FilePath 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host '  signed without a timestamp; valid until the certificate expires' -ForegroundColor Yellow
+            return
+        }
     }
 
-    & $signtool sign @signBase '/fd' 'SHA256' $FilePath 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "Signing failed: $FilePath" }
-    Write-Host '  signed without a timestamp; valid until the certificate expires' -ForegroundColor Yellow
+    # Fallback to PowerShell Set-AuthenticodeSignature
+    if ($certObj) {
+        foreach ($server in $timestampServers) {
+            $sig = Set-AuthenticodeSignature -FilePath $FilePath -Certificate $certObj -HashAlgorithm 'SHA256' -TimestampServer $server -ErrorAction SilentlyContinue
+            if ($sig.Status -eq 'Valid' -or $sig.Status -eq 'UnknownError') { return }
+            Write-Host "  PowerShell timestamp server unavailable: $server" -ForegroundColor DarkYellow
+        }
+        $sig = Set-AuthenticodeSignature -FilePath $FilePath -Certificate $certObj -HashAlgorithm 'SHA256' -ErrorAction SilentlyContinue
+        if ($sig.Status -eq 'Valid' -or $sig.Status -eq 'UnknownError') {
+            Write-Host '  signed with PowerShell without a timestamp' -ForegroundColor Yellow
+            return
+        }
+    }
+
+    throw "Signing failed: $FilePath"
 }
 
 # ---------------------------------------------------------------------------
@@ -157,6 +237,11 @@ function Invoke-SignFile {
 
 $targets = if ($Arch -eq 'all') { @('x64', 'arm64') } else { @($Arch) }
 $setups = @()
+
+$installerOutDir = Join-Path $artifacts 'installer'
+if (-not (Test-Path $installerOutDir)) {
+    New-Item -ItemType Directory -Path $installerOutDir -Force | Out-Null
+}
 
 foreach ($a in $targets) {
     $rid = "win-$a"

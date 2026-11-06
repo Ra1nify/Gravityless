@@ -58,6 +58,26 @@ public partial class App : Application
 
         LocalizationService.Initialize();
 
+        // Check write permission to data directory
+        var baseDir = AppDomain.CurrentDomain.BaseDirectory;
+        var dataDir = Path.Combine(baseDir, "data");
+        try
+        {
+            Directory.CreateDirectory(dataDir);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            LogUnhandled(ex, "startup-permission");
+            MessageBox.Show(
+                $"程序无权在运行目录创建或写入数据文件夹：\n{dataDir}\n\n" +
+                $"如果程序安装在 Program Files 等受系统保护的目录，请以管理员身份重新运行安装包完成权限修复，或右键选择“以管理员身份运行”。",
+                "Gravityless - 权限受限",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+            Shutdown(1);
+            return;
+        }
+
         // Last-resort handler: an exception escaping an async event handler terminates the
         // process by default. Report it and keep running instead.
         DispatcherUnhandledException += OnDispatcherUnhandledException;
@@ -76,9 +96,18 @@ public partial class App : Application
         try
         {
             LogUnhandled(e.Exception, "dispatcher");
+
+            var actualEx = e.Exception;
+            while (actualEx.InnerException != null &&
+                   (actualEx is System.Windows.Markup.XamlParseException ||
+                    actualEx is System.Reflection.TargetInvocationException))
+            {
+                actualEx = actualEx.InnerException;
+            }
+
             ModernDialog.ShowError(
                 LocalizationService.GetString("Common_Error", "错误"),
-                e.Exception.Message);
+                actualEx.Message);
         }
         catch { }
 

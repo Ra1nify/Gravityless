@@ -1,5 +1,5 @@
 ; ============================================================================
-;  Gravityless — Inno Setup 6 script
+;  Gravityless — Inno Setup 6/7 script
 ;
 ;  Build (per architecture):
 ;    dotnet publish src\Gravityless.App\Gravityless.App.csproj ^
@@ -78,6 +78,13 @@ Name: "zh"; MessagesFile: "ChineseSimplified.isl"
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
+[Dirs]
+Name: "{app}"; Permissions: users-full
+Name: "{app}\data"; Permissions: users-full
+Name: "{app}\core"; Permissions: users-full
+Name: "{app}\shared"; Permissions: users-full
+Name: "{app}\temp"; Permissions: users-full
+
 [Files]
 ; The published application payload.
 Source: "{#PublishDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -104,9 +111,6 @@ Filename: "{app}\{#AppExeName}"; Description: "{cm:LaunchProgram,{#AppName}}"; F
 Type: filesandordirs; Name: "{app}\locales"
 Type: filesandordirs; Name: "{app}\Assets"
 
-[Code]
-{ ---------------------------------------------------------------------------
-  Architecture guard.
 [Code]
 { ---------------------------------------------------------------------------
   Architecture guard.
@@ -144,6 +148,22 @@ begin
   end;
 
   Result := True;
+end;
+
+{ ---------------------------------------------------------------------------
+  Post-install: Grant standard users full permissions to the application directory
+  so non-elevated instances can write data/, core/, and shared/ without UAC prompts.
+  --------------------------------------------------------------------------- }
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  ResultCode: Integer;
+begin
+  if CurStep = ssPostInstall then
+  begin
+    Exec(ExpandConstant('{sys}\icacls.exe'),
+         '"' + ExpandConstant('{app}') + '" /grant "*S-1-5-32-545:(OI)(CI)F" /T /Q /C',
+         '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  end;
 end;
 
 { ---------------------------------------------------------------------------
