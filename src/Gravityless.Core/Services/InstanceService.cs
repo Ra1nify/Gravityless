@@ -929,7 +929,7 @@ public class InstanceService
                         // A stale -wal from an earlier run would be paired with the freshly linked
                         // database and make SQLite read pages that no longer belong to it.
                         DeleteSqliteSiblings(target);
-                        JunctionService.CreateFileHardLink(target, f);
+                        ProjectService.CopySqliteSnapshot(f, target);
                     }
                 }
 
@@ -1564,7 +1564,7 @@ public class InstanceService
                             DeleteSqliteSiblings(srcConvoDb);
                         }
 
-                        JunctionService.CreateFileHardLink(srcConvoDb, targetPubConvoDb);
+                        ProjectService.CopySqliteSnapshot(srcConvoDb, targetPubConvoDb);
                     }
                     catch (Exception ex) { DiagLog.Swallowed("instance.convo-link", ex); }
                 }

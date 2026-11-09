@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Text;
 using System.Text.Json;
 using Gravityless.Core.Models;
@@ -154,6 +154,10 @@ public class GravitylessDaemon : IDisposable
                     await HandleSseConnection(context);
                     break;
 
+                case "/api/v1/locale.json":
+                    await ServeLocaleJson(context);
+                    break;
+
                 case "/api/v1/heartbeat":
                     res.StatusCode = 200;
                     await RespondString(res, "{\"status\":\"ok\"}", "application/json");
@@ -169,6 +173,32 @@ public class GravitylessDaemon : IDisposable
         {
             // Client disconnected mid-response
             try { res.Close(); } catch { }
+        }
+    }
+
+    private async Task ServeLocaleJson(HttpListenerContext context)
+    {
+        var req = context.Request;
+        var res = context.Response;
+        var lang = req.QueryString["lang"] ?? Language ?? "zh-CN";
+
+        var cleanLang = System.Text.RegularExpressions.Regex.Replace(lang, @"[^a-zA-Z0-9_\-]", "");
+        if (string.IsNullOrEmpty(cleanLang)) cleanLang = "zh-CN";
+
+        var localesDir = Path.Combine(_baseDir, "locales");
+        if (!Directory.Exists(localesDir)) localesDir = Path.Combine(_baseDir, "data", "locales");
+        var filePath = Path.Combine(localesDir, $"{cleanLang}.json");
+
+        if (File.Exists(filePath))
+        {
+            var json = await File.ReadAllTextAsync(filePath, Encoding.UTF8);
+            res.Headers.Add("Cache-Control", "no-cache, no-store, must-revalidate");
+            await RespondString(res, json, "application/json");
+        }
+        else
+        {
+            res.StatusCode = 404;
+            await RespondString(res, "{}", "application/json");
         }
     }
 
@@ -302,6 +332,8 @@ public class GravitylessDaemon : IDisposable
                     NoiseFrequency = Math.Clamp(config.NoiseFrequency, 0.5, 2.0);
                     NoiseTintRatio = Math.Clamp(config.NoiseTintRatio, 0.0, 1.0);
                     NoiseBaseAlpha = Math.Clamp(config.NoiseBaseAlpha, 0.0, 1.0);
+                    if (!string.IsNullOrEmpty(config.Language))
+                        Language = config.Language;
                 }
             }
         }
@@ -329,7 +361,10 @@ public class GravitylessDaemon : IDisposable
                 NoiseAlpha = NoiseAlpha,
                 NoiseFrequency = NoiseFrequency,
                 NoiseTintRatio = NoiseTintRatio,
-                NoiseBaseAlpha = NoiseBaseAlpha
+                NoiseBaseAlpha = NoiseBaseAlpha,
+                DaemonPort = Port,
+                Language = Language,
+                LocalesDir = Path.Combine(_baseDir, "locales")
             };
             var json = JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true });
             File.WriteAllText(_themeConfigFile, json, Encoding.UTF8);

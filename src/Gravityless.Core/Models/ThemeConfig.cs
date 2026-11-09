@@ -20,4 +20,8 @@ public class ThemeConfig
     public double NoiseFrequency { get; set; } = 0.85;
     public double NoiseTintRatio { get; set; } = 0.28;
     public double NoiseBaseAlpha { get; set; } = 0.35;
+
+    public int DaemonPort { get; set; }
+    public string Language { get; set; } = "zh-CN";
+    public string LocalesDir { get; set; } = string.Empty;
 }

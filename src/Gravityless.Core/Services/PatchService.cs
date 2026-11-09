@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Text.Json;
@@ -15,7 +15,7 @@ public class PatchService
     /// Version stamp for the runtime bootstrap script. Bump whenever template semantics change
     /// to trigger re-generation of gravityless-bootstrap.js.
     /// </summary>
-    private const int PatchVersion = 53;
+    private const int PatchVersion = 54;
     private static readonly string PatchStamp = $"/* GRAVITYLESS_BOOTSTRAP_VERSION: {PatchVersion} */";
 
     /// <summary>Unpacks an Electron ASAR archive into outputDir using only managed code.</summary>
@@ -411,6 +411,26 @@ __PATCH_VERSION_STAMP__
     if (global.__gravitylessBootstrapped) return;
     global.__gravitylessBootstrapped = true;
 
+    function findConfigFile() {
+        const candidates = [
+            path.resolve(__dirname, '..', '..', '..', '..', 'data', 'theme_config.json'),
+            path.join(process.env.ProgramFiles || 'C:\\Program Files', 'Gravityless', 'data', 'theme_config.json'),
+            path.join(process.env.LOCALAPPDATA || '', 'Gravityless', 'data', 'theme_config.json')
+        ];
+        for (let i = 0; i < candidates.length; i++) {
+            try {
+                if (fs.existsSync(candidates[i])) return candidates[i];
+            } catch (_) {}
+        }
+        return null;
+    }
+
+    let loadedConfig = null;
+    try {
+        const cfgPath = findConfigFile();
+        if (cfgPath) loadedConfig = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+    } catch (_) {}
+
     const electron = require('electron');
     const cp = require('child_process');
     const http = require('http');
@@ -528,20 +548,21 @@ __PATCH_VERSION_STAMP__
     }
 
     // ── 6. State & Appearance Defaults ──
-    const initialMaterial = process.env.GRAVITYLESS_MICA_MATERIAL || '__INITIAL_MAT__';
+    const initialMaterial = process.env.GRAVITYLESS_MICA_MATERIAL || loadedConfig?.Material || '__INITIAL_MAT__';
     let currentMaterial = (initialMaterial === 'tabbed' || initialMaterial === 'mica' || initialMaterial === 'acrylic' || initialMaterial === 'none')
         ? initialMaterial : 'mica';
-    let currentAlpha = Number(process.env.GRAVITYLESS_MICA_OPACITY || '__SAFE_OPACITY__');
+    let currentAlpha = Number(process.env.GRAVITYLESS_MICA_OPACITY ?? loadedConfig?.Opacity ?? '__SAFE_OPACITY__');
     if (isNaN(currentAlpha)) currentAlpha = 0.72;
     let currentLight = false;
-    let currentPopupAlpha = 0.60;
-    let currentNewUx = '';
-    let currentAccent = '#4285f4';
-    let currentAccentInteraction = true;
-    let currentNoiseAlpha = 0.55;
-    let currentNoiseFreq = 0.85;
-    let currentNoiseTint = 0.28;
-    let currentNoiseBase = 0.35;
+    let currentPopupAlpha = Number(loadedConfig?.PopupOpacity) || 0.60;
+    let currentNewUx = (loadedConfig?.NewUxTheme || '').trim().toLowerCase();
+    let currentAccent = loadedConfig?.AccentColor || '#4285f4';
+    let currentAccentInteraction = loadedConfig?.AccentInteraction !== false;
+    let currentNoiseAlpha = Number(loadedConfig?.NoiseAlpha) || 0.55;
+    let currentNoiseFreq = Number(loadedConfig?.NoiseFrequency) || 0.85;
+    let currentNoiseTint = Number(loadedConfig?.NoiseTintRatio) || 0.28;
+    let currentNoiseBase = Number(loadedConfig?.NoiseBaseAlpha) || 0.35;
+    let daemonPort = process.env.GRAVITYLESS_DAEMON_PORT || loadedConfig?.DaemonPort;
 
     function applyWindowEffects(win) {
         if (!win || win.isDestroyed()) return;
@@ -617,6 +638,25 @@ __PATCH_VERSION_STAMP__
             options.show = false;
             const win = new OrigBase(options);
             applyWindowEffects(win);
+
+            // Antigravity 2.29 WCV architecture: curtainView underlay blocks Mica
+            if (win.contentView && typeof win.contentView.addChildView === 'function') {
+                const origAddChild = win.contentView.addChildView;
+                win.contentView.addChildView = function(view, index) {
+                    try {
+                        if (currentMaterial !== 'none') {
+                            const kids = win.contentView.children || [];
+                            // First child view added before hubWcv is the curtain view
+                            if (kids.length === 0) {
+                                if (typeof view.setVisible === 'function') view.setVisible(false);
+                                if (typeof view.setBackgroundColor === 'function') view.setBackgroundColor('#00000000');
+                            }
+                        }
+                    } catch (_) {}
+                    return origAddChild.call(this, view, index);
+                };
+            }
+
             return win;
         }
         Object.setPrototypeOf(PatchedBaseWindow, OrigBase);
@@ -689,10 +729,12 @@ __PATCH_VERSION_STAMP__
 [aria-modal="true"],
 [data-select-popup],
 [data-testid="bottom-sheet"],
-.settings-modal-container {
+.settings-modal-container,
+[cmdk-root],
+.command-palette {
     background-color: rgba(${mixCh(cr)}, ${mixCh(cg)}, ${mixCh(cb)}, ${nB.toFixed(3)}) !important;
     background-image: ${noiseSvg(coarseFreq, coarseA)}, ${noiseSvg(fineFreq, fineA)} !important;
-    background-blend-mode: normal, normal;
+    background-blend-mode: normal, overlay;
     backdrop-filter: blur(28px) saturate(1.8) !important;
     -webkit-backdrop-filter: blur(28px) saturate(1.8) !important;
 }
@@ -704,7 +746,7 @@ __PATCH_VERSION_STAMP__
 [data-radix-context-menu-content] {
     background-color: rgba(${mixCh(cr)}, ${mixCh(cg)}, ${mixCh(cb)}, ${nB.toFixed(3)}) !important;
     background-image: ${noiseSvg(coarseFreq, coarseA)}, ${noiseSvg(fineFreq, fineA)} !important;
-    background-blend-mode: normal, normal;
+    background-blend-mode: normal, overlay;
     backdrop-filter: blur(28px) saturate(1.8) !important;
     -webkit-backdrop-filter: blur(28px) saturate(1.8) !important;
 }
@@ -720,6 +762,9 @@ __PATCH_VERSION_STAMP__
         const shadowDialog = isLight
             ? '0 32px 64px -12px rgba(0, 0, 0, 0.24), 0 0 2px 0 rgba(0, 0, 0, 0.14)'
             : '0 32px 64px -12px rgba(0, 0, 0, 0.56), 0 0 2px 0 rgba(0, 0, 0, 0.36)';
+
+        const cardRgb = isLight ? '255, 255, 255' : '35, 35, 42';
+        const cardAlpha = isLight ? (0.28 + a * 0.45).toFixed(2) : (0.12 + a * 0.35).toFixed(2);
 
         const composerCss = `
 .surface-composer {
@@ -753,8 +798,8 @@ body,
     --gl-row-hover: ${rowHover};
     --gl-row-active: ${rowActive};
     --gl-row-active-stroke: ${rowActiveStroke};
-    --gl-surface-mask: ${isLight ? 'rgba(255, 255, 255, 0.85)' : 'rgba(32, 32, 38, 0.85)'};
-    --gl-surface-mask-hover: ${isLight ? 'rgba(255, 255, 255, 0.95)' : 'rgba(42, 42, 50, 0.90)'};
+    --gl-surface-mask: rgba(${cardRgb}, ${cardAlpha});
+    --gl-surface-mask-hover: rgba(${cardRgb}, ${Math.min(1, Number(cardAlpha) + 0.10).toFixed(2)});
     --gl-stroke-static: ${strokeStatic};
     --gl-stroke-flyout: ${strokeFlyout};
     --gl-shadow-flyout: ${shadowFlyout};
@@ -817,7 +862,9 @@ ${blurCss}
 [role="dialog"],
 [aria-modal="true"],
 [data-testid="bottom-sheet"],
-.settings-modal-container {
+.settings-modal-container,
+[cmdk-root],
+.command-palette {
     box-shadow: inset 0 0 0 1px var(--gl-stroke-flyout), var(--gl-shadow-dialog) !important;
 }
 `;
@@ -874,19 +921,39 @@ ${blurCss}
         setAlpha: function (v) { currentAlpha = clamp(Number(v) || 0, 0, 1); }
     };
 
-    function readDict(lang) {
-        const dir = process.env.GRAVITYLESS_LOCALES_DIR;
-        if (!dir) return {};
-        try {
-            const fp = path.join(dir, lang + '.json');
-            if (!fs.existsSync(fp)) return {};
-            const parsed = JSON.parse(fs.readFileSync(fp, 'utf8'));
-            delete parsed._meta;
-            delete parsed['@metadata'];
-            return parsed;
-        } catch (_) {
-            return {};
+    function findLocalesDir() {
+        const candidates = [
+            process.env.GRAVITYLESS_LOCALES_DIR,
+            loadedConfig?.LocalesDir,
+            path.resolve(__dirname, '..', '..', '..', '..', 'locales'),
+            path.resolve(__dirname, '..', '..', '..', '..', 'data', 'locales'),
+            path.join(process.env.ProgramFiles || 'C:\\Program Files', 'Gravityless', 'locales'),
+            path.join(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)', 'Gravityless', 'locales'),
+            path.join(process.env.LOCALAPPDATA || '', 'Gravityless', 'locales'),
+            path.join(process.env.USERPROFILE || '', '.gravityless', 'locales')
+        ].filter(Boolean);
+        for (let i = 0; i < candidates.length; i++) {
+            try {
+                if (fs.existsSync(candidates[i])) return candidates[i];
+            } catch (_) {}
         }
+        return null;
+    }
+
+    function readDict(lang) {
+        try {
+            const dir = findLocalesDir();
+            if (dir) {
+                const fp = path.join(dir, lang + '.json');
+                if (fs.existsSync(fp)) {
+                    const parsed = JSON.parse(fs.readFileSync(fp, 'utf8'));
+                    delete parsed._meta;
+                    delete parsed['@metadata'];
+                    return parsed;
+                }
+            }
+        } catch (_) {}
+        return {};
     }
 
     function injectI18n(wc) {
@@ -899,63 +966,24 @@ ${blurCss}
             window.__gravityless_lang = ${JSON.stringify(loc)};
             window.__gravityless_i18n_dict = ${ds};
 
-            const WHITELIST = [
-                'header', 'nav', 'aside', '[role="navigation"]',
-                '[data-testid="title-menu-bar"]',
-                '[data-testid="pane-titlebar-toolbar"]',
-                '[data-testid="conversation-list-sidebar"]',
-                '[data-testid="overview-panel"]',
-                '[data-testid="sidebar"]',
-                '[role="dialog"]', '[role="menu"]', '[role="menuitem"]',
-                '[role="menubar"]', '[role="tablist"]', '[role="tab"]', '[role="listbox"]',
-                '[role="option"]', '[role="combobox"]', '[role="tooltip"]', '[data-tooltip-id]',
-                '[data-side]', '[data-popup-open]', '[aria-modal="true"]',
-                '.settings-modal', '.settings-modal-container', '.settings-modal-backdrop',
-                '[aria-label="Settings"]', '[data-testid="bottom-sheet"]',
-                '[data-testid="input-footer"]',
-                '[data-testid="permissions-selector-trigger"]',
-                '[data-testid="model-selector-trigger"]',
-                '[data-testid="chat-input-actions"]',
-                '[data-testid="chat-input-container"]',
-                '[data-testid="attach-context-menu"]',
-                '[data-testid="plus-menu-button"]',
-                '[data-testid="context-picker"]',
-                '[data-testid="permissions-project-options"]',
-                '[cmdk-root]', '[cmdk-item]', '[cmdk-group]', '[cmdk-list]', '[cmdk-input]', '.command-palette',
-                '[data-radix-popper-content-wrapper]', '[data-radix-dropdown-menu-content]',
-                '[data-radix-menu-content]', '[data-radix-context-menu-content]',
-                '[data-floating-ui-portal]', '[data-floating-ui]', '[data-radix-select-content]',
-                '[role="toolbar"]', 'button', '[role="button"]', '.tab-bar', '[data-testid*="toolbar"]', '[data-testid*="tab"]'
-            ].join(', ');
-
-            const EXCLUDED = [
-                'pre', 'code', 'samp', 'kbd', 'textarea',
-                'input', '[contenteditable="true"]',
+            const EXCLUDED_TAGS = ['PRE', 'CODE', 'SAMP', 'KBD'];
+            const EXCLUDED_SELECTORS = [
+                'pre', 'code', 'samp', 'kbd',
                 '.monaco-editor', '.monaco-diff-editor',
                 '[data-code-block]', '.syntax-highlighter',
                 '.xterm', '.terminal', '.console-output',
-                '[data-testid="conversation-view"]',
-                '[data-testid="user-input-step"]',
                 '[data-testid="user-message-bubble"]',
                 '[data-testid="planner-response-text"]',
-                '[data-testid="turn-cards-container"]',
-                '[data-testid="file-preview"]',
-                '[data-testid="pdf-viewport"]',
-                '.file-content', '.diff-line',
-                '.agent-thought-content', '.chat-message-content', '.markdown-body',
-                '[data-testid="conversation-row-sidebar"]',
-                '[data-testid="project-header"]'
+                '.agent-thought-content', '.file-content', '.diff-line',
+                '[data-testid="file-preview"]', '[data-testid="pdf-viewport"]'
             ].join(', ');
 
-            const LEAF_EXCLUDED = 'pre, code, samp, kbd, textarea, input, [contenteditable="true"], .monaco-editor, .monaco-diff-editor, [data-code-block], .xterm, .terminal';
+            const LEAF_EXCLUDED = 'pre, code, samp, kbd, .monaco-editor, .monaco-diff-editor, [data-code-block], .xterm, .terminal';
 
             function isAllowed(el) {
                 if (!el || !el.closest) return false;
-                if (el.closest('button, [role="button"], [role="menuitem"], [role="menu"], [role="tooltip"], [data-tooltip-id], [role="dialog"], [aria-modal="true"], [cmdk-root], [cmdk-item], [data-radix-popper-content-wrapper], [role="tab"], [role="option"]')) {
-                    return true;
-                }
-                if (el.closest(EXCLUDED)) return false;
-                if (!el.closest(WHITELIST)) return false;
+                if (EXCLUDED_TAGS.includes(el.tagName)) return false;
+                if (el.closest(EXCLUDED_SELECTORS)) return false;
                 return true;
             }
 
@@ -986,7 +1014,7 @@ ${blurCss}
 
             function procAttrs(el) {
                 if (!el || el.nodeType !== Node.ELEMENT_NODE) return;
-                if (!isAllowed(el)) return;
+                if (el.closest('.monaco-editor, .monaco-diff-editor, .xterm, .terminal')) return;
                 const d = window.__gravityless_i18n_dict;
                 const isEn = window.__gravityless_lang === 'en-US';
                 if (!d && !isEn) return;
@@ -1102,7 +1130,6 @@ ${blurCss}
     }
 
     // ── 10. Daemon SSE & Real-time Theme Sync ──
-    const daemonPort = process.env.GRAVITYLESS_DAEMON_PORT;
     if (!daemonPort) return;
 
     function applyMaterialToWindows(material) {
@@ -1119,6 +1146,16 @@ ${blurCss}
                 }
                 if (typeof win.setBackgroundColor === 'function') {
                     win.setBackgroundColor(revertAll ? solidBg : '#00000000');
+                }
+                if (win.contentView && Array.isArray(win.contentView.children)) {
+                    const kids = win.contentView.children;
+                    for (let k = 0; k < kids.length; k++) {
+                        const child = kids[k];
+                        if (k < kids.length - 1) {
+                            if (typeof child.setVisible === 'function') child.setVisible(revertAll);
+                            if (typeof child.setBackgroundColor === 'function') child.setBackgroundColor(revertAll ? solidBg : '#00000000');
+                        }
+                    }
                 }
             } catch (_) {}
         }
