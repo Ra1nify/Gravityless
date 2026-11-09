@@ -1,4 +1,4 @@
-using System.Net.Http;
+﻿using System.Net.Http;
 using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -719,6 +719,14 @@ public class AccountPoolService
         var acc = _accounts.FirstOrDefault(a => a.Id == accountId);
         if (acc == null) return (false, "找不到指定的账号");
 
+        // Ensure token is fresh before querying quota (Google OAuth access tokens expire after 1h).
+        if (string.IsNullOrWhiteSpace(acc.AccessToken) ||
+            (acc.AccessTokenExpiresAt.HasValue && acc.AccessTokenExpiresAt.Value <= DateTime.UtcNow.AddMinutes(2)))
+        {
+            var (refreshOk, refreshMsg) = await RefreshTokenAsync(accountId, proxyConfig, autoRetry: true, cancellationToken);
+            if (!refreshOk) return (false, $"刷新凭据失败: {refreshMsg}");
+        }
+
         var accessToken = acc.AccessToken;
         if (string.IsNullOrWhiteSpace(accessToken))
         {
@@ -726,7 +734,19 @@ public class AccountPoolService
         }
 
         using var client = CreateHttpClient(proxyConfig);
-        return await FetchAndSaveAccountQuotaInternalAsync(acc, accessToken, client, cancellationToken);
+        var result = await FetchAndSaveAccountQuotaInternalAsync(acc, accessToken, client, cancellationToken);
+
+        // If unauthorized (401), access token might have been invalidated; refresh and retry once.
+        if (!result.success && result.message.Contains("401", StringComparison.OrdinalIgnoreCase))
+        {
+            var (refreshOk, _) = await RefreshTokenAsync(accountId, proxyConfig, autoRetry: true, cancellationToken);
+            if (refreshOk && !string.IsNullOrWhiteSpace(acc.AccessToken))
+            {
+                result = await FetchAndSaveAccountQuotaInternalAsync(acc, acc.AccessToken, client, cancellationToken);
+            }
+        }
+
+        return result;
     }
 
     private async Task<(bool success, string message)> FetchAndSaveAccountQuotaInternalAsync(
@@ -738,14 +758,23 @@ public class AccountPoolService
         try
         {
             // Try retrieveUserQuotaSummary for the grouped 5h / 7d quota first.
-            var (success, body) = await SendRetrieveUserQuotaSummaryRequestAsync(client, accessToken, cancellationToken);
+            var (success, body) = await SendRetrieveUserQuotaSummaryRequestAsync(client, accessToken, "", cancellationToken);
 
-            // Fall back to retrieveUserQuota.
+            // If empty payload failed, try discovering the companion project and retry summary.
+            if (!success && (body.Contains("project", StringComparison.OrdinalIgnoreCase) || body.Contains("INVALID_ARGUMENT", StringComparison.OrdinalIgnoreCase)))
+            {
+                var discoveredProject = await DiscoverCloudCodeProjectAsync(client, accessToken, cancellationToken);
+                if (!string.IsNullOrEmpty(discoveredProject))
+                {
+                    (success, body) = await SendRetrieveUserQuotaSummaryRequestAsync(client, accessToken, discoveredProject, cancellationToken);
+                }
+            }
+
+            // Fall back to retrieveUserQuota if retrieveUserQuotaSummary is not supported.
             if (!success)
             {
                 (success, body) = await SendRetrieveUserQuotaRequestAsync(client, accessToken, "", cancellationToken);
 
-                // Missing project: discover the companion project ID via loadCodeAssist, then retry.
                 if (!success && (body.Contains("project", StringComparison.OrdinalIgnoreCase) || body.Contains("INVALID_ARGUMENT", StringComparison.OrdinalIgnoreCase)))
                 {
                     var discoveredProject = await DiscoverCloudCodeProjectAsync(client, accessToken, cancellationToken);
@@ -788,14 +817,18 @@ public class AccountPoolService
     private static async Task<(bool success, string body)> SendRetrieveUserQuotaSummaryRequestAsync(
         HttpClient client,
         string accessToken,
-        CancellationToken cancellationToken)
+        string projectId = "",
+        CancellationToken cancellationToken = default)
     {
         try
         {
             using var req = new HttpRequestMessage(HttpMethod.Post, CloudCodeQuotaSummaryEndpoint);
             req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
-            req.Headers.TryAddWithoutValidation("User-Agent", "antigravity/2.26.0");
-            req.Content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
+            req.Headers.TryAddWithoutValidation("User-Agent", "antigravity/2.29.0");
+            var payload = string.IsNullOrEmpty(projectId)
+                ? "{}"
+                : JsonSerializer.Serialize(new { project = projectId });
+            req.Content = new StringContent(payload, System.Text.Encoding.UTF8, "application/json");
 
             using var resp = await client.SendAsync(req, cancellationToken);
             var body = await resp.Content.ReadAsStringAsync(cancellationToken);
@@ -815,7 +848,7 @@ public class AccountPoolService
     {
         using var req = new HttpRequestMessage(HttpMethod.Post, CloudCodeQuotaEndpoint);
         req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
-        req.Headers.TryAddWithoutValidation("User-Agent", "antigravity/2.26.0");
+        req.Headers.TryAddWithoutValidation("User-Agent", "antigravity/2.29.0");
 
         var payload = string.IsNullOrEmpty(projectId) 
             ? "{}" 
@@ -836,7 +869,7 @@ public class AccountPoolService
         {
             using var req = new HttpRequestMessage(HttpMethod.Post, CloudCodeAssistEndpoint);
             req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
-            req.Headers.TryAddWithoutValidation("User-Agent", "antigravity/2.26.0");
+            req.Headers.TryAddWithoutValidation("User-Agent", "antigravity/2.29.0");
             req.Content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
 
             using var resp = await client.SendAsync(req, cancellationToken);

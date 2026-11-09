@@ -1,4 +1,4 @@
-namespace Gravityless.Core.Models;
+﻿namespace Gravityless.Core.Models;
 
 /// <summary>
 /// One pooled account.
@@ -77,13 +77,19 @@ public class AccountProfile
     public string? QuotaRawText { get; set; }
 
     [System.Text.Json.Serialization.JsonIgnore]
-    public double? GeminiRemainingFraction => Gemini5hFraction ?? Gemini7dFraction;
+    public double? GeminiRemainingFraction =>
+        (Gemini5hFraction.HasValue && Gemini7dFraction.HasValue)
+            ? Math.Min(Gemini5hFraction.Value, Gemini7dFraction.Value)
+            : Gemini5hFraction ?? Gemini7dFraction;
 
     [System.Text.Json.Serialization.JsonIgnore]
     public DateTime? GeminiResetTime => Gemini5hResetTime ?? Gemini7dResetTime;
 
     [System.Text.Json.Serialization.JsonIgnore]
-    public double? ClaudeGptRemainingFraction => Claude5hFraction ?? Claude7dFraction;
+    public double? ClaudeGptRemainingFraction =>
+        (Claude5hFraction.HasValue && Claude7dFraction.HasValue)
+            ? Math.Min(Claude5hFraction.Value, Claude7dFraction.Value)
+            : Claude5hFraction ?? Claude7dFraction;
 
     [System.Text.Json.Serialization.JsonIgnore]
     public DateTime? ClaudeGptResetTime => Claude5hResetTime ?? Claude7dResetTime;
@@ -98,28 +104,28 @@ public class AccountProfile
 
             if (Gemini5hFraction.HasValue && Gemini7dFraction.HasValue)
             {
-                parts.Add($"Gemini: {(int)(Gemini5hFraction.Value * 100)}%(5h)/{(int)(Gemini7dFraction.Value * 100)}%(7d)");
+                parts.Add($"Gemini: {(int)Math.Round(Gemini5hFraction.Value * 100)}%(5h)/{(int)Math.Round(Gemini7dFraction.Value * 100)}%(7d)");
             }
             else if (Gemini5hFraction.HasValue)
             {
-                parts.Add($"Gemini: {(int)(Gemini5hFraction.Value * 100)}%(5h)");
+                parts.Add($"Gemini: {(int)Math.Round(Gemini5hFraction.Value * 100)}%(5h)");
             }
             else if (Gemini7dFraction.HasValue)
             {
-                parts.Add($"Gemini: {(int)(Gemini7dFraction.Value * 100)}%(7d)");
+                parts.Add($"Gemini: {(int)Math.Round(Gemini7dFraction.Value * 100)}%(7d)");
             }
 
             if (Claude5hFraction.HasValue && Claude7dFraction.HasValue)
             {
-                parts.Add($"Claude: {(int)(Claude5hFraction.Value * 100)}%(5h)/{(int)(Claude7dFraction.Value * 100)}%(7d)");
+                parts.Add($"Claude: {(int)Math.Round(Claude5hFraction.Value * 100)}%(5h)/{(int)Math.Round(Claude7dFraction.Value * 100)}%(7d)");
             }
             else if (Claude7dFraction.HasValue)
             {
-                parts.Add($"Claude: {(int)(Claude7dFraction.Value * 100)}%(7d)");
+                parts.Add($"Claude: {(int)Math.Round(Claude7dFraction.Value * 100)}%(7d)");
             }
             else if (Claude5hFraction.HasValue)
             {
-                parts.Add($"Claude: {(int)(Claude5hFraction.Value * 100)}%(5h)");
+                parts.Add($"Claude: {(int)Math.Round(Claude5hFraction.Value * 100)}%(5h)");
             }
 
             return parts.Count > 0 ? string.Join("  ", parts) : string.Empty;
