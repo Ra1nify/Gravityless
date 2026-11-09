@@ -1,4 +1,4 @@
-﻿<div align="center">
+<div align="center">
 
 <img src="src/Gravityless.App/Assets/brand.png" width="120" alt="Gravityless">
 
@@ -17,7 +17,7 @@ Gravityless 在 Windows 上并行运行多个相互隔离的 Antigravity 实例�
 ## 前置条件
 
 - Windows 10 1809 或更高
-- [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0)
+- [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/10.0)
 
 ---
 
@@ -65,7 +65,7 @@ Gravityless 在 Windows 上并行运行多个相互隔离的 Antigravity 实例�
 
 ## 构建
 
-需要 .NET 8 SDK。
+需要 .NET 10 SDK。
 
 ```powershell
 dotnet build Gravityless.sln

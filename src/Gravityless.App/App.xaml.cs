@@ -20,7 +20,7 @@ public partial class App : Application
     private const string PaletteLightSource = "Resources/Palette.Light.xaml";
 
     /// <summary>"auto" | "light" | "dark", set from the appearance page.</summary>
-    public static string ThemeMode { get; private set; } = "auto";
+    public static new string ThemeMode { get; private set; } = "auto";
 
     protected override void OnStartup(StartupEventArgs e)
     {

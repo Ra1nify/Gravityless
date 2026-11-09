@@ -68,7 +68,7 @@ SetupIconFile=..\src\Gravityless.App\Assets\app.ico
 UninstallDisplayIcon={app}\{#AppExeName}
 UninstallDisplayName={#AppName}
 
-; .NET 8 Desktop Runtime is a documented prerequisite; checked in InitializeSetup.
+; .NET 10 Desktop Runtime is a documented prerequisite; checked in InitializeSetup.
 MinVersion=10.0.17763
 
 [Languages]

@@ -1,4 +1,4 @@
-﻿<div align="center">
+<div align="center">
 
 <img src="src/Gravityless.App/Assets/brand.png" width="120" alt="Gravityless">
 
@@ -20,7 +20,7 @@ Gravityless runs several isolated Antigravity instances side by side on Windows,
 ## Prerequisites
 
 - Windows 10 1809 or later
-- [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0)
+- [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/10.0)
 
 ---
 
@@ -68,7 +68,7 @@ Full documentation lives in the [Wiki](https://github.com/Ra1nify/Gravityless/wi
 
 ## Build
 
-Requires the .NET 8 SDK.
+Requires the .NET 10 SDK.
 
 ```powershell
 dotnet build Gravityless.sln

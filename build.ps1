@@ -5,7 +5,7 @@
 #   .\build.ps1 -Sign              # sign the app exe and the setup exe
 #   .\build.ps1 -SkipPublish       # only re-run Inno Setup on existing artifacts
 #
-# Requires: .NET 8 SDK, Inno Setup 6 or 7 (ISCC.exe).
+# Requires: .NET 10 SDK, Inno Setup 6 or 7 (ISCC.exe).
 
 [CmdletBinding()]
 param(
