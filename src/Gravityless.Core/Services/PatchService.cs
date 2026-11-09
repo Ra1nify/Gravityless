@@ -15,7 +15,7 @@ public class PatchService
     /// Version stamp for the runtime bootstrap script. Bump whenever template semantics change
     /// to trigger re-generation of gravityless-bootstrap.js.
     /// </summary>
-    private const int PatchVersion = 54;
+    private const int PatchVersion = 55;
     private static readonly string PatchStamp = $"/* GRAVITYLESS_BOOTSTRAP_VERSION: {PatchVersion} */";
 
     /// <summary>Unpacks an Electron ASAR archive into outputDir using only managed code.</summary>
@@ -555,7 +555,6 @@ __PATCH_VERSION_STAMP__
     if (isNaN(currentAlpha)) currentAlpha = 0.72;
     let currentLight = false;
     let currentPopupAlpha = Number(loadedConfig?.PopupOpacity) || 0.60;
-    let currentNewUx = (loadedConfig?.NewUxTheme || '').trim().toLowerCase();
     let currentAccent = loadedConfig?.AccentColor || '#4285f4';
     let currentAccentInteraction = loadedConfig?.AccentInteraction !== false;
     let currentNoiseAlpha = Number(loadedConfig?.NoiseAlpha) || 0.55;
@@ -566,6 +565,7 @@ __PATCH_VERSION_STAMP__
 
     function applyWindowEffects(win) {
         if (!win || win.isDestroyed()) return;
+        if (currentMaterial === 'none') return;
 
         // Window reveals only when first frame is rendered to prevent transparent frame flash
         win.once('ready-to-show', () => {
@@ -588,7 +588,7 @@ __PATCH_VERSION_STAMP__
         if (OrigBW.prototype && typeof OrigBW.prototype.setTitleBarOverlay === 'function') {
             const origSetOverlay = OrigBW.prototype.setTitleBarOverlay;
             OrigBW.prototype.setTitleBarOverlay = function(opts) {
-                if (opts && typeof opts === 'object') {
+                if (currentMaterial !== 'none' && opts && typeof opts === 'object') {
                     opts = Object.assign({}, opts, { color: '#00000000' });
                 }
                 return origSetOverlay.call(this, opts);
@@ -611,14 +611,18 @@ __PATCH_VERSION_STAMP__
                 return new PatchedBrowserWindow(options);
             }
             options = options || {};
-            options.backgroundMaterial = currentMaterial;
-            options.backgroundColor = '#00000000';
-            options.show = false;
-            if (options.titleBarOverlay && typeof options.titleBarOverlay === 'object') {
-                options.titleBarOverlay = Object.assign({}, options.titleBarOverlay, { color: '#00000000' });
+            if (currentMaterial !== 'none') {
+                options.backgroundMaterial = currentMaterial;
+                options.backgroundColor = '#00000000';
+                options.show = false;
+                if (options.titleBarOverlay && typeof options.titleBarOverlay === 'object') {
+                    options.titleBarOverlay = Object.assign({}, options.titleBarOverlay, { color: '#00000000' });
+                }
             }
             const win = new OrigBW(options);
-            applyWindowEffects(win);
+            if (currentMaterial !== 'none') {
+                applyWindowEffects(win);
+            }
             return win;
         }
         Object.setPrototypeOf(PatchedBrowserWindow, OrigBW);
@@ -633,11 +637,15 @@ __PATCH_VERSION_STAMP__
                 return new PatchedBaseWindow(options);
             }
             options = options || {};
-            options.backgroundMaterial = currentMaterial;
-            options.backgroundColor = '#00000000';
-            options.show = false;
+            if (currentMaterial !== 'none') {
+                options.backgroundMaterial = currentMaterial;
+                options.backgroundColor = '#00000000';
+                options.show = false;
+            }
             const win = new OrigBase(options);
-            applyWindowEffects(win);
+            if (currentMaterial !== 'none') {
+                applyWindowEffects(win);
+            }
 
             // Antigravity 2.29 WCV architecture: curtainView underlay blocks Mica
             if (win.contentView && typeof win.contentView.addChildView === 'function') {
@@ -669,7 +677,7 @@ __PATCH_VERSION_STAMP__
         return Math.max(min, Math.min(max, val));
     }
 
-    function buildCss(alpha, popupAlpha, shellAlpha, isLight, newUx,
+    function buildCss(alpha, popupAlpha, shellAlpha, isLight,
                       accentHex, accentInteraction,
                       noiseAlpha, noiseFreq, noiseTint, noiseBase) {
         const a = clamp(Number(alpha) || 0, 0, 1);
@@ -870,26 +878,11 @@ ${blurCss}
 `;
     }
 
-    function applyNewUx(wc) {
-        try {
-            const setCode = currentNewUx
-                ? 'var b=document.body;if(b){b.setAttribute("data-agy-theme","1");b.setAttribute("data-agy-home-glow","1");b.setAttribute("data-newux-theme",' + JSON.stringify(currentNewUx) + ');}'
-                : 'var b=document.body;if(b){b.removeAttribute("data-agy-theme");b.removeAttribute("data-agy-home-glow");b.removeAttribute("data-newux-theme");}';
-            wc.executeJavaScript(setCode).catch(function () {});
-        } catch (_) {}
-    }
-
     function attach(target, rawAlpha, rawPopupAlpha) {
         if (!target) return;
         const wc = target.webContents ? target.webContents : target;
         if (!wc || typeof wc.insertCSS !== 'function') return;
         if (typeof target.isDestroyed === 'function' && target.isDestroyed()) return;
-
-        const alpha = (rawAlpha === undefined || rawAlpha === null) ? currentAlpha : rawAlpha;
-        const popupAlpha = (rawPopupAlpha === undefined || rawPopupAlpha === null) ? currentPopupAlpha : rawPopupAlpha;
-        const css = buildCss(alpha, popupAlpha, currentAlpha, currentLight, currentNewUx,
-                             currentAccent, currentAccentInteraction,
-                             currentNoiseAlpha, currentNoiseFreq, currentNoiseTint, currentNoiseBase);
 
         try {
             const prev = wc.__gravitylessCssKey;
@@ -898,9 +891,14 @@ ${blurCss}
         } catch (_) {}
 
         if (currentMaterial === 'none') {
-            applyNewUx(wc);
             return;
         }
+
+        const alpha = (rawAlpha === undefined || rawAlpha === null) ? currentAlpha : rawAlpha;
+        const popupAlpha = (rawPopupAlpha === undefined || rawPopupAlpha === null) ? currentPopupAlpha : rawPopupAlpha;
+        const css = buildCss(alpha, popupAlpha, currentAlpha, currentLight,
+                             currentAccent, currentAccentInteraction,
+                             currentNoiseAlpha, currentNoiseFreq, currentNoiseTint, currentNoiseBase);
 
         try {
             const p = wc.insertCSS(css, { cssOrigin: 'user' });
@@ -910,8 +908,6 @@ ${blurCss}
                 wc.__gravitylessCssKey = p;
             }
         } catch (_) {}
-
-        applyNewUx(wc);
     }
 
     global.__gravitylessMica = {
@@ -1179,12 +1175,12 @@ ${blurCss}
                 if (theme.noiseFrequency !== undefined && theme.noiseFrequency !== null) currentNoiseFreq = Number(theme.noiseFrequency);
                 if (theme.noiseTintRatio !== undefined && theme.noiseTintRatio !== null) currentNoiseTint = Number(theme.noiseTintRatio);
                 if (theme.noiseBaseAlpha !== undefined && theme.noiseBaseAlpha !== null) currentNoiseBase = Number(theme.noiseBaseAlpha);
-                if (theme.newUxTheme !== undefined && theme.newUxTheme !== null) currentNewUx = String(theme.newUxTheme).trim().toLowerCase();
 
                 applyMaterialToWindows(currentMaterial);
-                const baseWins = typeof electron.BaseWindow?.getAllWindows === 'function' ? electron.BaseWindow.getAllWindows() : [];
-                const browserWins = typeof electron.BrowserWindow?.getAllWindows === 'function' ? electron.BrowserWindow.getAllWindows() : [];
-                for (const win of [...baseWins, ...browserWins]) attach(win);
+                const allWc = (electron.webContents && typeof electron.webContents.getAllWebContents === 'function')
+                    ? electron.webContents.getAllWebContents()
+                    : [];
+                for (const wc of allWc) attach(wc);
             });
         }).on('error', function() {});
     }

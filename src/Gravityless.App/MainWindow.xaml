@@ -1026,20 +1026,6 @@
                                         </StackPanel>
                                     </Grid>
 
-                                    <Grid Margin="0,0,0,16">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="140"/>
-                                            <ColumnDefinition Width="*"/>
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock Text="{DynamicResource Appearance_NewUxLabel}" VerticalAlignment="Center" Opacity="0.85"/>
-                                        <ComboBox AutomationProperties.AutomationId="NewUxThemeCombo" Grid.Column="1" x:Name="NewUxThemeCombo"
-                                                  HorizontalAlignment="Left" MinWidth="240" VerticalAlignment="Center"
-                                                  SelectionChanged="OnNewUxThemeChanged">
-                                            <ComboBoxItem Content="{DynamicResource Appearance_NewUxOff}" Tag=""/>
-                                            <ComboBoxItem Content="{DynamicResource Appearance_NewUxOnyx}" Tag="onyx"/>
-                                        </ComboBox>
-                                    </Grid>
-
                                     <Grid Margin="0,0,0,12">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="140"/>

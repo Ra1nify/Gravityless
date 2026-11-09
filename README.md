@@ -1,4 +1,4 @@
-<div align="center">
+﻿<div align="center">
 
 <img src="src/Gravityless.App/Assets/brand.png" width="120" alt="Gravityless">
 
@@ -51,7 +51,7 @@ Full documentation lives in the [Wiki](https://github.com/Ra1nify/Gravityless/wi
 | [Tools](https://github.com/Ra1nify/Gravityless/wiki/Tools) | Skills, plugins and MCP shared pools |
 | [Proxy](https://github.com/Ra1nify/Gravityless/wiki/Proxy) | Direct, system and manual proxy modes |
 | [Accounts](https://github.com/Ra1nify/Gravityless/wiki/Accounts) | Capture, binding, mutex, quota refresh |
-| [Appearance](https://github.com/Ra1nify/Gravityless/wiki/Appearance) | Materials, transparency, popup grain, skins, theme, language |
+| [Appearance](https://github.com/Ra1nify/Gravityless/wiki/Appearance) | Materials, transparency, popup grain, theme, language |
 | [Multi-Instance](https://github.com/Ra1nify/Gravityless/wiki/Multi-Instance) | Why concurrent accounts are no longer possible |
 | [Data-Layout](https://github.com/Ra1nify/Gravityless/wiki/Data-Layout) | Runtime directory structure and file meanings |
 | [Troubleshooting](https://github.com/Ra1nify/Gravityless/wiki/Troubleshooting) | Common failures and how to handle them |

@@ -1,4 +1,4 @@
-<div align="center">
+﻿<div align="center">
 
 <img src="src/Gravityless.App/Assets/brand.png" width="120" alt="Gravityless">
 
@@ -48,7 +48,7 @@ Gravityless 在 Windows 上并行运行多个相互隔离的 Antigravity 实例�
 | [工具](https://github.com/Ra1nify/Gravityless/wiki/Tools) | 技能、插件与 MCP 的共享池 |
 | [代理](https://github.com/Ra1nify/Gravityless/wiki/Proxy) | 直连、跟随系统、手动代理 |
 | [号池](https://github.com/Ra1nify/Gravityless/wiki/Accounts) | 捕获、绑定、互斥锁、额度刷新 |
-| [外观](https://github.com/Ra1nify/Gravityless/wiki/Appearance) | 材质、透明度、弹窗噪点、皮肤、主题、语言 |
+| [外观](https://github.com/Ra1nify/Gravityless/wiki/Appearance) | 材质、透明度、弹窗噪点、主题、语言 |
 | [多开](https://github.com/Ra1nify/Gravityless/wiki/Multi-Instance) | 为什么并发不同账号已不可行 |
 | [数据布局](https://github.com/Ra1nify/Gravityless/wiki/Data-Layout) | 运行时目录结构与文件含义 |
 | [故障排查](https://github.com/Ra1nify/Gravityless/wiki/Troubleshooting) | 常见故障与处理方式 |

@@ -1,4 +1,4 @@
-﻿using System.Net;
+using System.Net;
 using System.Text;
 using System.Text.Json;
 using Gravityless.Core.Models;
@@ -24,8 +24,6 @@ public class GravitylessDaemon : IDisposable
     public string MicaMaterial { get; set; } = "mica"; // "mica" | "tabbed" | "acrylic" | "none"
     /// <summary>"auto" (follow system) / "light" / "dark".</summary>
     public string ThemeMode { get; set; } = "auto";
-    /// <summary>New UX preset: "" (off) / "onyx" (official Antigravity dark skin).</summary>
-    public string NewUxTheme { get; set; } = string.Empty;
     public bool AccentInteraction { get; set; } = true;
 
     public double NoiseAlpha { get; set; } = 0.55;
@@ -49,14 +47,6 @@ public class GravitylessDaemon : IDisposable
             _ => "mica"
         };
 
-    private static readonly string[] NewUxThemes = ["onyx"];
-
-    /// <summary>Returns "" for anything outside the preset whitelist.</summary>
-    public static string NormalizeNewUxTheme(string? theme)
-    {
-        var value = theme?.Trim().ToLowerInvariant() ?? string.Empty;
-        return NewUxThemes.Contains(value) ? value : string.Empty;
-    }
 
     public GravitylessDaemon(string? baseDir = null)
     {
@@ -213,7 +203,6 @@ public class GravitylessDaemon : IDisposable
             popupOpacity = popupAlpha,
             accent = AccentColor,
             theme = ResolveEffectiveTheme(),
-            newUxTheme = NewUxTheme,
             accentInteraction = AccentInteraction,
             noiseAlpha = Math.Clamp(NoiseAlpha, 0.0, 1.0),
             noiseFrequency = Math.Clamp(NoiseFrequency, 0.5, 2.0),
@@ -326,7 +315,6 @@ public class GravitylessDaemon : IDisposable
                     if (!string.IsNullOrEmpty(config.AccentColor))
                         AccentColor = config.AccentColor;
                     ThemeMode = NormalizeThemeMode(config.ThemeMode);
-                    NewUxTheme = NormalizeNewUxTheme(config.NewUxTheme);
                     AccentInteraction = config.AccentInteraction;
                     NoiseAlpha = Math.Clamp(config.NoiseAlpha, 0.0, 1.0);
                     NoiseFrequency = Math.Clamp(config.NoiseFrequency, 0.5, 2.0);
@@ -356,7 +344,6 @@ public class GravitylessDaemon : IDisposable
                 PopupOpacity = PopupOpacity,
                 AccentColor = AccentColor,
                 ThemeMode = ThemeMode,
-                NewUxTheme = NewUxTheme,
                 AccentInteraction = AccentInteraction,
                 NoiseAlpha = NoiseAlpha,
                 NoiseFrequency = NoiseFrequency,
@@ -386,7 +373,7 @@ public class GravitylessDaemon : IDisposable
         ThemeMode = NormalizeThemeMode(mode);
         SaveThemeConfig();
     }
-    public void UpdateTheme(string material, double opacity, double? popupOpacity = null, string? accent = null, string? newUxTheme = null)
+    public void UpdateTheme(string material, double opacity, double? popupOpacity = null, string? accent = null)
     {
         MicaMaterial = NormalizeMaterial(material);
         MicaOpacity = opacity;
@@ -394,10 +381,6 @@ public class GravitylessDaemon : IDisposable
             PopupOpacity = Math.Clamp(popupOpacity.Value, 0.05, 1.00);
         if (!string.IsNullOrEmpty(accent))
             AccentColor = accent;
-        // null keeps the current preset; "" disables it
-        if (newUxTheme != null)
-            NewUxTheme = NormalizeNewUxTheme(newUxTheme);
-
         SaveThemeConfig();
 
         BroadcastThemeReload();
@@ -438,7 +421,6 @@ public class GravitylessDaemon : IDisposable
             material = MicaMaterial,
             opacity = MicaOpacity,
             popupOpacity = PopupOpacity,
-            newUxTheme = NewUxTheme,
             accent = accentOverride ?? AccentColor,
             accentInteraction = AccentInteraction,
             noiseAlpha = Math.Clamp(NoiseAlpha, 0.0, 1.0),
@@ -448,9 +430,9 @@ public class GravitylessDaemon : IDisposable
         }));
     }
 
-    public void UpdateTheme(double opacity, double? popupOpacity = null, string? accent = null, string? newUxTheme = null)
+    public void UpdateTheme(double opacity, double? popupOpacity = null, string? accent = null)
     {
-        UpdateTheme(MicaMaterial, opacity, popupOpacity, accent, newUxTheme);
+        UpdateTheme(MicaMaterial, opacity, popupOpacity, accent);
     }
 
     public void UpdateLanguage(string lang)

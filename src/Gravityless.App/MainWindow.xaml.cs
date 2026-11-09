@@ -1,4 +1,4 @@
-﻿using System.Collections.ObjectModel;
+using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
@@ -174,20 +174,6 @@ public partial class MainWindow
                     this.WindowBackdropType = Wpf.Ui.Controls.WindowBackdropType.Mica;
                 }
 
-                // Restore the new-UX skin selection by matching ComboBoxItem.Tag.
-                if (NewUxThemeCombo != null)
-                {
-                    var want = _daemon.NewUxTheme ?? string.Empty;
-                    foreach (var item in NewUxThemeCombo.Items.OfType<ComboBoxItem>())
-                    {
-                        if (string.Equals(item.Tag as string ?? string.Empty, want, StringComparison.OrdinalIgnoreCase))
-                        {
-                            NewUxThemeCombo.SelectedItem = item;
-                            break;
-                        }
-                    }
-                    if (NewUxThemeCombo.SelectedItem == null) NewUxThemeCombo.SelectedIndex = 0;
-                }
                 // Slider shows transparency: 0% = opaque, 100% = fully transparent.
                 var transparency = Math.Clamp(1.0 - opacity, 0.00, 1.00);
                 var popupTransparency = Math.Clamp(1.0 - _daemon.PopupOpacity, 0.00, 1.00);
@@ -2691,28 +2677,6 @@ public partial class MainWindow
         return "mica";
     }
 
-    /// <summary>Returns "" when the skin is explicitly off, null when the combo is not initialized yet.</summary>
-    private string? GetSelectedNewUx()
-    {
-        if (NewUxThemeCombo?.SelectedItem is ComboBoxItem item)
-        {
-            return item.Tag as string ?? string.Empty;
-        }
-        return null;
-    }
-
-    /// <summary>Switches the Antigravity skin (body[data-agy-theme][data-newux-theme]).</summary>
-    private void OnNewUxThemeChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (_isInitializingTheme || _daemon == null) return;
-
-        var mat = GetSelectedMaterial();
-        var micaTransparency = MicaOpacitySlider?.Value ?? (1.0 - _daemon.MicaOpacity);
-        var opacity = Math.Clamp(1.0 - micaTransparency, 0.00, 1.00);
-        var popupOpacity = FixedPopupOpacity;
-
-        _daemon.UpdateTheme(mat, opacity, popupOpacity, null, GetSelectedNewUx());
-    }
 
     private void OnBackdropMaterialChanged(object sender, RoutedEventArgs e)
     {
@@ -2727,7 +2691,7 @@ public partial class MainWindow
         ThemeService.Update(mat, opacity, popupOpacity);
         ApplyHostWindowOpacity(opacity);
         // Then let the daemon persist it and push CSS to running instances.
-        _daemon?.UpdateTheme(mat, opacity, popupOpacity, null, GetSelectedNewUx());
+        _daemon?.UpdateTheme(mat, opacity, popupOpacity, null);
     }
 
     private void OnMicaOpacityChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -2744,7 +2708,7 @@ public partial class MainWindow
             var mat = GetSelectedMaterial();
             var popupOpacity = FixedPopupOpacity;
             ThemeService.Update(mat, opacity, popupOpacity);
-            _daemon.UpdateTheme(mat, opacity, popupOpacity, null, GetSelectedNewUx());
+            _daemon.UpdateTheme(mat, opacity, popupOpacity, null);
         }
     }
 
