@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Text.Json;
@@ -15,7 +15,7 @@ public class PatchService
     /// Version stamp for the runtime bootstrap script. Bump whenever template semantics change
     /// to trigger re-generation of gravityless-bootstrap.js.
     /// </summary>
-    private const int PatchVersion = 55;
+    private const int PatchVersion = 56;
     private static readonly string PatchStamp = $"/* GRAVITYLESS_BOOTSTRAP_VERSION: {PatchVersion} */";
 
     /// <summary>Unpacks an Electron ASAR archive into outputDir using only managed code.</summary>
@@ -437,6 +437,29 @@ __PATCH_VERSION_STAMP__
     const fs = require('fs');
     const path = require('path');
 
+    // Suppress unwanted wizard popups & auto-updater in multi-instance sandbox
+    try {
+        const ideWizardPath = path.join(__dirname, 'ideInstall', 'wizard.js');
+        if (fs.existsSync(ideWizardPath)) {
+            const ideWizard = require(ideWizardPath);
+            if (ideWizard) {
+                ideWizard.maybeShowIdeInstallWizard = async function() { return false; };
+                ideWizard.showIdeInstallWizard = async function() { return; };
+            }
+        }
+    } catch (_) {}
+
+    try {
+        const updaterPath = path.join(__dirname, 'updater.js');
+        if (fs.existsSync(updaterPath)) {
+            const updater = require(updaterPath);
+            if (updater) {
+                updater.initAutoUpdater = function() {};
+                updater.checkForUpdates = function() {};
+            }
+        }
+    } catch (_) {}
+
     // ── 1. Hook child_process.spawn / fork for Language Server arguments ──
     function patchArgs(args) {
         if (!Array.isArray(args)) return args;
@@ -632,6 +655,29 @@ __PATCH_VERSION_STAMP__
 
     if (electron.BaseWindow) {
         const OrigBase = electron.BaseWindow;
+
+        // Force titlebar overlay color to transparent
+        if (OrigBase.prototype && typeof OrigBase.prototype.setTitleBarOverlay === 'function') {
+            const origSetOverlay = OrigBase.prototype.setTitleBarOverlay;
+            OrigBase.prototype.setTitleBarOverlay = function(opts) {
+                if (currentMaterial !== 'none' && opts && typeof opts === 'object') {
+                    opts = Object.assign({}, opts, { color: '#00000000' });
+                }
+                return origSetOverlay.call(this, opts);
+            };
+        }
+
+        // Prevent solid background reset
+        if (OrigBase.prototype && typeof OrigBase.prototype.setBackgroundColor === 'function') {
+            const origSetBg = OrigBase.prototype.setBackgroundColor;
+            OrigBase.prototype.setBackgroundColor = function(color) {
+                if (currentMaterial !== 'none') {
+                    return origSetBg.call(this, '#00000000');
+                }
+                return origSetBg.call(this, color);
+            };
+        }
+
         function PatchedBaseWindow(options) {
             if (!(this instanceof PatchedBaseWindow)) {
                 return new PatchedBaseWindow(options);
@@ -640,24 +686,70 @@ __PATCH_VERSION_STAMP__
             if (currentMaterial !== 'none') {
                 options.backgroundMaterial = currentMaterial;
                 options.backgroundColor = '#00000000';
-                options.show = false;
+                if (options.titleBarOverlay && typeof options.titleBarOverlay === 'object') {
+                    options.titleBarOverlay = Object.assign({}, options.titleBarOverlay, { color: '#00000000' });
+                }
             }
             const win = new OrigBase(options);
             if (currentMaterial !== 'none') {
                 applyWindowEffects(win);
             }
 
-            // Antigravity 2.29 WCV architecture: curtainView underlay blocks Mica
+            // Antigravity 2.29/2.30 WCV architecture: curtainView underlay blocks Mica
             if (win.contentView && typeof win.contentView.addChildView === 'function') {
                 const origAddChild = win.contentView.addChildView;
                 win.contentView.addChildView = function(view, index) {
                     try {
-                        if (currentMaterial !== 'none') {
-                            const kids = win.contentView.children || [];
-                            // First child view added before hubWcv is the curtain view
-                            if (kids.length === 0) {
-                                if (typeof view.setVisible === 'function') view.setVisible(false);
-                                if (typeof view.setBackgroundColor === 'function') view.setBackgroundColor('#00000000');
+                        const kids = win.contentView.children || [];
+                        // First child view added before hubWcv is the curtain view
+                        if (kids.length === 0) {
+                            if (typeof view.setVisible === 'function' && !view.__origSetVisible) {
+                                const origSetVisible = view.setVisible;
+                                view.__origSetVisible = origSetVisible;
+                                view.setVisible = function(visible) {
+                                    if (currentMaterial !== 'none') return origSetVisible.call(this, false);
+                                    return origSetVisible.call(this, visible);
+                                };
+                                if (currentMaterial !== 'none') {
+                                    try { origSetVisible.call(view, false); } catch (_) {}
+                                }
+                            }
+                            if (typeof view.setBackgroundColor === 'function' && !view.__origSetBg) {
+                                const origViewBg = view.setBackgroundColor;
+                                view.__origSetBg = origViewBg;
+                                view.setBackgroundColor = function(color) {
+                                    if (currentMaterial !== 'none') return origViewBg.call(this, '#00000000');
+                                    return origViewBg.call(this, color);
+                                };
+                                if (currentMaterial !== 'none') {
+                                    try { origViewBg.call(view, '#00000000'); } catch (_) {}
+                                }
+                            }
+                            if (typeof view.setBounds === 'function' && !view.__origSetBounds) {
+                                const origSetBounds = view.setBounds;
+                                view.__origSetBounds = origSetBounds;
+                                view.setBounds = function(bounds) {
+                                    if (currentMaterial !== 'none') {
+                                        return origSetBounds.call(this, { x: 0, y: 0, width: 0, height: 0 });
+                                    }
+                                    return origSetBounds.call(this, bounds);
+                                };
+                                if (currentMaterial !== 'none') {
+                                    try { origSetBounds.call(view, { x: 0, y: 0, width: 0, height: 0 }); } catch (_) {}
+                                }
+                            }
+                            if (view.webContents && typeof view.webContents.loadURL === 'function' && !view.webContents.__origLoadURL) {
+                                const origLoadURL = view.webContents.loadURL;
+                                view.webContents.__origLoadURL = origLoadURL;
+                                view.webContents.loadURL = function(url, opts) {
+                                    if (currentMaterial !== 'none') {
+                                        return origLoadURL.call(this, 'data:text/html,<!doctype html><html style=\"background:transparent\"><body style=\"background:transparent\"></body></html>', opts);
+                                    }
+                                    return origLoadURL.call(this, url, opts);
+                                };
+                                if (currentMaterial !== 'none') {
+                                    try { view.webContents.loadURL('data:text/html,<!doctype html><html style=\"background:transparent\"><body style=\"background:transparent\"></body></html>'); } catch (_) {}
+                                }
                             }
                         }
                     } catch (_) {}
@@ -670,6 +762,23 @@ __PATCH_VERSION_STAMP__
         Object.setPrototypeOf(PatchedBaseWindow, OrigBase);
         PatchedBaseWindow.prototype = OrigBase.prototype;
         electron.BaseWindow = PatchedBaseWindow;
+    }
+
+    // Intercept wcv:set-theme-color IPC to avoid resetting solid opaque background during material mode
+    if (electron.ipcMain && typeof electron.ipcMain.handle === 'function') {
+        const origHandle = electron.ipcMain.handle;
+        electron.ipcMain.handle = function(channel, listener) {
+            if (channel === 'wcv:set-theme-color') {
+                const origListener = listener;
+                return origHandle.call(this, channel, async function(event, color) {
+                    if (currentMaterial !== 'none') {
+                        return true;
+                    }
+                    return origListener.call(this, event, color);
+                });
+            }
+            return origHandle.call(this, channel, listener);
+        };
     }
 
     // ── 8. CSS & i18n Helpers ──
@@ -788,7 +897,13 @@ __PATCH_VERSION_STAMP__
 /* Gravityless: Mica baseline */
 html,
 body,
-#root {
+#root,
+.antigravity-layout,
+.antigravity-shell,
+.app-container,
+.main-container,
+.content-area,
+.split-view-container {
     background: transparent !important;
     background-color: transparent !important;
 }
@@ -1131,25 +1246,51 @@ ${blurCss}
     function applyMaterialToWindows(material) {
         if (!material) return;
         const revertAll = (material === 'none');
-        const solidBg = currentLight ? '#ffffff' : '#101010';
+        const solidBg = currentLight ? '#FAFAFA' : '#131313';
         const baseWins = typeof electron.BaseWindow?.getAllWindows === 'function' ? electron.BaseWindow.getAllWindows() : [];
         const browserWins = typeof electron.BrowserWindow?.getAllWindows === 'function' ? electron.BrowserWindow.getAllWindows() : [];
         for (const win of [...baseWins, ...browserWins]) {
             try {
                 if (win.isDestroyed()) continue;
                 if (typeof win.setBackgroundMaterial === 'function') {
-                    win.setBackgroundMaterial(material);
+                    win.setBackgroundMaterial(revertAll ? 'none' : material);
                 }
                 if (typeof win.setBackgroundColor === 'function') {
                     win.setBackgroundColor(revertAll ? solidBg : '#00000000');
+                }
+                if (typeof win.setTitleBarOverlay === 'function') {
+                    win.setTitleBarOverlay({
+                        color: revertAll ? solidBg : '#00000000',
+                        symbolColor: currentLight ? '#383A42' : '#FAFAFA'
+                    });
                 }
                 if (win.contentView && Array.isArray(win.contentView.children)) {
                     const kids = win.contentView.children;
                     for (let k = 0; k < kids.length; k++) {
                         const child = kids[k];
                         if (k < kids.length - 1) {
-                            if (typeof child.setVisible === 'function') child.setVisible(revertAll);
-                            if (typeof child.setBackgroundColor === 'function') child.setBackgroundColor(revertAll ? solidBg : '#00000000');
+                            if (typeof child.setVisible === 'function') {
+                                if (revertAll && typeof child.__origSetVisible === 'function') {
+                                    child.__origSetVisible.call(child, true);
+                                } else if (!revertAll) {
+                                    child.setVisible(false);
+                                }
+                            }
+                            if (typeof child.setBackgroundColor === 'function') {
+                                if (revertAll && typeof child.__origSetBg === 'function') {
+                                    child.__origSetBg.call(child, solidBg);
+                                } else if (!revertAll) {
+                                    child.setBackgroundColor('#00000000');
+                                }
+                            }
+                            if (typeof child.__origSetBounds === 'function') {
+                                if (revertAll && typeof win.getContentSize === 'function') {
+                                    const [w, h] = win.getContentSize();
+                                    child.__origSetBounds.call(child, { x: 0, y: 0, width: w, height: h });
+                                } else if (!revertAll) {
+                                    child.__origSetBounds.call(child, { x: 0, y: 0, width: 0, height: 0 });
+                                }
+                            }
                         }
                     }
                 }
