@@ -265,6 +265,7 @@ public class AccountPoolService
     public const string CloudCodeQuotaSummaryEndpoint = "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary";
     public const string CloudCodeQuotaEndpoint = "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota";
     public const string CloudCodeAssistEndpoint = "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist";
+    public const string DefaultUserAgent = "antigravity/2.31.2";
 
     /// <summary>
     /// OAuth client pair used for token refresh, read from <c>data/oauth_client.json</c>.
@@ -824,7 +825,7 @@ public class AccountPoolService
         {
             using var req = new HttpRequestMessage(HttpMethod.Post, CloudCodeQuotaSummaryEndpoint);
             req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
-            req.Headers.TryAddWithoutValidation("User-Agent", "antigravity/2.29.0");
+            req.Headers.TryAddWithoutValidation("User-Agent", DefaultUserAgent);
             var payload = string.IsNullOrEmpty(projectId)
                 ? "{}"
                 : JsonSerializer.Serialize(new { project = projectId });
@@ -848,7 +849,7 @@ public class AccountPoolService
     {
         using var req = new HttpRequestMessage(HttpMethod.Post, CloudCodeQuotaEndpoint);
         req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
-        req.Headers.TryAddWithoutValidation("User-Agent", "antigravity/2.29.0");
+        req.Headers.TryAddWithoutValidation("User-Agent", DefaultUserAgent);
 
         var payload = string.IsNullOrEmpty(projectId) 
             ? "{}" 
@@ -869,7 +870,7 @@ public class AccountPoolService
         {
             using var req = new HttpRequestMessage(HttpMethod.Post, CloudCodeAssistEndpoint);
             req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
-            req.Headers.TryAddWithoutValidation("User-Agent", "antigravity/2.29.0");
+            req.Headers.TryAddWithoutValidation("User-Agent", DefaultUserAgent);
             req.Content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
 
             using var resp = await client.SendAsync(req, cancellationToken);
