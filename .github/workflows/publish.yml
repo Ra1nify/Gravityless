@@ -28,6 +28,12 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          fetch-tags: true
+
+      - name: Fetch remote tags
+        shell: pwsh
+        run: |
+          git fetch --tags --force
 
       - name: Validate branch
         shell: pwsh

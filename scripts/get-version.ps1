@@ -75,9 +75,37 @@ if ($baseCommit) {
 # 1-based commitTime: baseCommit itself is 1 (01)
 $commitTime = $count + 1
 
-# 4. Overflow check: if commitTime > 99, abort packaging
-if ($commitTime -gt 99) {
-    $msg = "Version commitTime overflow: commit counter ($commitTime) exceeds 99 for official version $officialVersion! Build blocked. Please bump official version or resolve commit backlog."
+# 4. Check existing tags for this OfficialVersion (e.g. 2.32.2.01, 2.32.2.03, v2.32.2.01)
+# Auto-increments past the highest existing tag so every publish/release automatically advances.
+$maxTagSeq = 0
+try {
+    $tags = git tag -l "$officialVersion.*" "v$officialVersion.*" 2>$null
+    if ($tags) {
+        $escapedVer = [regex]::Escape($officialVersion)
+        $tagPattern = "^v?$escapedVer\.(\d+)$"
+        foreach ($t in ($tags -split "`r?`n")) {
+            $t = $t.Trim()
+            if ($t -match $tagPattern) {
+                $seqVal = [int]$Matches[1]
+                if ($seqVal -gt $maxTagSeq) {
+                    $maxTagSeq = $seqVal
+                }
+            }
+        }
+    }
+} catch {}
+
+# If existing tags exist for this official version, advance past the highest tag.
+# When official version is bumped (no existing tags), it cleanly starts from 01 (or commitTime).
+if ($maxTagSeq -gt 0) {
+    $nextSeq = [Math]::Max($commitTime, $maxTagSeq + 1)
+} else {
+    $nextSeq = [Math]::Max($commitTime, 1)
+}
+
+# 5. Overflow check: if nextSeq > 99, abort packaging
+if ($nextSeq -gt 99) {
+    $msg = "Version commitTime overflow: sequence counter ($nextSeq) exceeds 99 for official version $officialVersion! Build blocked. Please bump official version or resolve commit backlog."
     if ($ForCI -or $env:GITHUB_ACTIONS) {
         Write-Host "::error::$msg"
     }
@@ -85,17 +113,18 @@ if ($commitTime -gt 99) {
     exit 1
 }
 
-# 5. Format 2-digit zero-padded revision and full version
-$revision = "{0:D2}" -f $commitTime
+# 6. Format 2-digit zero-padded revision and full version
+$revision = "{0:D2}" -f $nextSeq
 $version = "$officialVersion.$revision"
 $versionCode = [long]("$officialVersion$revision".Replace(".", ""))
 
 $result = [PSCustomObject]@{
     OfficialVersion = $officialVersion
-    CommitTime      = $commitTime
+    CommitTime      = $nextSeq
     Revision        = $revision
     Version         = $version
     VersionCode     = $versionCode
+    MaxTagSeq       = $maxTagSeq
 }
 
 # 6. If in GitHub Actions, set output variables
