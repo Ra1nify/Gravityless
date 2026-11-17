@@ -18,23 +18,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  prepare:
+  validate:
     runs-on: windows-latest
-    outputs:
-      version: ${{ steps.version.outputs.version }}
-      arches: ${{ steps.arches.outputs.arches }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-          fetch-tags: true
-
-      - name: Fetch remote tags
-        shell: pwsh
-        run: |
-          git fetch --tags --force
-
       - name: Validate branch
         shell: pwsh
         run: |
@@ -43,55 +29,17 @@ jobs:
             exit 1
           }
 
-      - name: Determine Version
-        id: version
-        shell: pwsh
-        run: |
-          .\scripts\get-version.ps1 -ForCI
-
-      - name: Check existing tag
-        shell: pwsh
-        run: |
-          $ver = "${{ steps.version.outputs.version }}"
-          if (git rev-parse "refs/tags/$ver" 2>$null) {
-            Write-Error "Release tag '$ver' already exists in the repository! Increment revision or bump OfficialVersion."
-            exit 1
-          }
-          if (git rev-parse "refs/tags/v$ver" 2>$null) {
-            Write-Error "Release tag 'v$ver' already exists in the repository!"
-            exit 1
-          }
-
-      - name: Determine Architecture Matrix
-        id: arches
-        shell: pwsh
-        run: |
-          switch ("${{ inputs.arch }}") {
-            'x64'   { Add-Content -Path $env:GITHUB_OUTPUT -Value 'arches=["x64"]' }
-            'arm64' { Add-Content -Path $env:GITHUB_OUTPUT -Value 'arches=["arm64"]' }
-            default { Add-Content -Path $env:GITHUB_OUTPUT -Value 'arches=["x64","arm64"]' }
-          }
-
-  build:
-    needs: prepare
-    strategy:
-      fail-fast: false
-      matrix:
-        arch: ${{ fromJSON(needs.prepare.outputs.arches) }}
-    uses: ./.github/workflows/build-installer.yml
+  ci:
+    needs: validate
+    uses: ./.github/workflows/ci.yml
     with:
-      version: ${{ needs.prepare.outputs.version }}
-      arch: ${{ matrix.arch }}
+      arch: ${{ inputs.arch }}
       sign: true
       upload: true
-    secrets:
-      GRAVITYLESS_PFX_BASE64: ${{ secrets.GRAVITYLESS_PFX_BASE64 }}
-      GRAVITYLESS_PFX_PASSWORD: ${{ secrets.GRAVITYLESS_PFX_PASSWORD }}
-      GRAVITYLESS_PRIVATE_KEY: ${{ secrets.GRAVITYLESS_PRIVATE_KEY }}
-      GRAVITYLESS_CERT_PUBLIC: ${{ secrets.GRAVITYLESS_CERT_PUBLIC }}
+    secrets: inherit
 
   release:
-    needs: [prepare, build]
+    needs: ci
     runs-on: windows-latest
     steps:
       - name: Checkout repository
@@ -102,7 +50,7 @@ jobs:
       - name: Download Build Artifacts
         uses: actions/download-artifact@v8
         with:
-          pattern: gravityless-${{ needs.prepare.outputs.version }}-*
+          pattern: gravityless-${{ needs.ci.outputs.version }}-*
           path: dist
           merge-multiple: true
 
@@ -111,7 +59,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $version = "${{ needs.prepare.outputs.version }}"
+          $version = "${{ needs.ci.outputs.version }}"
           $previousTag = $(git describe --tags --abbrev=0 2>$null)
           $range = "HEAD"
           if ($previousTag) {
