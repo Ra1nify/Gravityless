@@ -40,12 +40,12 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Setup .NET SDK
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.0.x'
 
@@ -62,15 +62,12 @@ jobs:
           GRAVITYLESS_PRIVATE_KEY: ${{ secrets.GRAVITYLESS_PRIVATE_KEY }}
           GRAVITYLESS_CERT_PUBLIC: ${{ secrets.GRAVITYLESS_CERT_PUBLIC }}
         run: |
-          $buildArgs = @(
-            '-Arch', '${{ inputs.arch }}',
-            '-Version', '${{ inputs.version }}'
-          )
+          Write-Host "Running .\build.ps1 -Arch '${{ inputs.arch }}' -Version '${{ inputs.version }}' (Sign=${{ inputs.sign }})"
           if ('${{ inputs.sign }}' -eq 'true') {
-            $buildArgs += '-Sign'
+            .\build.ps1 -Arch '${{ inputs.arch }}' -Version '${{ inputs.version }}' -Sign
+          } else {
+            .\build.ps1 -Arch '${{ inputs.arch }}' -Version '${{ inputs.version }}'
           }
-          Write-Host "Running: .\build.ps1 $($buildArgs -join ' ')"
-          .\build.ps1 @buildArgs
 
       - name: Verify Installers
         shell: pwsh
@@ -88,7 +85,7 @@ jobs:
 
       - name: Upload Artifacts
         if: inputs.upload
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: gravityless-${{ inputs.version }}
           path: artifacts/installer/Gravityless-*.exe

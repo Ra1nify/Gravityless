@@ -87,6 +87,10 @@ if (-not $Version) {
 }
 if (-not $Version) { throw 'Version not found in C# project or Directory.Build.props' }
 
+if ($Version.StartsWith('-')) {
+    throw "Invalid Version parameter value: '$Version'. Parameter was accidentally bound to a flag instead of a version string. Ensure parameters are passed by name (e.g. -Arch all -Version 2.32.2.02)."
+}
+
 if (-not $versionCode) {
     $versionCode = $Version.Replace('.', '')
 }
