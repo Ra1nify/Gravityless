@@ -9,6 +9,8 @@
 
 [CmdletBinding()]
 param(
+    [string]$Version,
+
     [ValidateSet('x64', 'arm64', 'all')]
     [string]$Arch = 'all',
 
@@ -48,27 +50,49 @@ if (-not (Get-Command 'dotnet' -ErrorAction SilentlyContinue)) {
     }
 }
 
-# Read the version directly from C# project / Directory.Build.props.
-$version = $null
-try {
-    $version = (dotnet msbuild $appProject -p:Configuration=Release -getProperty:Version -nologo 2>$null).Trim()
-} catch {}
+# Read or calculate the version
+$versionCode = $null
+if (-not $Version) {
+    $getVerScript = Join-Path $root 'scripts\get-version.ps1'
+    if (Test-Path $getVerScript) {
+        try {
+            $verObj = & $getVerScript -PropsPath (Join-Path $root 'Directory.Build.props')
+            if ($verObj -and $verObj.Version) {
+                $Version = $verObj.Version
+                $versionCode = "$($verObj.VersionCode)"
+            }
+        } catch {
+            Write-Warning "scripts\get-version.ps1 failed: $_"
+        }
+    }
+}
 
-if (-not $version) {
+if (-not $Version) {
+    try {
+        $Version = (dotnet msbuild $appProject -p:Configuration=Release -getProperty:Version -nologo 2>$null).Trim()
+    } catch {}
+}
+
+if (-not $Version) {
     $propsPath = Join-Path $root 'Directory.Build.props'
     if (Test-Path $propsPath) {
         [xml]$propsXml = Get-Content $propsPath -ErrorAction SilentlyContinue
         $vNode = $propsXml.Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
         if ($vNode -is [System.Xml.XmlElement]) {
-            $version = $vNode.InnerText.Trim()
+            $Version = $vNode.InnerText.Trim()
         } elseif ($vNode) {
-            $version = "$vNode".Trim()
+            $Version = "$vNode".Trim()
         }
     }
 }
-if (-not $version) { throw 'Version not found in C# project or Directory.Build.props' }
+if (-not $Version) { throw 'Version not found in C# project or Directory.Build.props' }
 
-Write-Host "Gravityless $version" -ForegroundColor Cyan
+if (-not $versionCode) {
+    $versionCode = $Version.Replace('.', '')
+}
+
+$version = $Version
+Write-Host "Gravityless $version (code: $versionCode)" -ForegroundColor Cyan
 
 # Locate Inno Setup Compiler (ISCC.exe)
 $iscc = @(
@@ -133,6 +157,33 @@ if ($Sign) {
     if (-not $signtool) {
         $cmd = Get-Command 'signtool.exe' -ErrorAction SilentlyContinue
         if ($cmd) { $signtool = $cmd.Source }
+    }
+
+    $tempPfxCreated = $false
+    $tempPfxPath = Join-Path $root 'temp_ci_signing.pfx'
+
+    # Auto-detect signing material from environment secrets, PFX, or PEM key pair
+    if (-not $PfxPath) {
+        if ($env:GRAVITYLESS_PFX_BASE64 -or $env:SIGNING_PFX_BASE64) {
+            $b64 = if ($env:GRAVITYLESS_PFX_BASE64) { $env:GRAVITYLESS_PFX_BASE64 } else { $env:SIGNING_PFX_BASE64 }
+            [System.IO.File]::WriteAllBytes($tempPfxPath, [System.Convert]::FromBase64String($b64.Trim()))
+            $PfxPath = $tempPfxPath
+            $tempPfxCreated = $true
+            Write-Host "Decoded PFX from base64 environment secret." -ForegroundColor Cyan
+        } elseif (($env:GRAVITYLESS_PRIVATE_KEY -or $env:SIGNING_KEY_PEM) -and ($env:GRAVITYLESS_CERT_PUBLIC -or $env:SIGNING_CERT_PEM)) {
+            $keyPem = if ($env:GRAVITYLESS_PRIVATE_KEY) { $env:GRAVITYLESS_PRIVATE_KEY } else { $env:SIGNING_KEY_PEM }
+            $certPem = if ($env:GRAVITYLESS_CERT_PUBLIC) { $env:GRAVITYLESS_CERT_PUBLIC } else { $env:SIGNING_CERT_PEM }
+            try {
+                $certObj = [System.Security.Cryptography.X509Certificates.X509Certificate2]::CreateFromPem($certPem, $keyPem)
+                $pfxBytes = $certObj.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx, $PfxPassword)
+                [System.IO.File]::WriteAllBytes($tempPfxPath, $pfxBytes)
+                $PfxPath = $tempPfxPath
+                $tempPfxCreated = $true
+                Write-Host "Synthesized PFX from PEM key and public cert environment secrets." -ForegroundColor Cyan
+            } catch {
+                Write-Warning "Failed to assemble certificate from PEM secrets: $_"
+            }
+        }
     }
 
     # Auto-detect Gravityless.pfx in repository root, certs\, or external drive
@@ -253,6 +304,7 @@ foreach ($a in $targets) {
 
         dotnet publish $appProject `
             -c Release -r $rid --self-contained false `
+            -p:Version=$version -p:VersionCode=$versionCode `
             -o $publishDir --nologo
         if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed for $rid" }
 
@@ -283,6 +335,14 @@ if ($Sign) {
     foreach ($setup in $setups) {
         Invoke-SignFile -FilePath $setup
     }
+}
+
+# ---------------------------------------------------------------------------
+# Cleanup
+# ---------------------------------------------------------------------------
+
+if ($tempPfxCreated -and (Test-Path $tempPfxPath)) {
+    Remove-Item $tempPfxPath -Force -ErrorAction SilentlyContinue
 }
 
 # ---------------------------------------------------------------------------

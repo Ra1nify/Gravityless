@@ -54,9 +54,11 @@ jobs:
             exit 1
           fi
 
-          # The tag doubles as the version code, so it must be a positive integer.
-          if ! [[ "$TAG" =~ ^[0-9]+$ ]] || [ "$TAG" -le 0 ]; then
-            echo "::error::tag '$TAG' is not a positive integer"
+          # The tag is either dotted (e.g. 2.32.2.01) or legacy integer code
+          CLEAN_TAG="${TAG#v}"
+          CODE="${CLEAN_TAG//./}"
+          if ! [[ "$CODE" =~ ^[0-9]+$ ]] || [ "$CODE" -le 0 ]; then
+            echo "::error::tag '$TAG' does not resolve to a valid version code"
             exit 1
           fi
 
@@ -98,11 +100,11 @@ jobs:
           rm -rf "$WORK"
           mkdir -p "$WORK"
 
-          # Tags sorted ascending by version code; the code is numeric so sort -n is correct.
-          mapfile -t TAGS < <(git tag | grep -E '^[0-9]+$' | sort -n)
+          # Tags sorted ascending by version code
+          mapfile -t TAGS < <(git tag | sed 's/^v//' | grep -E '^([0-9]+\.[0-9]+|[0-9]+)' | sort -V)
 
           if [ "${#TAGS[@]}" -eq 0 ]; then
-            echo "::error::no numeric tags found"
+            echo "::error::no version tags found"
             exit 1
           fi
 
@@ -139,12 +141,18 @@ jobs:
             PREV_URL=""
             [ -n "$PREV" ] && PREV_URL="${BASE}/changelog-${PREV}.json"
 
-            # Tag layout is fixed: 2-digit year, 2-digit month, then major and minor.
-            YY="${T:0:2}"; MM="${T:2:2}"; MAJ="${T:4:1}"; MIN="${T:5:1}"
-            DISPLAY="${YY}.${MM}.${MAJ}.${MIN}"
+            # Tag layout: dotted format (e.g. 2.32.2.01) or legacy YYMMAB
+            if [[ "$T" == *.* ]]; then
+              DISPLAY="$T"
+              CODE="${T//./}"
+            else
+              YY="${T:0:2}"; MM="${T:2:2}"; MAJ="${T:4:1}"; MIN="${T:5:1}"
+              DISPLAY="${YY}.${MM}.${MAJ}.${MIN}"
+              CODE="$T"
+            fi
 
             jq -n \
-              --arg code "$T" \
+              --arg code "$CODE" \
               --arg ver "$DISPLAY" \
               --arg date "$DATE" \
               --arg prev "$PREV_URL" \
@@ -206,12 +214,19 @@ jobs:
           done
           ASSETS_JSON+="]"
 
-          # Same fixed layout as the tag split above.
-          YY="${TAG:0:2}"; MM="${TAG:2:2}"; MAJ="${TAG:4:1}"; MIN="${TAG:5:1}"
-          DISPLAY="${YY}.${MM}.${MAJ}.${MIN}"
+          # Resolve display string and numeric code
+          CLEAN_TAG="${TAG#v}"
+          if [[ "$CLEAN_TAG" == *.* ]]; then
+            DISPLAY="$CLEAN_TAG"
+            CODE="${CLEAN_TAG//./}"
+          else
+            YY="${CLEAN_TAG:0:2}"; MM="${CLEAN_TAG:2:2}"; MAJ="${CLEAN_TAG:4:1}"; MIN="${CLEAN_TAG:5:1}"
+            DISPLAY="${YY}.${MM}.${MAJ}.${MIN}"
+            CODE="$CLEAN_TAG"
+          fi
 
           jq -n \
-            --arg code "$TAG" \
+            --arg code "$CODE" \
             --arg ver "$DISPLAY" \
             --arg changelog "${BASE}/changelog-${TAG}.json" \
             --argjson assets "$ASSETS_JSON" \

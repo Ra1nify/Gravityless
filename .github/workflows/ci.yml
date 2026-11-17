@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: Target architecture
+        required: true
+        type: choice
+        options: [all, x64, arm64]
+        default: all
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  prepare:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: windows-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      arch: ${{ steps.arch.outputs.arch }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine Version
+        id: version
+        shell: pwsh
+        run: |
+          .\scripts\get-version.ps1 -ForCI
+
+      - name: Determine Architecture
+        id: arch
+        shell: pwsh
+        run: |
+          $arch = "${{ inputs.arch }}"
+          if (-not $arch) { $arch = "all" }
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "arch=$arch"
+
+  build:
+    needs: prepare
+    uses: ./.github/workflows/build-installer.yml
+    with:
+      version: ${{ needs.prepare.outputs.version }}
+      arch: ${{ needs.prepare.outputs.arch }}
+      sign: false
+      upload: true

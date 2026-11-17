@@ -1,0 +1,119 @@
+name: Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: Target architecture
+        required: true
+        type: choice
+        options: [all, x64, arm64]
+        default: all
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: windows-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      arch: ${{ steps.arch.outputs.arch }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate branch
+        shell: pwsh
+        run: |
+          if ('${{ github.ref }}' -ne 'refs/heads/main') {
+            Write-Error 'Publish workflow can only run on the main branch.'
+            exit 1
+          }
+
+      - name: Determine Version
+        id: version
+        shell: pwsh
+        run: |
+          .\scripts\get-version.ps1 -ForCI
+
+      - name: Check existing tag
+        shell: pwsh
+        run: |
+          $ver = "${{ steps.version.outputs.version }}"
+          if (git rev-parse "refs/tags/$ver" 2>$null) {
+            Write-Error "Release tag '$ver' already exists in the repository! Increment revision or bump OfficialVersion."
+            exit 1
+          }
+          if (git rev-parse "refs/tags/v$ver" 2>$null) {
+            Write-Error "Release tag 'v$ver' already exists in the repository!"
+            exit 1
+          }
+
+      - name: Determine Architecture
+        id: arch
+        shell: pwsh
+        run: |
+          $arch = "${{ inputs.arch }}"
+          if (-not $arch) { $arch = "all" }
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "arch=$arch"
+
+  build:
+    needs: prepare
+    uses: ./.github/workflows/build-installer.yml
+    with:
+      version: ${{ needs.prepare.outputs.version }}
+      arch: ${{ needs.prepare.outputs.arch }}
+      sign: true
+      upload: true
+    secrets:
+      GRAVITYLESS_PFX_BASE64: ${{ secrets.GRAVITYLESS_PFX_BASE64 }}
+      GRAVITYLESS_PFX_PASSWORD: ${{ secrets.GRAVITYLESS_PFX_PASSWORD }}
+      GRAVITYLESS_PRIVATE_KEY: ${{ secrets.GRAVITYLESS_PRIVATE_KEY }}
+      GRAVITYLESS_CERT_PUBLIC: ${{ secrets.GRAVITYLESS_CERT_PUBLIC }}
+
+  release:
+    needs: [prepare, build]
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download Build Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: gravityless-${{ needs.prepare.outputs.version }}
+          path: dist
+
+      - name: Create GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $version = "${{ needs.prepare.outputs.version }}"
+          $previousTag = $(git describe --tags --abbrev=0 2>$null)
+          $range = "HEAD"
+          if ($previousTag) {
+            $range = "$previousTag..HEAD"
+          }
+          $notes = $(git log --no-merges --pretty='- %s' $range | Select-Object -First 30) -join "`n"
+          if (-not $notes) {
+            $notes = "Maintenance release $version."
+          }
+
+          $files = Get-ChildItem dist\*.exe | Select-Object -ExpandProperty FullName
+          if (-not $files) {
+            Write-Error "No installer binaries found in dist folder to attach to release!"
+            exit 1
+          }
+
+          Write-Host "Creating release $version with assets: $($files -join ', ')"
+          gh release create "$version" $files --title "v$version" --notes "$notes"

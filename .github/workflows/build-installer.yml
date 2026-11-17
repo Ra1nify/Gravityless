@@ -1,0 +1,95 @@
+name: Build installer
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Exact release version (%OfficialVersion%.%CommitTime%)
+        required: true
+        type: string
+      arch:
+        description: Target architecture (all, x64, arm64)
+        required: false
+        type: string
+        default: all
+      sign:
+        description: Sign the app exe and installer
+        required: false
+        type: boolean
+        default: false
+      upload:
+        description: Upload installer as workflow artifact
+        required: false
+        type: boolean
+        default: true
+    secrets:
+      GRAVITYLESS_PFX_BASE64:
+        required: false
+      GRAVITYLESS_PFX_PASSWORD:
+        required: false
+      GRAVITYLESS_PRIVATE_KEY:
+        required: false
+      GRAVITYLESS_CERT_PUBLIC:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress
+
+      - name: Build and Package
+        shell: pwsh
+        env:
+          GRAVITYLESS_PFX_BASE64: ${{ secrets.GRAVITYLESS_PFX_BASE64 }}
+          GRAVITYLESS_PFX_PASSWORD: ${{ secrets.GRAVITYLESS_PFX_PASSWORD }}
+          GRAVITYLESS_PRIVATE_KEY: ${{ secrets.GRAVITYLESS_PRIVATE_KEY }}
+          GRAVITYLESS_CERT_PUBLIC: ${{ secrets.GRAVITYLESS_CERT_PUBLIC }}
+        run: |
+          $buildArgs = @(
+            '-Arch', '${{ inputs.arch }}',
+            '-Version', '${{ inputs.version }}'
+          )
+          if ('${{ inputs.sign }}' -eq 'true') {
+            $buildArgs += '-Sign'
+          }
+          Write-Host "Running: .\build.ps1 $($buildArgs -join ' ')"
+          .\build.ps1 @buildArgs
+
+      - name: Verify Installers
+        shell: pwsh
+        run: |
+          $installers = Get-ChildItem artifacts\installer\Gravityless-*.exe
+          if (-not $installers) {
+            Write-Error "No installer built under artifacts\installer!"
+            exit 1
+          }
+          Write-Host "Build verified. Generated installers:"
+          foreach ($file in $installers) {
+            $sizeMb = [math]::Round($file.Length / 1MB, 2)
+            Write-Host "  - $($file.Name) ($sizeMb MB)"
+          }
+
+      - name: Upload Artifacts
+        if: inputs.upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: gravityless-${{ inputs.version }}
+          path: artifacts/installer/Gravityless-*.exe
+          retention-days: 30
