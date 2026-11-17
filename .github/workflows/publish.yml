@@ -22,7 +22,7 @@ jobs:
     runs-on: windows-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
-      arch: ${{ steps.arch.outputs.arch }}
+      arches: ${{ steps.arches.outputs.arches }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -62,20 +62,26 @@ jobs:
             exit 1
           }
 
-      - name: Determine Architecture
-        id: arch
+      - name: Determine Architecture Matrix
+        id: arches
         shell: pwsh
         run: |
-          $arch = "${{ inputs.arch }}"
-          if (-not $arch) { $arch = "all" }
-          Add-Content -Path $env:GITHUB_OUTPUT -Value "arch=$arch"
+          switch ("${{ inputs.arch }}") {
+            'x64'   { Add-Content -Path $env:GITHUB_OUTPUT -Value 'arches=["x64"]' }
+            'arm64' { Add-Content -Path $env:GITHUB_OUTPUT -Value 'arches=["arm64"]' }
+            default { Add-Content -Path $env:GITHUB_OUTPUT -Value 'arches=["x64","arm64"]' }
+          }
 
   build:
     needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: ${{ fromJSON(needs.prepare.outputs.arches) }}
     uses: ./.github/workflows/build-installer.yml
     with:
       version: ${{ needs.prepare.outputs.version }}
-      arch: ${{ needs.prepare.outputs.arch }}
+      arch: ${{ matrix.arch }}
       sign: true
       upload: true
     secrets:
@@ -96,8 +102,9 @@ jobs:
       - name: Download Build Artifacts
         uses: actions/download-artifact@v8
         with:
-          name: gravityless-${{ needs.prepare.outputs.version }}
+          pattern: gravityless-${{ needs.prepare.outputs.version }}-*
           path: dist
+          merge-multiple: true
 
       - name: Create GitHub Release
         shell: pwsh

@@ -83,10 +83,18 @@ jobs:
             Write-Host "  - $($file.Name) ($sizeMb MB)"
           }
 
-      - name: Upload Artifacts
-        if: inputs.upload
+      - name: Upload x64 Installer
+        if: inputs.upload && (inputs.arch == 'all' || inputs.arch == 'x64')
         uses: actions/upload-artifact@v7
         with:
-          name: gravityless-${{ inputs.version }}
-          path: artifacts/installer/Gravityless-*.exe
+          name: gravityless-${{ inputs.version }}-x64
+          path: artifacts/installer/Gravityless-*-x64.exe
+          retention-days: 30
+
+      - name: Upload arm64 Installer
+        if: inputs.upload && (inputs.arch == 'all' || inputs.arch == 'arm64')
+        uses: actions/upload-artifact@v7
+        with:
+          name: gravityless-${{ inputs.version }}-arm64
+          path: artifacts/installer/Gravityless-*-arm64.exe
           retention-days: 30
