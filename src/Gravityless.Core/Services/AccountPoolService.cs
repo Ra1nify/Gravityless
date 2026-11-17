@@ -265,7 +265,7 @@ public class AccountPoolService
     public const string CloudCodeQuotaSummaryEndpoint = "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary";
     public const string CloudCodeQuotaEndpoint = "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota";
     public const string CloudCodeAssistEndpoint = "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist";
-    public const string DefaultUserAgent = "antigravity/2.31.2";
+    public const string DefaultUserAgent = "antigravity/2.32.2";
 
     /// <summary>
     /// OAuth client pair used for token refresh, read from <c>data/oauth_client.json</c>.
