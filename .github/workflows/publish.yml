@@ -78,3 +78,10 @@ jobs:
 
           Write-Host "Creating release $version with assets: $($files -join ', ')"
           gh release create "$version" $files --title "v$version" --notes "$notes"
+
+  changelog:
+    needs: [ci, release]
+    uses: ./.github/workflows/update-changelog.yml
+    with:
+      tag: ${{ needs.ci.outputs.version }}
+    secrets: inherit

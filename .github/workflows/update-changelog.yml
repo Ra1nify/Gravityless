@@ -16,6 +16,13 @@ on:
         description: 'Release tag (yyMMAB). Defaults to the newest tag.'
         required: false
         default: ''
+  workflow_call:
+    inputs:
+      tag:
+        description: 'Release tag (yyMMAB). Defaults to the newest tag.'
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: write
@@ -23,7 +30,7 @@ permissions:
 jobs:
   publish:
     # Pre-releases never reach users, so they are not part of the manifest chain.
-    if: ${{ !github.event.release.prerelease }}
+    if: ${{ github.event_name != 'release' || !github.event.release.prerelease }}
     runs-on: ubuntu-latest
 
     steps:
@@ -33,11 +40,15 @@ jobs:
           fetch-depth: 0          # full tag history is required to build the chain
           fetch-tags: true
 
+      - name: Fetch remote tags
+        shell: bash
+        run: git fetch --tags --force
+
       - name: Resolve tag
         id: tag
         shell: bash
         env:
-          TAG_INPUT: ${{ github.event.inputs.tag }}
+          TAG_INPUT: ${{ inputs.tag || github.event.inputs.tag }}
         run: |
           set -euo pipefail
 
