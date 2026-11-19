@@ -1,0 +1,189 @@
+{
+  "version_code": 232206,
+  "version": "2.32.2.06",
+  "date": "2026-11-17",
+  "previous_changelog": "https://raw.githubusercontent.com/Ra1nify/Gravityless/info/changelog-2.28.2.01.json",
+  "next_changelog": "https://raw.githubusercontent.com/Ra1nify/Gravityless/info/changelog-2.32.2.09.json",
+  "entries": [
+    {
+      "hash": "2142e3e021d0995ff588e57bd75b29e1155b464f",
+      "title": "feat(accounts): recover the OAuth client pair from the installed core",
+      "body": "Token refresh needs an OAuth client id/secret pair that Gravityless does not\nredistribute. When data/oauth_client.json was missing, LoadOAuthClient returned\nempty strings, the refresh request went to Google without credentials, and every\naccount ended up with FailedRefreshAttempts = 3 and an apparently revoked token.\nThe underlying refresh tokens were still valid.\n\nOAuthClientExtractor scans the installed Antigravity binaries for client ids and\nsecrets, then certifies each candidate pair by attempting a real refresh. The\nlanguage server embeds three of each, so position in the binary is not usable as\na discriminator; the live refresh is the only reliable test. Scanning is chunked\nso the 174 MB binary is never loaded whole, and a 256-byte carry keeps a pattern\nthat straddles a chunk boundary.\n\nEnsureOAuthClientAsync caches the resolved pair in data/oauth_client.json, and\nRefreshTokenAsync calls it before the first attempt. When no refresh token is\navailable to verify against, the first candidate is cached unverified so a later\nrefresh has something to try; a wrong pair then fails visibly instead of being\nmistaken for revoked credentials.\n\nVerified against a real core and a live refresh token: nine candidates are found\nin 2.5 s, the correct pair is chosen, the cache is written, and the second call\nreturns from cache in 4 ms.\n",
+      "type": "feat"
+    },
+    {
+      "hash": "ef0e8fd9c9cc48277b7fee7492527827a1b52bac",
+      "title": "refactor(accounts): populate the OAuth client cache ahead of time",
+      "body": "The previous change recovered the OAuth client pair lazily inside\nRefreshTokenAsync. That put a 2 s binary scan on the path the user triggers by\nclicking refresh, and made the button feel broken.\n\nExtraction now happens where it costs nothing:\n\n  - MainWindow.WarmUpOAuthClient runs once per launch, in the background, and\n    returns immediately when the cache already exists.\n  - AccountPoolService kicks a fire-and-forget extraction after a successful\n    capture. The refresh token captured at that moment is guaranteed live, which\n    makes it the most reliable point to certify a candidate pair.\n\nRefreshTokenAsync only reads the cached file. A missing cache now reports that\nthe core must be synced instead of scanning binaries mid-refresh.\n\nThe account pool itself is unchanged: it keeps the refresh token as the durable\ncredential and treats the stored access token as the most recent known value for\nquota display, not as proof of validity. Antigravity renews the access token on\nits own once an instance starts.\n\nVerified: warm-up writes the cache in 2.7 s in the background, a subsequent\nread takes 7 ms, and a real refresh succeeds against the live account with\nFailedRefreshAttempts reset to zero.\n",
+      "type": "refactor"
+    },
+    {
+      "hash": "9ba63a1a7a1ed48dc896ef145c1d9252e8f75cfe",
+      "title": "feat(proxy): report connectivity as a labelled table",
+      "body": "The connectivity test collapsed status, latency and reason into one dense text\nline, so a failure that never connected was indistinguishable from a slow reply\nand long reasons were unreadable.\n\nProxyTestResult gains GeminiLatencyMeasured and AntigravityLatencyMeasured. A\nprobe that times out leaves them false, which is how the view separates a\nblocked route from a slow one; latency alone cannot, because a failure can still\ncarry a meaningful elapsed time.\n\nThe proxy page now renders a three-row grid: region spanning the value columns,\nthen one row per probe with status glyph, latency and reason. Status reads ✓, ×\nor -; latency reads \"<n> ms\" or N/A when nothing was measured; the reason is\nonly filled for failures and skips, and is left-aligned with wrapping because\nmessages run long.\n\nBatch token refresh now retries transient faults instead of marking an account\ndead on first failure, and reports progress through the status strip so a run\nover several accounts is not a silent wait.\n\nVerified against a live direct connection from a blocked region: the region row\nand both probe rows fill as expected, and the timed-out Gemini probe shows ×\nwith N/A rather than its 6 s elapsed time.\n",
+      "type": "feat"
+    },
+    {
+      "hash": "31dc58663cc60a3adc9cb3fa94b9633888b57523",
+      "title": "refactor(proxy): label the sampled account by alias, not full address",
+      "body": "The connectivity report printed the sampled account's full email in three\nplaces, which is more identifying than the report needs.\n\nProxyTestResult gains TestedAccountAlias, resolved from the account display\nname with the local part of the address as fallback. The alias appears in the\nAntigravity row of the report and prefixes a failure reason there; it is also\nused inside the probe messages that previously embedded the address.\n\nIt is shown even when the probe succeeds, so the row identifies who was tested\nrather than only explaining a failure.\n\nVerified that the alias resolves for a display name, an empty name, a malformed\naddress, and a padded name; the assignment sits after the Gemini gate, so a run\nthat never reaches the Antigravity probe leaves it null as intended.\n",
+      "type": "refactor"
+    },
+    {
+      "hash": "98ac4619d3a7ae3ad4fc1f3e01eef3e4728b8e6f",
+      "title": "fix(instances): keep project-less chats out of project storage",
+      "body": "A chat started outside any workspace is written by Antigravity with\nproject_id \"outside-of-project\" and an empty workspace_uris list. Harvesting\ntreated such a row as unmatched and fell through to\nProjects.FirstOrDefault(), so the conversation was adopted by whichever project\nthe instance happened to be bound to: its brain moved into that project's memory\ndirectory and the chat appeared under an unrelated name.\n\nProjectService now recognises both spellings of the project-less id and exposes\nIsProjectlessConversation, which also treats an empty id or an empty workspace\nlist as project-less. ReconcileAndHarvestProjects and SyncMultiProjectOutput skip\nthose chats instead of relocating them.\n\nThe arbitrary FirstOrDefault() fallback is gone. Only the instance's own\n\"<name>-workspace\" project is used when nothing matched; otherwise one is\ncreated, so an unattributable chat can no longer land in an existing project.\n\nVerified IsProjectlessConversation across six combinations: both id spellings,\nan empty id, an empty workspace list, and two rows with a real project.\n",
+      "type": "fix"
+    },
+    {
+      "hash": "d5abcec62c09c9c74e8087f68209717210caea9e",
+      "title": "fix(instances): verify databases before discarding a copy, and checkpoint on exit",
+      "body": "Harvesting decided whether the shared copy was usable with File.Exists alone.\nA process killed before checkpointing leaves the .db present but empty, with all\ncommitted pages still in -wal; the harvest then deleted the instance-side copy as\na duplicate and hard-linked the shell, losing the conversation.\n\nIsUsableSqlite checks the file size and the \"SQLite format 3\" header, and the\nharvest now treats an unusable target as absent: the instance copy is promoted\nto shared instead of being discarded.\n\nCheckpointInstanceDatabases runs on instance exit, after the process tree is\ngone. It issues PRAGMA wal_checkpoint(TRUNCATE) for every database that still\ncarries a -wal, so a killed session leaves a merged file rather than an empty\none. Databases without a WAL are skipped to avoid creating and dropping one.\n\nVerified IsUsableSqlite against six states: missing, zero-length, too small, all\nzeros, wrong header, and a valid header. Verified the checkpoint against a WAL\ndatabase: the -wal is merged and removed, and every row survives.\n",
+      "type": "fix"
+    },
+    {
+      "hash": "a1d58242b0c6abfbcdbfb88436c1b38f9b6c089e",
+      "title": "feat(projects): add a memory repair pass for lost conversations",
+      "body": "A conversation needs three things to open: a summary row, a checkpoint database\nunder conversations/, and its brain directory. When the checkpoint database is\nlost the conversation can never be opened again, because LangGraph state cannot\nbe reconstructed from a transcript. Until now nothing reported or salvaged\nanything.\n\nProjectMemoryRepairService.Scan reports every conversation whose checkpoint\ndatabase is missing and, separately, every brain directory that has no summary\nrow at all. Repair re-registers the latter so those conversations return to the\nproject list, and exports every recoverable transcript to conversation-export.md\nbeside its brain directory.\n\nThe scan opens the summary database read-write: a database whose pages still sit\nin -wal refuses a read-only open, which would report an intact project as having\nno index. This is the same trap that made the earlier harvest discard good data.\n\nThe export renders each step as Markdown and derives the title from the first\nuser request envelope, falling back to the raw first line.\n\nVerified against the real data root: eleven conversations are reported, two of\nthem with brain content, and repair exports both, producing a 2.5 MB file for\nthe 2395-step conversation and a 774-byte one for the 2-step chat.\n",
+      "type": "feat"
+    },
+    {
+      "hash": "6481eb203ce4b43a781c7a76d8ab4f85b33c25ea",
+      "title": "fix(build): fall back through timestamp servers when signing",
+      "body": "Signing failed with \"The specified timestamp server either could not be reached\nor returned an invalid response\". The timestamp host was hard-coded to\ntimestamp.digicert.com in both build.ps1 and sign.ps1, so a single unavailable\nhost broke every release, and the failure surfaced as a signing error rather\nthan a timestamping one.\n\nBoth scripts now try a list of public timestamp services in order: DigiCert,\nSectigo, Certum, GlobalSign. If none responds the file is signed without a\ntimestamp, which is a warning rather than an error: the signature is still valid\ntoday and only stops verifying once the certificate expires in 2036.\n\nbuild.ps1 gained Invoke-SignFile so its two signing sites share one code path\ninstead of repeating the signtool invocation.\n\nObserved live during this change: DigiCert answered for one installer and failed\nfor the next executable minutes later, confirming the failure is transient\noutage rather than a bad URL. Both files ended up validly signed, the second via\nthe Sectigo fallback.\n",
+      "type": "fix"
+    },
+    {
+      "hash": "641abf3581837eb108c8fa8eefea396b4b9c2949",
+      "title": "feat(update): check for app updates from a static manifest",
+      "body": "Adds a self-update path independent of the core installer, plus the build-time\nversion scheme the manifest compares against.\n\nBuild version\n  Directory.Build.props derives the version from the build date and two local\n  counters, matching the release tags:\n\n      yyMM + major + minor   version code   261102\n      yy.MM.major.minor      display        26.11.0.2\n\n  Counters come from an optional, gitignored version.props so a release can pin\n  them without touching the tracked file. The code is emitted as assembly\n  metadata; only the display version is neutralised in Debug builds, so a local\n  run can still check for updates.\n\n  DateTime.ToString(\"yyMM\") cannot be used in an MSBuild property function: a bare\n  quote ends the expression, and escaping it as %22 makes the format literal. The\n  date components are read numerically and padded instead.\n\nClient\n  AppVersion parses, normalises and compares version codes. Comparison is numeric\n  because ordinal string ordering only matches while every code has the same\n  width, and breaks silently the first time a component gains a digit.\n\n  AppUpdateService fetches the manifest and classifies failures instead of\n  collapsing them into \"network error\": a missing or malformed document is the\n  publisher's fault, and telling the user to check their connection would send\n  them looking in the wrong place.\n\n  AppUpdateInstaller verifies the SHA-512 before launching. A mismatched\n  installer is deleted rather than offered, since a corrupted or substituted\n  binary has no safe interpretation. Inno Setup is started with\n  /CLOSEAPPLICATIONS so it closes this process itself; shutting down first would\n  let the installer race the exit.\n\nServer\n  The workflow regenerates an orphan info branch on each published release:\n  update.json, one changelog per tag in a doubly linked chain, and a\n  changelog-index.json fallback if a link is ever broken. Release assets are\n  confirmed before the manifest is published, because a manifest pointing at a\n  missing asset is the failure that silently breaks every client.\n\nUI\n  The Overview app-update card replaces its \"coming soon\" placeholder with a real\n  check, reported through an InfoBar so the status and its progress share one\n  surface.\n\nAlso converts the remaining inline isEn ternaries in AccountDetailsDialog to\nlocale keys, and gives PageStatusStrip a themed border so its message does not\nread as loose copy on the page background.\n",
+      "type": "feat"
+    },
+    {
+      "hash": "df3c2655ccd99438e51c4e659e3482994402dee8",
+      "title": "fix(update): align the manifest with the agreed release contract",
+      "body": "Corrects the update manifest before any release depends on it. Nothing has been\npublished yet, so the schema changes rather than gains a compatibility layer.\n\nManifest\n  The display field is `version`, carrying the dotted form (26.11.0.2), matching\n  the release tag's digits. `version_code` stays internal and exists only for the\n  comparison. Every property now carries an explicit JSON name, so renaming a C#\n  member can no longer silently break the wire format.\n\n  The tag is split at fixed offsets — 2-digit year, 2-digit month, then the major\n  and minor counters — because the release process guarantees that width.\n\nHash removed\n  The installer is code-signed, and Windows validates that signature before\n  running it elevated, which covers substitution and corruption. A separate\n  SHA-512 added a manual publishing step without covering anything the signature\n  misses, so it is gone from the manifest, the client and the workflow.\n\n  A truncated transfer is still caught: the download compares the received byte\n  count against the advertised size, which surfaces as a clear \"incomplete\n  download\" instead of a generic corruption error at launch.\n\nIndex removed\n  `changelog-index.json` existed as a fallback for a broken chain. Every run\n  rebuilds the whole chain and force-pushes the branch, so a missed or repeated\n  run leaves no damage and the fallback has nothing to guard against.\n\nAssets query\n  The manifest builder called `gh release view` six times, once per field per\n  architecture. It now reads the asset list once and derives both the name and the\n  size from that response, so the manifest cannot describe a file that changed\n  between calls. Suffix matching replaces substring matching, which would have\n  matched the architecture token anywhere in the filename.\n\nOVERRIDE\n",
+      "type": "fix"
+    },
+    {
+      "hash": "d55844f614a1a23dbcda0bc6d1bddce13ff16f5b",
+      "title": "fix(update): route InfoBar text through Message and restore the download link",
+      "body": "Both update bars wrote their status into a TextBlock inside InfoBar.Content, but\nthe WPF-UI template renders only the Message property, so a check reported just a\nseverity icon with no explanation. The success path of the core check also threw\non display: its locale template still carried a third placeholder for a download\nURL that the code no longer supplied, and the FormatException surfaced as a\ngeneric failure.\n\n  - SetUpdateStatus, SetUpdateStage and SetAppUpdateStatus now set InfoBar.Message\n    alongside the severity, so every result carries its detail.\n  - The direct download link returns as a clickable Hyperlink on its own line in\n    the core update bar: the URL is worth showing when the in-app download is\n    blocked or slow. It is hidden on every non-success path, since a stale link\n    next to an error would offer a file the manifest no longer describes.\n  - The CloudUpdate_FoundFormat templates drop the URL placeholder they no longer\n    receive, matching the two-argument call.\n  - Content now holds only extras (link, progress row); message TextBlocks are\n    gone along with their code references.\n",
+      "type": "fix"
+    },
+    {
+      "hash": "cc6c6b176ea7379369c882bacd1c8457af7df2f4",
+      "title": "adapt 4 2.90",
+      "body": "",
+      "type": ""
+    },
+    {
+      "hash": "20f366fb3dc05d83eaac60fe09228c66f268e66e",
+      "title": "fix(patch): adapt utils.js and main.js for Antigravity 2.29",
+      "body": "- utils.js: re-anchor window hook to hubWindows.add(win) after 2.29 createWindow refactoring\n  - restores Mica backdrop and i18n DOM dynamic translation injection\n  - consolidates ShowMarker and handles BaseWindow/WebContentsView safely\n  - syncs theme and SSE i18n events across both BaseWindow and BrowserWindow / all WebContents\n- main.js: match 2.29 setAsDefaultProtocolClient with rest args to prevent core from reclaiming antigravity://\n  - add Chromium --lang switch matching GRAVITYLESS_LOCALE\n  - localize native quit confirmation dialog and system tray context menu for Chinese locale\n  - add stock recovery mechanism when .stock was previously corrupted\n- locales: add missing translation entries for quit dialog and system tray\n- build: add msbuild fallback in build.ps1 to resolve version from Directory.Build.props\n",
+      "type": "fix"
+    },
+    {
+      "hash": "ce5b1f3320c1b41c5915450762660c5a955ba008",
+      "title": "change app version logic, using pfx instead of built-in thumbpr1nt",
+      "body": "",
+      "type": ""
+    },
+    {
+      "hash": "fd7a85a556c49739fdf0b74daf036f65b3878420",
+      "title": "fix runtime right issue, patch 4 using local pfx",
+      "body": "",
+      "type": ""
+    },
+    {
+      "hash": "7744019e32663ceb8e536850a7954d18918f2563",
+      "title": "fix(proxy,mica,i18n): enhance proxy auth and loopback bypass, fix mica layering and i18n DOM traversal",
+      "body": "",
+      "type": "fix"
+    },
+    {
+      "hash": "ef74729871ee7e6746f6aa13dac85d7b9aa352f6",
+      "title": "feat(theme): adapt Antigravity skin options to official 2.29 Onyx theme",
+      "body": "",
+      "type": "feat"
+    },
+    {
+      "hash": "2f2d02597c047a05057ecab186fbbe25d03c1d5a",
+      "title": "fix(memory): adapt conversation storage to Antigravity 2.29 and overhaul memory repair",
+      "body": "- Replace unsafe NTFS hardlinks with consistent SQLite online backup snapshots and process exit sync\n- Add support for Antigravity 2.29 agyhub_summaries_proto.pb dual storage synchronization\n- Implement IsUsableSqlite validation and CreateBlankSummaryDb schema generator\n- Overhaul ProjectMemoryRepairService to restore intact checkpoint databases directly into Antigravity\n- Update repair UI diagnostics and localizations in zh-CN and en-US\n",
+      "type": "fix"
+    },
+    {
+      "hash": "506047d15d042bed94abe41bda5619c368a42fd4",
+      "title": "fix(mica,i18n,sqlite): adapt mica layering and i18n to Antigravity 2.29 and eliminate sqlite hardlinks",
+      "body": "",
+      "type": "fix"
+    },
+    {
+      "hash": "e92c21207f68aa1c73c19e40cc8fd7700a2767ff",
+      "title": "refactor(appearance): remove skin options and ensure zero injection when material is disabled",
+      "body": "",
+      "type": "refactor"
+    },
+    {
+      "hash": "2a85eebd144b5d7b9f814ac81512f36f67a82fd9",
+      "title": "fix(account-pool): auto-refresh expired token in quota probe and fix summary window calculations",
+      "body": "",
+      "type": "fix"
+    },
+    {
+      "hash": "4eefba1ddc38641871b6ca76c3300516cfcf5b3a",
+      "title": "feat: migrate project to .NET 10.0 LTS",
+      "body": "",
+      "type": "feat"
+    },
+    {
+      "hash": "57d3c7568863540005f0fad8c61fa9301f216a83",
+      "title": "fix(patch): complete Mica window hooks, underlay curtain suppression, and 2.30.0 wizard shielding",
+      "body": "",
+      "type": "fix"
+    },
+    {
+      "hash": "5404a4ffd4904ef3453cdbb59ea72970dbd674ae",
+      "title": "feat: align with Antigravity 2.31.2 core and update probe user agent",
+      "body": "",
+      "type": "feat"
+    },
+    {
+      "hash": "cf097a6801a27a717b8154f3c48467f880287a2c",
+      "title": "feat: align with Antigravity 2.32.2 core and bump probe user agent",
+      "body": "",
+      "type": "feat"
+    },
+    {
+      "hash": "b5822acc2a8248503b1245a782b4211aef064815",
+      "title": "ci: add GitHub Actions workflows and 2-digit versioning logic",
+      "body": "",
+      "type": "ci"
+    },
+    {
+      "hash": "77ae48c344f6d9fa1e99d45d0b6912ebc4941e7f",
+      "title": "fix(ci): fix parameter binding for build.ps1 and upgrade all actions to Node 24",
+      "body": "",
+      "type": "fix"
+    },
+    {
+      "hash": "092ab92091a26727a448372aa2ee00abc49a7b4c",
+      "title": "fix(ci): auto-increment release revision past highest existing tag",
+      "body": "",
+      "type": "fix"
+    },
+    {
+      "hash": "2b6d36322d9da346817627f21198beebc415dbb3",
+      "title": "ci: split installer artifacts into standalone per-arch outputs and parallelize build matrix",
+      "body": "",
+      "type": "ci"
+    },
+    {
+      "hash": "5330d75cf284cc5d2b81f59939e6375b0664bd44",
+      "title": "refactor(ci): consolidate builder into ci.yml and streamline publish.yml",
+      "body": "",
+      "type": "refactor"
+    }
+  ]
+}

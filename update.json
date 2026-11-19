@@ -1,0 +1,18 @@
+{
+  "version_code": 232209,
+  "version": "2.32.2.09",
+  "assets": [
+    {
+      "arch": "x64",
+      "url": "https://github.com/Ra1nify/Gravityless/releases/download/2.32.2.09/Gravityless-2.32.2.09-x64.exe",
+      "size": 5156320
+    },
+    {
+      "arch": "arm64",
+      "url": "https://github.com/Ra1nify/Gravityless/releases/download/2.32.2.09/Gravityless-2.32.2.09-arm64.exe",
+      "size": 4998448
+    }
+  ],
+  "changelog_url": "https://raw.githubusercontent.com/Ra1nify/Gravityless/info/changelog-2.32.2.09.json",
+  "latest_changelog": "https://raw.githubusercontent.com/Ra1nify/Gravityless/info/changelog-2.32.2.09.json"
+}

@@ -1,0 +1,27 @@
+{
+  "version_code": 232209,
+  "version": "2.32.2.09",
+  "date": "2026-11-19",
+  "previous_changelog": "https://raw.githubusercontent.com/Ra1nify/Gravityless/info/changelog-2.32.2.06.json",
+  "next_changelog": null,
+  "entries": [
+    {
+      "hash": "6a684417c195cf66954daad7c83a481098e6732c",
+      "title": "ci: chain update-changelog workflow via workflow_call in publish",
+      "body": "",
+      "type": "ci"
+    },
+    {
+      "hash": "c9dc3ed028dc9090f726f5b7e3a47bb6c7867e68",
+      "title": "chore(account-pool): bump default probe User-Agent to antigravity/2.33.0",
+      "body": "",
+      "type": "chore"
+    },
+    {
+      "hash": "6684f491e729b66dabc70474cd29f210b40bab7f",
+      "title": "fix(mica): restore Mica backdrop by hooking WebContentsView and fixing view layer hierarchy",
+      "body": "",
+      "type": "fix"
+    }
+  ]
+}

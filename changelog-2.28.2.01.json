@@ -1,0 +1,57 @@
+{
+  "version_code": 228201,
+  "version": "2.28.2.01",
+  "date": "2026-11-01",
+  "previous_changelog": "https://raw.githubusercontent.com/Ra1nify/Gravityless/info/changelog-2.28.1.01.json",
+  "next_changelog": "https://raw.githubusercontent.com/Ra1nify/Gravityless/info/changelog-2.32.2.06.json",
+  "entries": [
+    {
+      "hash": "2c775244d234e938ffaf708a93ff6da4172a080e",
+      "title": "feat: add pack logic",
+      "body": "",
+      "type": "feat"
+    },
+    {
+      "hash": "7d85a1d22b7a9342d16095ffea0ebf6d0b59d2a4",
+      "title": "feat(app): enforce single instance with window reactivation",
+      "body": "A second launch of Gravityless.exe previously spawned an independent process,\neach with its own window, daemon connection and tray icon.\n\nAdd a per-user named mutex (Local\\Gravityless.Instance.<hash>) that the first\ninstance holds for its lifetime. A subsequent launch acquires nothing, posts a\nregistered window message (WM_GRAVITYLESS_ACTIVATE) and exits.\n\nThe running instance hooks that message and restores its main window: it clears\nthe minimized state, calls ShowWindow(SW_RESTORE) and SetForegroundWindow, then\nActivate/Focus. Win32 is needed because WPF's Activate alone is refused when\nanother application owns the foreground.\n\nThe protocol branch in OnStartup runs before the mutex check, so\nantigravity:// OAuth callbacks still reach the capture route file and never\ntouch the single-instance path.\n\nVerified: repeated launch keeps one process; a minimized window is restored and\nbrought to front; a protocol callback exits without affecting the main instance.\n",
+      "type": "feat"
+    },
+    {
+      "hash": "7d800c5fb5e7fa1a0310ec984355bf5d0bfbc158",
+      "title": "feat(instances): add project avoidance lock with skip confirmation",
+      "body": "A project bound to two instances could be launched twice, and both instances\nwould then write the same shared SQLite conversation store.\n\nAdd InstanceService.FindProjectConflicts, which reports the projects bound to\nan instance that another live instance is currently mounting. Ownership is read\nfrom the in-memory _runningProcesses map rather than the persisted\nRunningInstanceId, which can survive a crash.\n\nLaunchInstance gains an excludedProjectIds overload. Excluded projects are\nskipped for that launch only; InstanceProfile.BoundProjectIds is untouched, so\nthe next launch sees the full binding again. An empty result is accepted: the\ninstance starts with no workspace, where the user can still create a project or\nopen a scratch chat.\n\nThe instance page shows a confirmation before launching. When only some\nprojects conflict, the dialog lists them one per line as \"<project> - in use by\n<instance>\" and the button reads \"Skip and start\". When every bound project\nconflicts, a separate wording explains that the instance opens without projects\nand the button reads \"Start anyway\".\n",
+      "type": "feat"
+    },
+    {
+      "hash": "806747ed781442e2435fda48f913d1f1d5be6341",
+      "title": "feat(projects): hard-link project metadata to a single shared copy",
+      "body": "Each instance kept its own copy of config/projects/<id>.json, so the same\nproject had as many definitions as instances bound to it, and edits made inside\none instance never reached the others.\n\nAdd ProjectService.GetProjectConfigJsonPath, which resolves the canonical\nmetadata file under data/projects/<id>/project.json, and\nJunctionService.EnsureFileHardLink, an idempotent link builder that adopts an\nexisting instance copy as the shared file when the shared one is missing and\nfalls back to a plain copy when the file system refuses the link.\n\nSetupProjectMetadata now writes the canonical file and hard-links each\ninstance's copy to it. The shared file is only rewritten when its content\ndiffers, so an unchanged launch does not break and rebuild the link. Deleting\nan unbound project's JSON removes only that directory entry, leaving the shared\ncopy intact.\n\nHard links are used instead of symbolic links because CreateSymbolicLink needs\nDeveloper Mode or elevation, while hard links need neither. They carry no\nreparse point, so IsFileHardLink reads NumberOfLinks through\nGetFileInformationByHandle rather than FileAttributes.\n\nVerified against a temporary data root: two instances binding one project\nproduce three names on a single inode, a rename inside one instance is visible\nfrom the shared file, deleting an instance entry preserves the shared copy, and\na relaunch re-links without duplicating the file.\n",
+      "type": "feat"
+    },
+    {
+      "hash": "f587b0f6e8cf399af7465a1981418806249cb1db",
+      "title": "fix(instances): carry SQLite companion files when harvesting conversations",
+      "body": "ReconcileAndHarvestProjects moved a conversation database with File.Move, which\nleaves the -wal and -shm files behind. In WAL mode a database whose committed\npages still live in -wal loses them on the next open, so a conversation created\ninside an instance could come back truncated.\n\nMoveSqliteWithSiblings moves the database and both companions as one unit, and\noverwrites a stale target so rows from two databases cannot be mixed.\nDeleteSqliteSiblings removes leftovers when the shared copy already exists.\n\nThe multi-project mount also drops stale companions before hard-linking a\nshared database, otherwise a -wal from an earlier run would be paired with a\ndatabase it does not belong to and SQLite would read foreign pages.\n\nVerified against a temporary directory: the -wal content survives the move, the\nsource directory is left empty, deleting companions keeps the database, and a\ndatabase with no companions moves without error.\n",
+      "type": "fix"
+    },
+    {
+      "hash": "5159ca54f2cb3574661fc49bb7c47928ece2198f",
+      "title": "fix(instances): drop stale companions before adopting a harvested database",
+      "body": "MoveSqliteWithSiblings cleared the destination database but not its -shm and\n-wal, so overwriting an existing shared copy could leave a companion belonging\nto the previous occupant next to the incoming database. SQLite would then apply\nthat stale -shm against a file it was never built for.\n\nDelete the destination companions before the move instead of only handling the\nones the source happens to carry.\n\nVerified with a 22-case harness covering move, overwrite, partial companion\nsets, idempotent delete, and the hard-link round trip: all pass.\n",
+      "type": "fix"
+    },
+    {
+      "hash": "392447764ab9485011c625bc1fa6efb8e3a95ad7",
+      "title": "bump version",
+      "body": "",
+      "type": ""
+    },
+    {
+      "hash": "303f0f460f80442526064c97094d5ce9ba9cc702",
+      "title": "Update README with image and project details",
+      "body": "Added an image and updated project description.",
+      "type": ""
+    }
+  ]
+}
