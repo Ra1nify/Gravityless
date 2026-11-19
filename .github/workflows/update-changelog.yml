@@ -65,7 +65,7 @@ jobs:
             exit 1
           fi
 
-          # The tag is either dotted (e.g. 2.32.2.01) or legacy integer code
+          # The tag is either dotted (e.g. 2.33.0.01) or legacy integer code
           CLEAN_TAG="${TAG#v}"
           CODE="${CLEAN_TAG//./}"
           if ! [[ "$CODE" =~ ^[0-9]+$ ]] || [ "$CODE" -le 0 ]; then
@@ -152,7 +152,7 @@ jobs:
             PREV_URL=""
             [ -n "$PREV" ] && PREV_URL="${BASE}/changelog-${PREV}.json"
 
-            # Tag layout: dotted format (e.g. 2.32.2.01) or legacy YYMMAB
+            # Tag layout: dotted format (e.g. 2.33.0.01) or legacy YYMMAB
             if [[ "$T" == *.* ]]; then
               DISPLAY="$T"
               CODE="${T//./}"

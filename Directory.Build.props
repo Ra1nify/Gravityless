@@ -11,7 +11,7 @@
   <Import Project="version.props" Condition="Exists('version.props')" />
 
   <PropertyGroup>
-    <OfficialVersion Condition="'$(OfficialVersion)' == ''">2.32.2</OfficialVersion>
+    <OfficialVersion Condition="'$(OfficialVersion)' == ''">2.33.0</OfficialVersion>
     <Revision Condition="'$(Revision)' == ''">01</Revision>
     <Version Condition="'$(Version)' == ''">$(OfficialVersion).$(Revision)</Version>
     <VersionCode Condition="'$(VersionCode)' == ''">$([System.String]::Copy('$(Version)').Replace('.', ''))</VersionCode>

@@ -40,7 +40,7 @@ if (-not $officialVersion) {
     if ($parts.Length -ge 3) {
         $officialVersion = "$($parts[0]).$($parts[1]).$($parts[2])"
     } else {
-        $officialVersion = "2.32.2"
+        $officialVersion = "2.33.0"
     }
 }
 
@@ -75,7 +75,7 @@ if ($baseCommit) {
 # 1-based commitTime: baseCommit itself is 1 (01)
 $commitTime = $count + 1
 
-# 4. Check existing tags for this OfficialVersion (e.g. 2.32.2.01, 2.32.2.03, v2.32.2.01)
+# 4. Check existing tags for this OfficialVersion (e.g. 2.33.0.01, 2.33.0.03, v2.33.0.01)
 # Auto-increments past the highest existing tag so every publish/release automatically advances.
 $maxTagSeq = 0
 try {
