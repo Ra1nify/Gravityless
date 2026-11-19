@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using Microsoft.Win32;
 using YamlDotNet.Serialization;
@@ -9,7 +10,18 @@ namespace Gravityless.Core.Services;
 
 public class EngineService : IDisposable
 {
-    private const string ManifestUrl = "https://antigravity-hub-auto-updater-974169037036.us-central1.run.app/manifest/latest-x64-win.yml";
+    /// <summary>
+    /// Current host process architecture: <c>arm64</c> on Windows on ARM, otherwise <c>x64</c>.
+    /// </summary>
+    public static string CurrentArch =>
+        RuntimeInformation.ProcessArchitecture == Architecture.Arm64 ? "arm64" : "x64";
+
+    /// <summary>
+    /// Official Antigravity auto-updater manifest URL dynamically matching current system architecture.
+    /// </summary>
+    public static string ManifestUrl =>
+        $"https://antigravity-hub-auto-updater-974169037036.us-central1.run.app/manifest/latest-{CurrentArch}-win.yml";
+
     private readonly string _baseDir;
     private readonly ProxyConfigProvider _proxyProvider;
 
@@ -146,7 +158,7 @@ public class EngineService : IDisposable
         };
 
         if (dict.TryGetValue("path", out var pathObj))
-            manifest.Path = pathObj?.ToString() ?? "Antigravity-x64.exe";
+            manifest.Path = pathObj?.ToString() ?? $"Antigravity-{CurrentArch}.exe";
 
         if (dict.TryGetValue("sha512", out var shaObj))
             manifest.Sha512 = shaObj?.ToString() ?? string.Empty;
@@ -176,7 +188,7 @@ public class EngineService : IDisposable
     {
         var tempDir = GetTempInstallerDir();
         Directory.CreateDirectory(tempDir);
-        var destFilePath = Path.Combine(tempDir, $"Antigravity-{manifest.Version}-setup.exe");
+        var destFilePath = Path.Combine(tempDir, $"Antigravity-{manifest.Version}-{CurrentArch}-setup.exe");
 
         if (File.Exists(destFilePath) && VerifySha512(destFilePath, manifest.Sha512))
         {

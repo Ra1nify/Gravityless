@@ -25,7 +25,8 @@ $fullPropsPath = if ([System.IO.Path]::IsPathRooted($PropsPath)) { $PropsPath } 
 # ---------------------------------------------------------------------------
 # 1. Resolve verOfficial from Official Auto-Updater Manifest (or Fallback)
 # ---------------------------------------------------------------------------
-$manifestUrl = "https://antigravity-hub-auto-updater-974169037036.us-central1.run.app/manifest/latest-x64-win.yml"
+$arch = if ([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture -eq [System.Runtime.InteropServices.Architecture]::Arm64) { "arm64" } else { "x64" }
+$manifestUrl = "https://antigravity-hub-auto-updater-974169037036.us-central1.run.app/manifest/latest-$arch-win.yml"
 $officialVersion = $null
 
 try {
