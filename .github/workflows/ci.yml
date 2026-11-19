@@ -151,7 +151,6 @@ jobs:
           }
 
       - name: Upload Installer Artifact
-        if: inputs.upload != false
         uses: actions/upload-artifact@v7
         with:
           name: gravityless-${{ needs.prepare.outputs.version }}-${{ matrix.arch }}
