@@ -15,7 +15,7 @@ public class PatchService
     /// Version stamp for the runtime bootstrap script. Bump whenever template semantics change
     /// to trigger re-generation of gravityless-bootstrap.js.
     /// </summary>
-    private const int PatchVersion = 56;
+    private const int PatchVersion = 57;
     private static readonly string PatchStamp = $"/* GRAVITYLESS_BOOTSTRAP_VERSION: {PatchVersion} */";
 
     /// <summary>Unpacks an Electron ASAR archive into outputDir using only managed code.</summary>
@@ -653,6 +653,71 @@ __PATCH_VERSION_STAMP__
         electron.BrowserWindow = PatchedBrowserWindow;
     }
 
+    if (electron.WebContentsView) {
+        const OrigWCV = electron.WebContentsView;
+
+        // Prevent solid background reset on any WebContentsView (hubWcv, curtainView, etc.)
+        if (OrigWCV.prototype && typeof OrigWCV.prototype.setBackgroundColor === 'function') {
+            const origWcvSetBg = OrigWCV.prototype.setBackgroundColor;
+            OrigWCV.prototype.setBackgroundColor = function(color) {
+                if (currentMaterial !== 'none') {
+                    return origWcvSetBg.call(this, '#00000000');
+                }
+                return origWcvSetBg.call(this, color);
+            };
+        }
+
+        function sanitizeDataUrl(url) {
+            if (typeof url !== 'string' || url.indexOf('data:text/html') !== 0) return url;
+            if (url.indexOf('%') >= 0) {
+                try {
+                    const commaIdx = url.indexOf(',');
+                    const prefix = url.substring(0, commaIdx + 1);
+                    const body = url.substring(commaIdx + 1);
+                    const decoded = decodeURIComponent(body);
+                    const replaced = decoded.replace(/background:\s*[^;"'\s]+/gi, 'background: transparent !important');
+                    return prefix + encodeURIComponent(replaced);
+                } catch (_) {
+                    return url.replace(/background:\s*[^;"'\s]+/gi, 'background: transparent !important');
+                }
+            }
+            return url.replace(/background:\s*[^;"'\s]+/gi, 'background: transparent !important');
+        }
+
+        function PatchedWebContentsView(options) {
+            if (!(this instanceof PatchedWebContentsView)) {
+                return new PatchedWebContentsView(options);
+            }
+            options = options || {};
+            if (currentMaterial !== 'none') {
+                if (!options.webPreferences) {
+                    options.webPreferences = {};
+                }
+                options.webPreferences.transparent = true;
+            }
+            const view = new OrigWCV(options);
+            if (currentMaterial !== 'none') {
+                try {
+                    view.setBackgroundColor('#00000000');
+                } catch (_) {}
+            }
+            if (view.webContents && typeof view.webContents.loadURL === 'function') {
+                const origLoadURL = view.webContents.loadURL;
+                view.webContents.__origLoadURL = origLoadURL;
+                view.webContents.loadURL = function(url, opts) {
+                    if (currentMaterial !== 'none' && typeof url === 'string' && url.indexOf('data:text/html') === 0) {
+                        return origLoadURL.call(this, sanitizeDataUrl(url), opts);
+                    }
+                    return origLoadURL.call(this, url, opts);
+                };
+            }
+            return view;
+        }
+        Object.setPrototypeOf(PatchedWebContentsView, OrigWCV);
+        PatchedWebContentsView.prototype = OrigWCV.prototype;
+        electron.WebContentsView = PatchedWebContentsView;
+    }
+
     if (electron.BaseWindow) {
         const OrigBase = electron.BaseWindow;
 
@@ -695,13 +760,13 @@ __PATCH_VERSION_STAMP__
                 applyWindowEffects(win);
             }
 
-            // Antigravity 2.29/2.30 WCV architecture: curtainView underlay blocks Mica
+            // Antigravity 2.29/2.30/2.33 WCV architecture: curtainView underlay blocks Mica
             if (win.contentView && typeof win.contentView.addChildView === 'function') {
                 const origAddChild = win.contentView.addChildView;
                 win.contentView.addChildView = function(view, index) {
                     try {
                         const kids = win.contentView.children || [];
-                        // First child view added before hubWcv is the curtain view
+                        // First child view added before hubWcv is the curtain / clip view (underlay)
                         if (kids.length === 0) {
                             if (typeof view.setVisible === 'function' && !view.__origSetVisible) {
                                 const origSetVisible = view.setVisible;
@@ -738,18 +803,9 @@ __PATCH_VERSION_STAMP__
                                     try { origSetBounds.call(view, { x: 0, y: 0, width: 0, height: 0 }); } catch (_) {}
                                 }
                             }
-                            if (view.webContents && typeof view.webContents.loadURL === 'function' && !view.webContents.__origLoadURL) {
-                                const origLoadURL = view.webContents.loadURL;
-                                view.webContents.__origLoadURL = origLoadURL;
-                                view.webContents.loadURL = function(url, opts) {
-                                    if (currentMaterial !== 'none') {
-                                        return origLoadURL.call(this, 'data:text/html,<!doctype html><html style=\"background:transparent\"><body style=\"background:transparent\"></body></html>', opts);
-                                    }
-                                    return origLoadURL.call(this, url, opts);
-                                };
-                                if (currentMaterial !== 'none') {
-                                    try { view.webContents.loadURL('data:text/html,<!doctype html><html style=\"background:transparent\"><body style=\"background:transparent\"></body></html>'); } catch (_) {}
-                                }
+                        } else {
+                            if (currentMaterial !== 'none' && typeof view.setBackgroundColor === 'function') {
+                                try { view.setBackgroundColor('#00000000'); } catch (_) {}
                             }
                         }
                     } catch (_) {}
@@ -1266,30 +1322,50 @@ ${blurCss}
                 }
                 if (win.contentView && Array.isArray(win.contentView.children)) {
                     const kids = win.contentView.children;
+                    const hubContents = win.webContents;
+                    const contentSize = typeof win.getContentSize === 'function' ? win.getContentSize() : (typeof win.getSize === 'function' ? win.getSize() : [1280, 800]);
+                    const [w, h] = contentSize;
+
                     for (let k = 0; k < kids.length; k++) {
                         const child = kids[k];
-                        if (k < kids.length - 1) {
-                            if (typeof child.setVisible === 'function') {
-                                if (revertAll && typeof child.__origSetVisible === 'function') {
-                                    child.__origSetVisible.call(child, true);
-                                } else if (!revertAll) {
-                                    child.setVisible(false);
-                                }
+                        const isHubWcv = (hubContents && child.webContents === hubContents) || (k === 1);
+
+                        if (isHubWcv) {
+                            if (typeof child.__origSetVisible === 'function') {
+                                child.__origSetVisible.call(child, true);
+                            } else if (typeof child.setVisible === 'function') {
+                                child.setVisible(true);
                             }
-                            if (typeof child.setBackgroundColor === 'function') {
-                                if (revertAll && typeof child.__origSetBg === 'function') {
-                                    child.__origSetBg.call(child, solidBg);
-                                } else if (!revertAll) {
-                                    child.setBackgroundColor('#00000000');
-                                }
+                            if (typeof child.__origSetBg === 'function') {
+                                child.__origSetBg.call(child, revertAll ? solidBg : '#00000000');
+                            } else if (typeof child.setBackgroundColor === 'function') {
+                                child.setBackgroundColor(revertAll ? solidBg : '#00000000');
                             }
                             if (typeof child.__origSetBounds === 'function') {
-                                if (revertAll && typeof win.getContentSize === 'function') {
-                                    const [w, h] = win.getContentSize();
-                                    child.__origSetBounds.call(child, { x: 0, y: 0, width: w, height: h });
-                                } else if (!revertAll) {
-                                    child.__origSetBounds.call(child, { x: 0, y: 0, width: 0, height: 0 });
-                                }
+                                child.__origSetBounds.call(child, { x: 0, y: 0, width: w, height: h });
+                            } else if (typeof child.setBounds === 'function') {
+                                child.setBounds({ x: 0, y: 0, width: w, height: h });
+                            }
+                        } else if (k === 0) {
+                            // Underlay: clipView or curtainView
+                            if (typeof child.__origSetVisible === 'function') {
+                                child.__origSetVisible.call(child, revertAll ? true : false);
+                            } else if (typeof child.setVisible === 'function') {
+                                child.setVisible(revertAll ? true : false);
+                            }
+                            if (typeof child.__origSetBg === 'function') {
+                                child.__origSetBg.call(child, revertAll ? solidBg : '#00000000');
+                            } else if (typeof child.setBackgroundColor === 'function') {
+                                child.setBackgroundColor(revertAll ? solidBg : '#00000000');
+                            }
+                            if (typeof child.__origSetBounds === 'function') {
+                                child.__origSetBounds.call(child, revertAll ? { x: 0, y: 0, width: w, height: h } : { x: 0, y: 0, width: 0, height: 0 });
+                            } else if (typeof child.setBounds === 'function') {
+                                child.setBounds(revertAll ? { x: 0, y: 0, width: w, height: h } : { x: 0, y: 0, width: 0, height: 0 });
+                            }
+                        } else {
+                            if (typeof child.setBackgroundColor === 'function') {
+                                child.setBackgroundColor(revertAll ? solidBg : '#00000000');
                             }
                         }
                     }
