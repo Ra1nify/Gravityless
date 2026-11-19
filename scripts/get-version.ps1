@@ -1,12 +1,15 @@
 <#
 .SYNOPSIS
-    Calculates Gravityless release version: %Version_Official%.%Version.commitTime%
+    Calculates Gravityless release version: %verOfficial%.%verBuildTime%
 
 .DESCRIPTION
-    - Version_Official: read from Directory.Build.props (<OfficialVersion>)
-    - commitTime: 2-digit commit counter (01-99) since OfficialVersion was introduced or changed.
-    - When OfficialVersion changes, commitTime resets to 01.
-    - If commitTime > 99, throws an error and exits with code 1 (overflow circuit breaker).
+    - verOfficial: queried automatically from the official Antigravity auto-updater endpoint:
+      https://antigravity-hub-auto-updater-974169037036.us-central1.run.app/manifest/latest-x64-win.yml
+      (with local fallback to Directory.Build.props / Antigravity.exe if offline).
+    - verBuildTime: 2-digit sequence counter (01-99) determined by querying Git tags
+      matching "${verOfficial}.*". If tag 2.33.0.01 exists, next is 02; if no tags exist, starts at 01.
+    - If verBuildTime exceeds 99, raises an overflow circuit breaker error and halts the build.
+    - Automatically keeps Directory.Build.props <OfficialVersion> synchronized on disk.
 #>
 
 [CmdletBinding()]
@@ -19,64 +22,78 @@ $ErrorActionPreference = 'Stop'
 $root = if ($PSScriptRoot) { Split-Path $PSScriptRoot -Parent } else { (Get-Location).Path }
 $fullPropsPath = if ([System.IO.Path]::IsPathRooted($PropsPath)) { $PropsPath } else { Join-Path $root $PropsPath }
 
-if (-not (Test-Path $fullPropsPath)) {
-    throw "Property file not found: $fullPropsPath"
+# ---------------------------------------------------------------------------
+# 1. Resolve verOfficial from Official Auto-Updater Manifest (or Fallback)
+# ---------------------------------------------------------------------------
+$manifestUrl = "https://antigravity-hub-auto-updater-974169037036.us-central1.run.app/manifest/latest-x64-win.yml"
+$officialVersion = $null
+
+try {
+    $rawYaml = $null
+    if (Get-Command 'curl.exe' -ErrorAction SilentlyContinue) {
+        $rawYaml = & curl.exe -s --max-time 10 $manifestUrl
+    }
+    if (-not $rawYaml -or $rawYaml -notmatch 'version:\s*([^\r\n]+)') {
+        $rawYaml = Invoke-RestMethod -Uri $manifestUrl -TimeoutSec 10 -ErrorAction Stop
+    }
+
+    if ($rawYaml -match '(?m)^version:\s*([^\r\n]+)') {
+        $officialVersion = $Matches[1].Trim()
+    } elseif ($rawYaml -is [string] -and $rawYaml -match 'version:\s*([0-9]+\.[0-9]+\.[0-9]+)') {
+        $officialVersion = $Matches[1].Trim()
+    } elseif ($rawYaml.version) {
+        $officialVersion = "$($rawYaml.version)".Trim()
+    }
+    if ($officialVersion) {
+        Write-Host "Official Antigravity version resolved from endpoint: $officialVersion" -ForegroundColor Green
+    }
+} catch {
+    Write-Warning "Failed to query official manifest from $manifestUrl : $_"
 }
 
-# 1. Read OfficialVersion from Directory.Build.props
-[xml]$propsXml = Get-Content $fullPropsPath -Raw
-$officialVersion = $propsXml.Project.PropertyGroup.OfficialVersion
-if ($officialVersion -is [System.Xml.XmlElement]) {
-    $officialVersion = $officialVersion.InnerText.Trim()
-} elseif ($officialVersion) {
-    $officialVersion = "$officialVersion".Trim()
-}
-
+# Fallback: if network is unreachable, read from Directory.Build.props or local engine exe
 if (-not $officialVersion) {
-    # Fallback to 3-part prefix of Version tag
-    $vNode = $propsXml.Project.PropertyGroup.Version
-    $vText = if ($vNode -is [System.Xml.XmlElement]) { $vNode.InnerText.Trim() } else { "$vNode".Trim() }
-    $parts = $vText.Split('.')
-    if ($parts.Length -ge 3) {
-        $officialVersion = "$($parts[0]).$($parts[1]).$($parts[2])"
-    } else {
+    if (Test-Path $fullPropsPath) {
+        try {
+            [xml]$propsXml = Get-Content $fullPropsPath -Raw
+            $v = $propsXml.Project.PropertyGroup.OfficialVersion
+            if ($v -is [System.Xml.XmlElement]) { $officialVersion = $v.InnerText.Trim() }
+            elseif ($v) { $officialVersion = "$v".Trim() }
+        } catch {}
+    }
+    if (-not $officialVersion) {
+        $localExe = Join-Path $root "core\Antigravity.exe"
+        if (Test-Path $localExe) {
+            try {
+                $verInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($localExe)
+                if ($verInfo.ProductVersion) { $officialVersion = $verInfo.ProductVersion.Trim() }
+            } catch {}
+        }
+    }
+    if (-not $officialVersion) {
         $officialVersion = "2.33.0"
     }
+    Write-Host "Using fallback official version: $officialVersion" -ForegroundColor Yellow
 }
 
-# 2. Find commit where OfficialVersion was first introduced in Directory.Build.props
-$baseCommit = $null
-try {
-    # Match the exact string of the current official version in Directory.Build.props history
-    $commits = git log -S "$officialVersion" --reverse --pretty=format:"%H" $fullPropsPath 2>$null
-    if ($commits) {
-        $baseCommit = ($commits -split "`r?`n")[0].Trim()
-    }
-} catch {}
-
-if (-not $baseCommit) {
-    # Fallback to the commit that last touched Directory.Build.props
+# Ensure Directory.Build.props is synchronized with the resolved official version
+if (Test-Path $fullPropsPath) {
     try {
-        $baseCommit = (git log -1 --pretty=format:"%H" $fullPropsPath 2>$null).Trim()
-    } catch {}
-}
-
-# 3. Calculate commit count from baseCommit to HEAD
-$count = 0
-if ($baseCommit) {
-    try {
-        $revCount = (git rev-list --count "$baseCommit..HEAD" 2>$null).Trim()
-        if ($revCount) {
-            $count = [int]$revCount
+        $propsContent = Get-Content $fullPropsPath -Raw
+        if ($propsContent -match '<OfficialVersion Condition="''\$\(OfficialVersion\)'' == ''">([^<]+)</OfficialVersion>') {
+            $existingPropsVer = $Matches[1].Trim()
+            if ($existingPropsVer -ne $officialVersion) {
+                $updatedProps = $propsContent -replace '<OfficialVersion Condition="''\$\(OfficialVersion\)'' == ''">([^<]+)</OfficialVersion>', "<OfficialVersion Condition=""'`$(OfficialVersion)' == ''"">$officialVersion</OfficialVersion>"
+                [System.IO.File]::WriteAllText($fullPropsPath, $updatedProps, (New-Object System.Text.UTF8Encoding($false)))
+                Write-Host "Synchronized Directory.Build.props OfficialVersion to $officialVersion" -ForegroundColor Cyan
+            }
         }
     } catch {}
 }
 
-# 1-based commitTime: baseCommit itself is 1 (01)
-$commitTime = $count + 1
-
-# 4. Check existing tags for this OfficialVersion (e.g. 2.33.0.01, 2.33.0.03, v2.33.0.01)
-# Auto-increments past the highest existing tag so every publish/release automatically advances.
+# ---------------------------------------------------------------------------
+# 2. Resolve verBuildTime from Git Tags
+# ---------------------------------------------------------------------------
 $maxTagSeq = 0
 try {
     $tags = git tag -l "$officialVersion.*" "v$officialVersion.*" 2>$null
@@ -95,17 +112,14 @@ try {
     }
 } catch {}
 
-# If existing tags exist for this official version, advance past the highest tag.
-# When official version is bumped (no existing tags), it cleanly starts from 01 (or commitTime).
-if ($maxTagSeq -gt 0) {
-    $nextSeq = [Math]::Max($commitTime, $maxTagSeq + 1)
-} else {
-    $nextSeq = [Math]::Max($commitTime, 1)
-}
+# Next build sequence is 1-based after highest existing tag for this official version
+$nextSeq = $maxTagSeq + 1
 
-# 5. Overflow check: if nextSeq > 99, abort packaging
+# ---------------------------------------------------------------------------
+# 3. Circuit Breaker: verBuildTime > 99
+# ---------------------------------------------------------------------------
 if ($nextSeq -gt 99) {
-    $msg = "Version commitTime overflow: sequence counter ($nextSeq) exceeds 99 for official version $officialVersion! Build blocked. Please bump official version or resolve commit backlog."
+    $msg = "Version build sequence overflow: sequence counter ($nextSeq) exceeds maximum 99 for official version $officialVersion! Build blocked. Await next official Antigravity release."
     if ($ForCI -or $env:GITHUB_ACTIONS) {
         Write-Host "::error::$msg"
     }
@@ -113,25 +127,29 @@ if ($nextSeq -gt 99) {
     exit 1
 }
 
-# 6. Format 2-digit zero-padded revision and full version
+# ---------------------------------------------------------------------------
+# 4. Format Version Strings: verOfficial.verBuildTime
+# ---------------------------------------------------------------------------
 $revision = "{0:D2}" -f $nextSeq
 $version = "$officialVersion.$revision"
 $versionCode = [long]("$officialVersion$revision".Replace(".", ""))
 
 $result = [PSCustomObject]@{
     OfficialVersion = $officialVersion
-    CommitTime      = $nextSeq
+    BuildSeq        = $nextSeq
     Revision        = $revision
     Version         = $version
     VersionCode     = $versionCode
     MaxTagSeq       = $maxTagSeq
 }
 
-# 6. If in GitHub Actions, set output variables
+# ---------------------------------------------------------------------------
+# 5. Export to GitHub Actions if in CI
+# ---------------------------------------------------------------------------
 if ($ForCI -or $env:GITHUB_OUTPUT) {
     if ($env:GITHUB_OUTPUT -and (Test-Path $env:GITHUB_OUTPUT)) {
         Add-Content -Path $env:GITHUB_OUTPUT -Value "official_version=$officialVersion"
-        Add-Content -Path $env:GITHUB_OUTPUT -Value "commit_time=$commitTime"
+        Add-Content -Path $env:GITHUB_OUTPUT -Value "build_time=$nextSeq"
         Add-Content -Path $env:GITHUB_OUTPUT -Value "revision=$revision"
         Add-Content -Path $env:GITHUB_OUTPUT -Value "version=$version"
         Add-Content -Path $env:GITHUB_OUTPUT -Value "version_code=$versionCode"

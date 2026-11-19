@@ -82,6 +82,18 @@ public static class AppVersion
         }
     }
 
+    /// <summary>Reads the 3-segment official Antigravity version prefix, e.g. <c>2.33.0</c>.</summary>
+    public static string ReadOfficialVersion()
+    {
+        var local = ReadLocalVersionName();
+        var parts = local.Split('.');
+        if (parts.Length >= 3)
+        {
+            return $"{parts[0]}.{parts[1]}.{parts[2]}";
+        }
+        return local;
+    }
+
     /// <summary>
     /// Parses a version code from a code string, tag or display version.
     /// Accepts <c>229001</c>, <c>v229001</c>, <c>2.29.0.01</c>, etc.
