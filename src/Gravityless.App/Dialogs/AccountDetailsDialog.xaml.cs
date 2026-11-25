@@ -64,30 +64,7 @@ public partial class AccountDetailsDialog
             CopyInstanceIdBtn.Visibility = Visibility.Collapsed;
         }
 
-        var refreshToken = _account.RefreshToken;
-        var expiry = _account.AccessTokenExpiresAt;
-        bool hasRefresh = !string.IsNullOrWhiteSpace(refreshToken);
-
-        if (hasRefresh)
-        {
-            TokenStatusText.Text = LocalizationService.GetString("AccountDetails_TokenValid", "有效");
-            TokenStatusDot.Fill = ResolveBrush("SystemFillColorSuccessBrush", Colors.LightGreen);
-        }
-        else
-        {
-            TokenStatusText.Text = LocalizationService.GetString("AccountDetails_TokenMissing", "缺少 Refresh Token");
-            TokenStatusDot.Fill = ResolveBrush("SystemFillColorCautionBrush", Colors.Orange);
-        }
-
-        TokenExpiryText.Text = expiry.HasValue
-            ? string.Format(
-                LocalizationService.GetString("AccountDetails_TokenExpiryFormat", "过期时间: {0}"),
-                expiry.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss"))
-            : LocalizationService.GetString("AccountDetails_TokenExpiryUnknown", "过期时间: 未知");
-
-        TokenLastActiveText.Text = string.Format(
-            LocalizationService.GetString("AccountDetails_LastActiveFormat", "最近活动: {0}"),
-            _account.LastActiveAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss"));
+        RenderTokenStatus();
 
         var tierLabel = !string.IsNullOrWhiteSpace(_account.AccountTierName)
             ? _account.AccountTierName
@@ -359,12 +336,15 @@ public partial class AccountDetailsDialog
         WpfControls.Grid.SetColumn(titleText, 0);
 
         int pct = fraction.HasValue ? (int)Math.Round(fraction.Value * 100) : 0;
+        var valueBrush = fraction.HasValue && pct == 0
+            ? ResolveBrush("StatusCriticalBrush", Colors.IndianRed)
+            : accentBrush;
         var pctText = new WpfControls.TextBlock
         {
             Text = fraction.HasValue ? $"{pct}%" : "-",
             FontWeight = FontWeights.Bold,
             FontSize = 11,
-            Foreground = accentBrush,
+            Foreground = valueBrush,
             VerticalAlignment = VerticalAlignment.Center
         };
         WpfControls.Grid.SetColumn(pctText, 1);
@@ -378,7 +358,7 @@ public partial class AccountDetailsDialog
             Value = pct,
             Maximum = 100,
             Margin = new Thickness(4, 0, 0, 2),
-            Foreground = accentBrush
+            Foreground = valueBrush
         });
 
         string subText = fraction.HasValue
@@ -465,6 +445,128 @@ public partial class AccountDetailsDialog
         catch { }
     }
 
+    private void RenderTokenStatus()
+    {
+        var successBrush = ResolveBrush("StatusSuccessBrush", Colors.LightGreen);
+        var cautionBrush = ResolveBrush("StatusCautionBrush", Colors.Orange);
+        var criticalBrush = ResolveBrush("StatusCriticalBrush", Colors.IndianRed);
+        var neutralBrush = ResolveBrush("StatusNeutralBrush", Colors.Gray);
+
+        // 1. Access Token (short-lived runtime credential)
+        var accessToken = _account.AccessToken;
+        var atExpiry = _account.AccessTokenExpiresAt;
+        bool hasAccess = !string.IsNullOrWhiteSpace(accessToken);
+
+        if (!hasAccess)
+        {
+            AccessTokenStatusText.Text = LocalizationService.GetString("AccountDetails_AccessTokenNotFetched", "未获取");
+            AccessTokenStatusText.Foreground = neutralBrush;
+            AccessTokenStatusDot.Fill = neutralBrush;
+        }
+        else if (_account.IsAccessTokenExpired)
+        {
+            AccessTokenStatusText.Text = LocalizationService.GetString("AccountDetails_TokenExpired", "已过期");
+            AccessTokenStatusText.Foreground = cautionBrush;
+            AccessTokenStatusDot.Fill = cautionBrush;
+        }
+        else if (_account.NeedsRefresh)
+        {
+            AccessTokenStatusText.Text = LocalizationService.GetString("AccountDetails_TokenExpiringSoon", "即将过期");
+            AccessTokenStatusText.Foreground = cautionBrush;
+            AccessTokenStatusDot.Fill = cautionBrush;
+        }
+        else
+        {
+            AccessTokenStatusText.Text = LocalizationService.GetString("AccountDetails_TokenValid", "有效");
+            AccessTokenStatusText.Foreground = successBrush;
+            AccessTokenStatusDot.Fill = successBrush;
+        }
+
+        AccessTokenPreviewText.Text = FormatMaskedToken(accessToken);
+        AccessTokenLastUsedText.Text = _account.AccessTokenLastUsedAt.HasValue
+            ? string.Format(
+                LocalizationService.GetString("AccountDetails_TokenLastUsedFormat", "最近使用: {0}"),
+                _account.AccessTokenLastUsedAt.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss"))
+            : LocalizationService.GetString("AccountDetails_TokenNeverUsed", "最近使用: 未使用");
+
+        if (atExpiry.HasValue)
+        {
+            var localTime = atExpiry.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
+            AccessTokenExpiryText.Text = atExpiry.Value <= DateTime.UtcNow
+                ? string.Format(LocalizationService.GetString("AccountDetails_TokenExpiredAtFormat", "过期时间: {0} (已过期)"), localTime)
+                : string.Format(LocalizationService.GetString("AccountDetails_TokenExpiryWithCountdownFormat", "过期时间: {0} ({1})"), localTime, FormatCountdown(atExpiry.Value));
+        }
+        else
+        {
+            AccessTokenExpiryText.Text = LocalizationService.GetString("AccountDetails_TokenExpiryUnknown", "过期时间: 未知");
+        }
+
+        // 2. Refresh Token (long-lived base credential)
+        var refreshToken = _account.RefreshToken;
+        var rtExpiry = _account.RefreshTokenExpiresAt;
+        bool hasRefresh = !string.IsNullOrWhiteSpace(refreshToken);
+
+        if (!hasRefresh)
+        {
+            RefreshTokenStatusText.Text = LocalizationService.GetString("AccountDetails_TokenMissing", "缺少 Refresh Token");
+            RefreshTokenStatusText.Foreground = criticalBrush;
+            RefreshTokenStatusDot.Fill = criticalBrush;
+        }
+        else if (_account.RefreshTokenRevoked)
+        {
+            RefreshTokenStatusText.Text = LocalizationService.GetString("AccountDetails_RefreshTokenRevoked", "已失效 (invalid_grant)");
+            RefreshTokenStatusText.Foreground = criticalBrush;
+            RefreshTokenStatusDot.Fill = criticalBrush;
+        }
+        else if (rtExpiry.HasValue && rtExpiry.Value <= DateTime.UtcNow)
+        {
+            RefreshTokenStatusText.Text = LocalizationService.GetString("AccountDetails_TokenExpired", "已过期");
+            RefreshTokenStatusText.Foreground = criticalBrush;
+            RefreshTokenStatusDot.Fill = criticalBrush;
+        }
+        else
+        {
+            RefreshTokenStatusText.Text = LocalizationService.GetString("AccountDetails_TokenValid", "有效");
+            RefreshTokenStatusText.Foreground = successBrush;
+            RefreshTokenStatusDot.Fill = successBrush;
+        }
+
+        RefreshTokenPreviewText.Text = FormatMaskedToken(refreshToken);
+        RefreshTokenLastUsedText.Text = _account.RefreshTokenLastUsedAt.HasValue
+            ? string.Format(
+                LocalizationService.GetString("AccountDetails_TokenLastUsedFormat", "最近使用: {0}"),
+                _account.RefreshTokenLastUsedAt.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss"))
+            : LocalizationService.GetString("AccountDetails_TokenNeverUsed", "最近使用: 未使用");
+
+        if (_account.RefreshTokenRevoked)
+        {
+            RefreshTokenExpiryText.Text = LocalizationService.GetString("AccountDetails_RefreshTokenRevokedExpiry", "过期时间: 已失效（需重新捕获登录）");
+        }
+        else if (rtExpiry.HasValue)
+        {
+            var localTime = rtExpiry.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
+            RefreshTokenExpiryText.Text = rtExpiry.Value <= DateTime.UtcNow
+                ? string.Format(LocalizationService.GetString("AccountDetails_TokenExpiredAtFormat", "过期时间: {0} (已过期)"), localTime)
+                : string.Format(LocalizationService.GetString("AccountDetails_TokenExpiryWithCountdownFormat", "过期时间: {0} ({1})"), localTime, FormatCountdown(rtExpiry.Value));
+        }
+        else if (hasRefresh)
+        {
+            RefreshTokenExpiryText.Text = LocalizationService.GetString("AccountDetails_RefreshTokenLongLived", "过期时间: 长期有效（未下发过期时间）");
+        }
+        else
+        {
+            RefreshTokenExpiryText.Text = LocalizationService.GetString("AccountDetails_TokenExpiryUnknown", "过期时间: 未知");
+        }
+    }
+
+    private static string FormatMaskedToken(string? token)
+    {
+        if (string.IsNullOrWhiteSpace(token)) return "—";
+        var trimmed = token.Trim();
+        if (trimmed.Length <= 14) return trimmed;
+        return $"{trimmed[..8]}…{trimmed[^4..]}";
+    }
+
     private async void OnRefreshTokenClicked(object sender, RoutedEventArgs e)
     {
         RefreshTokenBtn.IsEnabled = false;
@@ -475,20 +577,21 @@ public partial class AccountDetailsDialog
 
         try
         {
-            var (success, msg) = await _accountPool.RefreshTokenAsync(_account.Id, _proxyConfig, autoRetry: true);
+            var (tokenSuccess, quotaSuccess, msg) = await _accountPool.RefreshTokenAndQuotaAsync(_account.Id, _proxyConfig, autoRetry: true);
 
-            if (success)
+            if (tokenSuccess)
             {
-                var severity = string.IsNullOrEmpty(_account.QuotaLastError)
+                var severity = quotaSuccess && string.IsNullOrEmpty(_account.QuotaLastError)
                     ? InfoBarSeverity.Success
                     : InfoBarSeverity.Warning;
                 SetRefreshStatus(msg, severity, closable: true);
-                LoadAccountData(showStoredError: false);
             }
             else
             {
                 SetRefreshStatus(msg, InfoBarSeverity.Error, closable: true);
             }
+
+            LoadAccountData(showStoredError: false);
         }
         catch (Exception ex)
         {

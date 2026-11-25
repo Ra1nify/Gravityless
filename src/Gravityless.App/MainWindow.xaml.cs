@@ -288,8 +288,7 @@ public partial class MainWindow
     /// </summary>
     private void WarmUpOAuthClient()
     {
-        var cached = AccountPoolService.LoadOAuthClient();
-        if (!string.IsNullOrEmpty(cached.ClientId) && !string.IsNullOrEmpty(cached.ClientSecret))
+        if (AccountPoolService.HasVerifiedOAuthClient())
         {
             return;
         }
@@ -1519,13 +1518,17 @@ public partial class MainWindow
     {
         if (sender is FrameworkElement { Tag: string accId })
         {
-                AccountsStatusStrip.ShowBusy(LocalizationService.GetString("Accounts_RefreshStatus", "刷新 Token…"));
+            AccountsStatusStrip.ShowBusy(LocalizationService.GetString("Accounts_RefreshStatus", "刷新 Token…"));
             try
             {
-                var (success, msg) = await _accountPool.RefreshTokenAsync(accId, _currentProxyConfig);
-                if (success)
+                var (tokenSuccess, quotaSuccess, msg) = await _accountPool.RefreshTokenAndQuotaAsync(accId, _currentProxyConfig);
+                if (tokenSuccess && quotaSuccess)
                 {
                     ModernDialog.ShowSuccess(LocalizationService.GetString("Accounts_RefreshDoneTitle", "已刷新"), msg, owner: this);
+                }
+                else if (tokenSuccess)
+                {
+                    ModernDialog.ShowWarning(LocalizationService.GetString("Accounts_RefreshDoneTitle", "已刷新"), msg, owner: this);
                 }
                 else
                 {
@@ -1549,12 +1552,27 @@ public partial class MainWindow
         AccountsStatusStrip.ShowBusy(LocalizationService.GetString("Accounts_RefreshAllStatus", "批量刷新 Token…"));
         try
         {
-            var (successCount, failedCount) = await _accountPool.RefreshAllTokensAsync(
+            var (fullSuccessCount, quotaWarningCount, failedCount) = await _accountPool.RefreshAllTokensDetailedAsync(
                 _currentProxyConfig,
                 onProgress: (current, total, email) => Dispatcher.Invoke(() =>
                     AccountsStatusStrip.ShowStep(current, total, email)));
 
-            ModernDialog.ShowInfo(LocalizationService.GetString("Accounts_RefreshAllDoneTitle", "已刷新"), string.Format(LocalizationService.GetString("Accounts_RefreshAllDoneFormat", "完成 {0} 个，失败 {1} 个。"), successCount, failedCount), owner: this);
+            var summaryMsg = quotaWarningCount > 0
+                ? string.Format(
+                    LocalizationService.GetString("Accounts_RefreshAllDonePartialFormat", "完成 {0} 个，配额同步异常 {1} 个，失败 {2} 个。"),
+                    fullSuccessCount, quotaWarningCount, failedCount)
+                : string.Format(
+                    LocalizationService.GetString("Accounts_RefreshAllDoneFormat", "完成 {0} 个，失败 {1} 个。"),
+                    fullSuccessCount, failedCount);
+
+            if (quotaWarningCount > 0 || failedCount > 0)
+            {
+                ModernDialog.ShowWarning(LocalizationService.GetString("Accounts_RefreshAllDoneTitle", "已刷新"), summaryMsg, owner: this);
+            }
+            else
+            {
+                ModernDialog.ShowInfo(LocalizationService.GetString("Accounts_RefreshAllDoneTitle", "已刷新"), summaryMsg, owner: this);
+            }
         }
         catch (Exception ex)
         {

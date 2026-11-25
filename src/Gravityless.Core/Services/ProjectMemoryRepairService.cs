@@ -234,6 +234,67 @@ public class ProjectMemoryRepairService
         return sb.ToString().TrimEnd();
     }
 
+    /// <summary>
+    /// Automatically reindexes unindexed brain/conversation entries for a single project
+    /// (for instance after recovering from a corrupted summary DB).
+    /// </summary>
+    internal int ReindexMissingForProject(string projectId)
+    {
+        if (ProjectService.IsLooseChats(projectId)) return 0;
+
+        var memoryDir = _projectService.GetProjectMemoryDir(projectId);
+        if (!Directory.Exists(memoryDir)) return 0;
+
+        var db = Path.Combine(memoryDir, "conversation_summaries.db");
+        if (!File.Exists(db) || !ProjectService.IsUsableSqlite(db))
+        {
+            _projectService.InitSummaryDb(projectId);
+        }
+
+        var indexed = ReadIndex(memoryDir);
+        var brainDir = Path.Combine(memoryDir, "brain");
+        var convoDir = Path.Combine(memoryDir, "conversations");
+        var reindexedIds = new HashSet<string>(indexed.Select(r => r.Id), StringComparer.OrdinalIgnoreCase);
+        var count = 0;
+
+        if (Directory.Exists(brainDir))
+        {
+            foreach (var dir in Directory.EnumerateDirectories(brainDir))
+            {
+                if (JunctionService.IsJunction(dir)) continue;
+                var cid = Path.GetFileName(dir);
+                if (string.IsNullOrEmpty(cid) || cid.Equals("tempmediaStorage", StringComparison.OrdinalIgnoreCase)) continue;
+                if (reindexedIds.Contains(cid)) continue;
+
+                var checkpoint = Path.Combine(convoDir, $"{cid}.db");
+                bool hasCheckpoint = File.Exists(checkpoint) && new FileInfo(checkpoint).Length > 512;
+                if (ReindexConversation(memoryDir, projectId, cid, dir, hasCheckpoint))
+                {
+                    reindexedIds.Add(cid);
+                    count++;
+                }
+            }
+        }
+
+        if (Directory.Exists(convoDir))
+        {
+            foreach (var f in Directory.EnumerateFiles(convoDir, "*.db"))
+            {
+                var cid = Path.GetFileNameWithoutExtension(f);
+                if (string.IsNullOrEmpty(cid) || reindexedIds.Contains(cid)) continue;
+                bool hasCheckpoint = new FileInfo(f).Length > 512;
+                var bPath = Path.Combine(brainDir, cid);
+                if (ReindexConversation(memoryDir, projectId, cid, bPath, hasCheckpoint))
+                {
+                    reindexedIds.Add(cid);
+                    count++;
+                }
+            }
+        }
+
+        return count;
+    }
+
     private sealed record IndexRow(string Id, string Title);
 
     private static List<IndexRow> ReadIndex(string memoryDir)
@@ -242,12 +303,8 @@ public class ProjectMemoryRepairService
         var db = Path.Combine(memoryDir, "conversation_summaries.db");
         if (!File.Exists(db) || !ProjectService.IsUsableSqlite(db)) return rows;
 
-        try
+        ProjectService.TryQuerySqliteSnapshot(db, conn =>
         {
-            // Not Mode=ReadOnly: a database whose pages still sit in -wal refuses read-only
-            // opens, which would report an intact project as having no index at all.
-            using var conn = new SqliteConnection($"Data Source={db}");
-            conn.Open();
             using var cmd = conn.CreateCommand();
             cmd.CommandText = "SELECT conversation_id, title FROM conversation_summaries";
             using var reader = cmd.ExecuteReader();
@@ -257,35 +314,14 @@ public class ProjectMemoryRepairService
                 if (string.IsNullOrEmpty(id)) continue;
                 rows.Add(new IndexRow(id, reader.IsDBNull(1) ? string.Empty : reader.GetString(1)));
             }
-        }
-        catch (Exception ex)
-        {
-            DiagLog.Swallowed("memory-repair.read-index", ex);
-        }
+            return true;
+        }, out _);
 
         return rows;
     }
 
-    private static string TranscriptPath(string brainPath) =>
-        Path.Combine(brainPath, ".system_generated", "logs", "transcript.jsonl");
-
-    private static int CountTranscriptSteps(string brainPath)
-    {
-        try
-        {
-            var path = TranscriptPath(brainPath);
-            if (!File.Exists(path)) return 0;
-
-            var count = 0;
-            using var reader = new StreamReader(path);
-            while (reader.ReadLine() != null) count++;
-            return count;
-        }
-        catch
-        {
-            return 0;
-        }
-    }
+    private static int CountTranscriptSteps(string brainPath) =>
+        ProjectService.ReadMergedTranscriptSteps(brainPath).Count;
 
     /// <summary>
     /// Adds a summary row for a brain directory the index does not know about, so the
@@ -359,8 +395,7 @@ public class ProjectMemoryRepairService
         var project = _projectService.Projects.FirstOrDefault(p => p.Id == projectId);
         if (project == null || string.IsNullOrEmpty(project.Path)) return "[]";
 
-        var uri = "file:///" + project.Path.Replace("\\", "/").Replace(" ", "%20");
-        return JsonSerializer.Serialize(new[] { uri });
+        return JsonSerializer.Serialize(new[] { ProjectService.ToWorkspaceUri(project.Path) });
     }
 
     /// <summary>Writes the transcript as readable Markdown next to the brain directory.</summary>
@@ -416,46 +451,10 @@ public class ProjectMemoryRepairService
 
     private sealed record TranscriptStep(int Index, string Source, string Type, string Content, DateTime CreatedAt);
 
-    private static List<TranscriptStep> ReadTranscript(string brainPath)
-    {
-        var steps = new List<TranscriptStep>();
-        var path = TranscriptPath(brainPath);
-        if (!File.Exists(path)) return steps;
-
-        try
-        {
-            foreach (var line in File.ReadLines(path))
-            {
-                if (string.IsNullOrWhiteSpace(line)) continue;
-
-                try
-                {
-                    using var doc = JsonDocument.Parse(line);
-                    var root = doc.RootElement;
-
-                    var index = root.TryGetProperty("step_index", out var i) && i.TryGetInt32(out var n) ? n : steps.Count;
-                    var source = root.TryGetProperty("source", out var s) ? s.GetString() ?? "" : "";
-                    var type = root.TryGetProperty("type", out var t) ? t.GetString() ?? "" : "";
-                    var content = root.TryGetProperty("content", out var c) ? c.GetString() ?? "" : "";
-                    var created = root.TryGetProperty("created_at", out var d) && DateTime.TryParse(d.GetString(), out var dt)
-                        ? dt
-                        : DateTime.MinValue;
-
-                    steps.Add(new TranscriptStep(index, source, type, content, created));
-                }
-                catch
-                {
-                    // A truncated final line is expected when the process was killed mid-write.
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            DiagLog.Swallowed("memory-repair.read-transcript", ex);
-        }
-
-        return steps;
-    }
+    private static List<TranscriptStep> ReadTranscript(string brainPath) =>
+        ProjectService.ReadMergedTranscriptSteps(brainPath)
+            .Select(s => new TranscriptStep(s.StepIndex, s.Source, s.Type, s.Content, s.CreatedAt))
+            .ToList();
 
     /// <summary>Pulls the first non-empty line out of the user request envelope.</summary>
     private static string? ExtractTitle(string? content)

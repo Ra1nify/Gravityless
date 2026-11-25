@@ -215,11 +215,11 @@ public class InstanceService
         SaveInstances();
 
         var instDir = Path.Combine(_instancesStorageDir, instanceId);
-        if (Directory.Exists(instDir))
+        if (Directory.Exists(instDir) || JunctionService.IsJunction(instDir))
         {
             try
             {
-                Directory.Delete(instDir, true);
+                JunctionService.DeleteDirectorySafe(instDir);
             }
             catch (Exception ex) { DiagLog.Swallowed("instance.delete", ex); }
         }
@@ -443,10 +443,10 @@ public class InstanceService
         Directory.CreateDirectory(instAntigravity);
         Directory.CreateDirectory(instConfig);
 
-        // Mount shared skills / plugins / MCP via NTFS junctions.
+        // Sync shared skills / plugins / MCP as real directories (Windows RedirectionTrust safe).
         SetupStorageMatrix(inst, instAntigravity, instConfig);
 
-        // Mount the memory stores of bound projects (one or many).
+        // Materialize bound project memory stores (one or many) as real directories without junctions.
         SetupProjectMemoryMount(inst, boundProjects, instGemini, instAntigravity, instUserData);
 
         // Inject credentials. The slot is global, so take the instance lock (TTL-bounded) so two
@@ -559,6 +559,10 @@ public class InstanceService
             inst.ProcessId = proc.Id;
             inst.StartedAt = DateTime.UtcNow;
             _runningProcesses[inst.Id] = proc;
+
+            // Record that the leased access token is actively in use by this launched engine.
+            account.AccessTokenLastUsedAt = DateTime.UtcNow;
+            _accountPool.TrySaveAccounts();
 
             foreach (var proj in boundProjects)
             {
@@ -734,7 +738,10 @@ public class InstanceService
             }
         }
 
-        // Write back conversations created during the session (single or multi project).
+        // Sync any in-instance additions to shared skills / plugins / MCP back to the shared pool.
+        SyncStorageMatrixOutput(inst, Path.Combine(instanceGeminiDir, "antigravity"), Path.Combine(instanceGeminiDir, "config"));
+
+        // Write back conversations created or updated during the session (single or multi project).
         if (boundProjects.Count == 1)
         {
             SyncSingleProjectOutput(inst, boundProjects[0], instanceGeminiDir);
@@ -785,34 +792,155 @@ public class InstanceService
         catch { }
     }
 
+    private sealed class SharedSyncManifest
+    {
+        public List<string> Skills { get; set; } = [];
+        public List<string> Plugins { get; set; } = [];
+        public long McpConfigUtcTicks { get; set; }
+    }
+
+    private static string GetSharedManifestPath(string instConfig)
+    {
+        var instGemini = Path.GetDirectoryName(instConfig) ?? instConfig;
+        return Path.Combine(instGemini, ".gravityless_shared_manifest.json");
+    }
+
+    private static SharedSyncManifest LoadSharedManifest(string manifestPath)
+    {
+        try
+        {
+            if (File.Exists(manifestPath))
+            {
+                var parsed = JsonSerializer.Deserialize<SharedSyncManifest>(File.ReadAllText(manifestPath));
+                if (parsed != null) return parsed;
+            }
+        }
+        catch { }
+        return new SharedSyncManifest();
+    }
+
+    private static void SaveSharedManifest(string manifestPath, SharedSyncManifest manifest)
+    {
+        try
+        {
+            var dir = Path.GetDirectoryName(manifestPath);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            File.WriteAllText(manifestPath, JsonSerializer.Serialize(manifest));
+        }
+        catch (Exception ex) { DiagLog.Swallowed("instance.shared-manifest-save", ex); }
+    }
+
+    private static List<string> SyncSharedToolCategoryToInstance(string sharedCategoryDir, IReadOnlyList<string> instCategoryDirs, IReadOnlyList<string> previouslySynced)
+    {
+        Directory.CreateDirectory(sharedCategoryDir);
+        var currentShared = Directory.GetDirectories(sharedCategoryDir)
+            .Where(d => !JunctionService.IsJunction(d))
+            .Select(Path.GetFileName)
+            .Where(n => !string.IsNullOrEmpty(n))
+            .Select(n => n!)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var deletedFromShared = previouslySynced
+            .Where(n => !currentShared.Contains(n))
+            .ToList();
+
+        foreach (var instDir in instCategoryDirs)
+        {
+            JunctionService.UnwrapJunction(instDir);
+            JunctionService.UnwrapAllJunctions(instDir);
+            Directory.CreateDirectory(instDir);
+
+            // Propagate explicit deletions from ToolService without blindly removing local custom items.
+            foreach (var deletedName in deletedFromShared)
+            {
+                var staleDir = Path.Combine(instDir, deletedName);
+                if (Directory.Exists(staleDir))
+                {
+                    try { JunctionService.DeleteDirectorySafe(staleDir); }
+                    catch (Exception ex) { DiagLog.Swallowed("instance.shared-prune", ex); }
+                }
+            }
+
+            SyncDirectory(sharedCategoryDir, instDir, preferNewer: true);
+        }
+
+        return currentShared.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private static List<string> SyncInstanceToolCategoryBackToShared(
+        string sharedCategoryDir,
+        IEnumerable<string> instCategoryDirs,
+        IReadOnlyList<string> previouslySynced)
+    {
+        Directory.CreateDirectory(sharedCategoryDir);
+        var prevSet = previouslySynced.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var currentShared = Directory.GetDirectories(sharedCategoryDir)
+            .Where(d => !JunctionService.IsJunction(d))
+            .Select(Path.GetFileName)
+            .Where(n => !string.IsNullOrEmpty(n))
+            .Select(n => n!)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var instDir in instCategoryDirs)
+        {
+            if (!Directory.Exists(instDir) || JunctionService.IsJunction(instDir))
+                continue;
+
+            foreach (var subDir in Directory.GetDirectories(instDir))
+            {
+                if (JunctionService.IsJunction(subDir)) continue;
+                var name = Path.GetFileName(subDir);
+                if (string.IsNullOrEmpty(name)) continue;
+
+                // Never resurrect an item that was explicitly removed from the shared pool while running.
+                if (prevSet.Contains(name) && !currentShared.Contains(name))
+                {
+                    try { JunctionService.DeleteDirectorySafe(subDir); }
+                    catch (Exception ex) { DiagLog.Swallowed("instance.shared-prune-exit", ex); }
+                    continue;
+                }
+
+                SyncDirectory(subDir, Path.Combine(sharedCategoryDir, name), preferNewer: true);
+            }
+        }
+
+        return Directory.GetDirectories(sharedCategoryDir)
+            .Where(d => !JunctionService.IsJunction(d))
+            .Select(Path.GetFileName)
+            .Where(n => !string.IsNullOrEmpty(n))
+            .Select(n => n!)
+            .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
     private void SetupStorageMatrix(InstanceProfile inst, string instAntigravity, string instConfig)
     {
+        var manifestPath = GetSharedManifestPath(instConfig);
+        var manifest = LoadSharedManifest(manifestPath);
+
         var sharedSkills = Path.Combine(_sharedDir, "skills");
-        Directory.CreateDirectory(sharedSkills);
         var instAntigravitySkills = Path.Combine(instAntigravity, "skills");
         var instConfigSkills = Path.Combine(instConfig, "skills");
 
         if (inst.ShareSkills)
         {
-            JunctionService.CreateJunction(instAntigravitySkills, sharedSkills);
-            JunctionService.CreateJunction(instConfigSkills, sharedSkills);
+            manifest.Skills = SyncSharedToolCategoryToInstance(sharedSkills, [instAntigravitySkills, instConfigSkills], manifest.Skills);
         }
         else
         {
-            if (JunctionService.IsJunction(instAntigravitySkills)) JunctionService.RemoveJunction(instAntigravitySkills);
-            if (JunctionService.IsJunction(instConfigSkills)) JunctionService.RemoveJunction(instConfigSkills);
+            JunctionService.UnwrapJunction(instAntigravitySkills);
+            JunctionService.UnwrapJunction(instConfigSkills);
         }
 
         var sharedPlugins = Path.Combine(_sharedDir, "plugins");
-        Directory.CreateDirectory(sharedPlugins);
         var instPlugins = Path.Combine(instConfig, "plugins");
         if (inst.SharePlugins)
         {
-            JunctionService.CreateJunction(instPlugins, sharedPlugins);
+            manifest.Plugins = SyncSharedToolCategoryToInstance(sharedPlugins, [instPlugins], manifest.Plugins);
         }
-        else if (JunctionService.IsJunction(instPlugins))
+        else
         {
-            JunctionService.RemoveJunction(instPlugins);
+            JunctionService.UnwrapJunction(instPlugins);
         }
 
         var sharedMcp = Path.Combine(_sharedDir, "mcp");
@@ -823,87 +951,155 @@ public class InstanceService
 
         if (inst.ShareMcp)
         {
-            JunctionService.CreateJunction(instMcp, sharedMcp);
+            JunctionService.UnwrapJunction(instMcp);
+            JunctionService.UnwrapAllJunctions(instMcp);
+            Directory.CreateDirectory(instMcp);
+            SyncDirectory(sharedMcp, instMcp, preferNewer: true);
+
             if (File.Exists(sharedMcpJson))
             {
                 try
                 {
                     Directory.CreateDirectory(instConfig);
-                    File.Copy(sharedMcpJson, instConfigMcpJson, true);
+                    var sharedWriteUtc = File.GetLastWriteTimeUtc(sharedMcpJson);
+                    var copyToConfig = !File.Exists(instConfigMcpJson)
+                        || sharedWriteUtc >= File.GetLastWriteTimeUtc(instConfigMcpJson)
+                        || sharedWriteUtc.Ticks != manifest.McpConfigUtcTicks;
+                    if (copyToConfig)
+                    {
+                        File.Copy(sharedMcpJson, instConfigMcpJson, true);
+                    }
+                    manifest.McpConfigUtcTicks = sharedWriteUtc.Ticks;
                 }
-                catch (Exception ex) { DiagLog.Swallowed("instance.junction", ex); }
+                catch (Exception ex) { DiagLog.Swallowed("instance.shared-mcp-sync", ex); }
             }
         }
         else
         {
-            if (JunctionService.IsJunction(instMcp)) JunctionService.RemoveJunction(instMcp);
+            JunctionService.UnwrapJunction(instMcp);
         }
+
+        SaveSharedManifest(manifestPath, manifest);
+    }
+
+    private void SyncStorageMatrixOutput(InstanceProfile inst, string instAntigravity, string instConfig)
+    {
+        try
+        {
+            var manifestPath = GetSharedManifestPath(instConfig);
+            var manifest = LoadSharedManifest(manifestPath);
+
+            if (inst.ShareSkills)
+            {
+                var sharedSkills = Path.Combine(_sharedDir, "skills");
+                manifest.Skills = SyncInstanceToolCategoryBackToShared(
+                    sharedSkills,
+                    [Path.Combine(instAntigravity, "skills"), Path.Combine(instConfig, "skills")],
+                    manifest.Skills);
+            }
+
+            if (inst.SharePlugins)
+            {
+                var sharedPlugins = Path.Combine(_sharedDir, "plugins");
+                manifest.Plugins = SyncInstanceToolCategoryBackToShared(
+                    sharedPlugins,
+                    [Path.Combine(instConfig, "plugins")],
+                    manifest.Plugins);
+            }
+
+            if (inst.ShareMcp)
+            {
+                var sharedMcp = Path.Combine(_sharedDir, "mcp");
+                var instMcp = Path.Combine(instAntigravity, "mcp");
+                var sharedMcpJson = Path.Combine(sharedMcp, "mcp_config.json");
+                var instConfigMcpJson = Path.Combine(instConfig, "mcp_config.json");
+                var instMcpJson = Path.Combine(instMcp, "mcp_config.json");
+
+                if (Directory.Exists(instMcp) && !JunctionService.IsJunction(instMcp))
+                {
+                    SyncDirectory(instMcp, sharedMcp, preferNewer: true);
+                }
+
+                // Prefer whichever mcp_config.json was modified most recently during the session.
+                var sharedWrite = File.Exists(sharedMcpJson) ? File.GetLastWriteTimeUtc(sharedMcpJson) : DateTime.MinValue;
+                string? newestInstMcpJson = null;
+                var newestInstWrite = sharedWrite;
+                foreach (var candidate in new[] { instConfigMcpJson, instMcpJson })
+                {
+                    if (!File.Exists(candidate)) continue;
+                    var w = File.GetLastWriteTimeUtc(candidate);
+                    if (w > newestInstWrite)
+                    {
+                        newestInstWrite = w;
+                        newestInstMcpJson = candidate;
+                    }
+                }
+
+                if (newestInstMcpJson != null)
+                {
+                    Directory.CreateDirectory(sharedMcp);
+                    File.Copy(newestInstMcpJson, sharedMcpJson, true);
+                    manifest.McpConfigUtcTicks = File.GetLastWriteTimeUtc(sharedMcpJson).Ticks;
+                }
+            }
+
+            SaveSharedManifest(manifestPath, manifest);
+        }
+        catch (Exception ex) { DiagLog.Swallowed("instance.sync-shared-output", ex); }
     }
 
     private void SetupProjectMemoryMount(InstanceProfile inst, List<ProjectProfile> boundProjects, string instGemini, string instAntigravity, string instUserData)
     {
-        // Project-less chats live outside any project and are mounted separately.
-        MountLooseChats(instAntigravity);
-
         var instBrain = Path.Combine(instAntigravity, "brain");
         var instConvos = Path.Combine(instAntigravity, "conversations");
         var instSummaryDb = Path.Combine(instAntigravity, "conversation_summaries.db");
 
+        // Unwrap any legacy NTFS junctions without deleting target files so Antigravity sees real paths.
+        JunctionService.UnwrapJunction(instBrain);
+        JunctionService.UnwrapJunction(instConvos);
+        JunctionService.UnwrapAllJunctions(instBrain);
+        JunctionService.UnwrapAllJunctions(instConvos);
+        Directory.CreateDirectory(instBrain);
+        Directory.CreateDirectory(instConvos);
+
         if (boundProjects.Count == 0)
         {
-            if (JunctionService.IsJunction(instBrain)) JunctionService.RemoveJunction(instBrain);
-            if (JunctionService.IsJunction(instConvos)) JunctionService.RemoveJunction(instConvos);
-            Directory.CreateDirectory(instBrain);
-            Directory.CreateDirectory(instConvos);
+            MountLooseChats(instAntigravity);
+            InitInstanceSummaryDb(instSummaryDb);
             SetupProjectMetadata(boundProjects, instGemini, instUserData);
             return;
         }
 
-        if (boundProjects.Count == 1)
+        // Preserve any existing project-less rows before rebuilding the summary index from bound projects.
+        string? projectlessSnapshotDir = null;
+        string? projectlessSnapshotDb = null;
+        if (File.Exists(instSummaryDb) && IsUsableSqlite(instSummaryDb))
         {
-            var proj = boundProjects[0];
-            var projBrain = _projectService.GetProjectBrainDir(proj.Id);
-            var projConvos = _projectService.GetProjectConversationsDir(proj.Id);
-            var projSummaryDb = _projectService.GetProjectSummaryDbPath(proj.Id);
-            var projPb = _projectService.GetProjectSummariesPbPath(proj.Id);
-
-            Directory.CreateDirectory(projBrain);
-            Directory.CreateDirectory(projConvos);
-
-            JunctionService.CreateJunction(instBrain, projBrain);
-            JunctionService.CreateJunction(instConvos, projConvos);
-
-            _projectService.InitSummaryDb(proj.Id);
-
-            if (File.Exists(projSummaryDb) && ProjectService.IsUsableSqlite(projSummaryDb))
+            try
             {
-                ProjectService.CopySqliteSnapshot(projSummaryDb, instSummaryDb);
+                projectlessSnapshotDir = Path.Combine(Path.GetTempPath(), $"gl_mount_{Guid.NewGuid():N}");
+                Directory.CreateDirectory(projectlessSnapshotDir);
+                projectlessSnapshotDb = Path.Combine(projectlessSnapshotDir, "prev_summary.db");
+                if (!ProjectService.CopySqliteSnapshot(instSummaryDb, projectlessSnapshotDb))
+                {
+                    projectlessSnapshotDb = null;
+                }
             }
-            else
+            catch
             {
-                InitInstanceSummaryDb(instSummaryDb);
+                projectlessSnapshotDb = null;
             }
-
-            var instPb = Path.Combine(instAntigravity, "agyhub_summaries_proto.pb");
-            if (File.Exists(projPb))
-            {
-                try { File.Copy(projPb, instPb, true); } catch { }
-            }
-
-            // Single-project binding: keep project_id and metadata aligned as well.
-            AlignSummaryProjectIds(instSummaryDb, boundProjects);
-
-            SetupProjectMetadata(boundProjects, instGemini, instUserData);
         }
-        else
-        {
-            // Multi-project binding: merge each project's brain and conversations into the instance.
-            if (JunctionService.IsJunction(instBrain)) JunctionService.RemoveJunction(instBrain);
-            if (JunctionService.IsJunction(instConvos)) JunctionService.RemoveJunction(instConvos);
-            Directory.CreateDirectory(instBrain);
-            Directory.CreateDirectory(instConvos);
 
-            InitInstanceSummaryDb(instSummaryDb);
+        try
+        {
+            // Rebuild instance summary DB cleanly so stale summaries from previously unbound projects do not linger.
+            ProjectService.CreateBlankSummaryDb(instSummaryDb);
+
+            if (projectlessSnapshotDb != null)
+            {
+                MergeProjectlessSummaryRows(projectlessSnapshotDb, instSummaryDb);
+            }
 
             foreach (var proj in boundProjects)
             {
@@ -911,29 +1107,12 @@ public class InstanceService
                 var pConvos = _projectService.GetProjectConversationsDir(proj.Id);
                 var pDb = _projectService.GetProjectSummaryDbPath(proj.Id);
 
-                if (Directory.Exists(pBrain))
-                {
-                    foreach (var cDir in Directory.GetDirectories(pBrain))
-                    {
-                        var cName = Path.GetFileName(cDir);
-                        var target = Path.Combine(instBrain, cName);
-                        JunctionService.CreateJunction(target, cDir);
-                    }
-                }
+                Directory.CreateDirectory(pBrain);
+                Directory.CreateDirectory(pConvos);
+                _projectService.InitSummaryDb(proj.Id);
 
-                if (Directory.Exists(pConvos))
-                {
-                    foreach (var f in Directory.GetFiles(pConvos, "*.db"))
-                    {
-                        var fName = Path.GetFileName(f);
-                        var target = Path.Combine(instConvos, fName);
-
-                        // A stale -wal from an earlier run would be paired with the freshly linked
-                        // database and make SQLite read pages that no longer belong to it.
-                        DeleteSqliteSiblings(target);
-                        ProjectService.CopySqliteSnapshot(f, target);
-                    }
-                }
+                SyncDirectory(pBrain, instBrain, preferNewer: true);
+                SyncSqliteDirectory(pConvos, instConvos, preferNewer: true);
 
                 if (File.Exists(pDb))
                 {
@@ -941,15 +1120,30 @@ public class InstanceService
                 }
             }
 
+            if (boundProjects.Count == 1)
+            {
+                var projPb = _projectService.GetProjectSummariesPbPath(boundProjects[0].Id);
+                var instPb = Path.Combine(instAntigravity, "agyhub_summaries_proto.pb");
+                if (File.Exists(projPb))
+                {
+                    try { File.Copy(projPb, instPb, true); } catch { }
+                }
+            }
+
             AlignSummaryProjectIds(instSummaryDb, boundProjects);
             SetupProjectMetadata(boundProjects, instGemini, instUserData);
+        }
+        finally
+        {
+            if (projectlessSnapshotDir != null && Directory.Exists(projectlessSnapshotDir))
+            {
+                try { Directory.Delete(projectlessSnapshotDir, true); } catch { }
+            }
         }
     }
 
     /// <summary>
-    /// Links the instance's project-less chat store to the host copy.
-    /// The three paths are independent, so each is handled separately: a missing host entry
-    /// leaves the instance's own directory in place rather than breaking the whole mount.
+    /// Syncs project-less chats from the host store into an unbound instance as real files/directories.
     /// </summary>
     private static void MountLooseChats(string instAntigravity)
     {
@@ -966,47 +1160,29 @@ public class InstanceService
             var instBrain = Path.Combine(instAntigravity, "brain");
             var instDb = Path.Combine(instAntigravity, "conversation_summaries.db");
 
-            // Directories: replace an existing plain directory with a junction. A directory
-            // that already holds data is left alone so nothing is silently discarded.
-            MountDir(instConvos, hostConvos);
-            MountDir(instBrain, hostBrain);
+            JunctionService.UnwrapJunction(instConvos);
+            JunctionService.UnwrapJunction(instBrain);
 
-            // The summary database is written by both sides, so it stays a local copy and is
-            // refreshed from the host at launch instead of being linked.
-            if (File.Exists(hostDb) && !File.Exists(instDb))
+            if (Directory.Exists(hostBrain) && !JunctionService.IsJunction(hostBrain))
             {
-                try { File.Copy(hostDb, instDb, overwrite: false); } catch { }
+                SyncDirectory(hostBrain, instBrain, preferNewer: true);
+            }
+
+            if (Directory.Exists(hostConvos) && !JunctionService.IsJunction(hostConvos))
+            {
+                SyncSqliteDirectory(hostConvos, instConvos, preferNewer: true);
+            }
+
+            if (File.Exists(hostDb) && IsUsableSqlite(hostDb))
+            {
+                InitInstanceSummaryDb(instDb);
+                MergeSummariesDb(hostDb, instDb);
             }
         }
-        catch
+        catch (Exception ex)
         {
-            // Mounting is best-effort; a failure leaves the instance with its local store.
+            DiagLog.Swallowed("instance.sync-loose-chats", ex);
         }
-    }
-
-    /// <summary>Junctions <paramref name="linkPath"/> to <paramref name="targetPath"/> when safe.</summary>
-    private static void MountDir(string linkPath, string targetPath)
-    {
-        if (!Directory.Exists(targetPath)) return;
-
-        if (JunctionService.IsJunction(linkPath))
-        {
-            return;
-        }
-
-        if (Directory.Exists(linkPath))
-        {
-            // Keep directories that already contain files.
-            try
-            {
-                if (Directory.EnumerateFileSystemEntries(linkPath).Any()) return;
-            }
-            catch { return; }
-
-            try { Directory.Delete(linkPath, recursive: true); } catch { return; }
-        }
-
-        JunctionService.CreateJunction(linkPath, targetPath);
     }
 
     private static void InitInstanceSummaryDb(string destDb)
@@ -1132,29 +1308,30 @@ public class InstanceService
         return cmd.ExecuteScalar() != null;
     }
 
-    /// <summary>Merges summary rows (all available schema columns) and conversation_parents links into destDb.</summary>
-    private static void MergeSummaryRows(string srcDb, string destDb, string? filterConversationId = null)
+    /// <summary>Merges summary rows (all available schema columns) and conversation_parents links into destDb, preserving newer destination rows.</summary>
+    private static void MergeSummaryRows(string srcDb, string destDb, string? filterConversationId = null, bool onlyProjectless = false)
     {
-        try
-        {
-            using var srcConn = new SqliteConnection($"Data Source={srcDb};Mode=ReadOnly");
-            srcConn.Open();
-            using var destConn = new SqliteConnection($"Data Source={destDb}");
-            destConn.Open();
+        if (!IsUsableSqlite(srcDb)) return;
 
-            using var tx = destConn.BeginTransaction();
-            ProjectService.EnsureSummarySchema(destConn, tx);
+        string[]? colsToCopy = null;
+        var srcRows = new List<(string Cid, DateTime Mod, int Steps, string Title, object[] Values)>();
+        var srcParents = new List<(object Cid, object Pid)>();
+
+        ProjectService.TryQuerySqliteSnapshot(srcDb, srcConn =>
+        {
+            if (!TableExists(srcConn, "conversation_summaries")) return false;
 
             var srcCols = ReadTableColumns(srcConn, "conversation_summaries");
-            var colsToCopy = SummaryColumns.Where(c => srcCols.Contains(c)).ToArray();
-            if (colsToCopy.Length == 0)
-            {
-                tx.Commit();
-                return;
-            }
+            colsToCopy = SummaryColumns.Where(c => srcCols.Contains(c)).ToArray();
+            if (colsToCopy.Length == 0) return false;
 
+            var cidColIdx = Array.IndexOf(colsToCopy, "conversation_id");
+            var modColIdx = Array.IndexOf(colsToCopy, "last_modified_time");
+            var stepsColIdx = Array.IndexOf(colsToCopy, "step_count");
+            var titleColIdx = Array.IndexOf(colsToCopy, "title");
+            var projColIdx = Array.IndexOf(colsToCopy, "project_id");
+            var urisColIdx = Array.IndexOf(colsToCopy, "workspace_uris");
             var colListSql = string.Join(", ", colsToCopy.Select(c => $"`{c}`"));
-            var paramListSql = string.Join(", ", colsToCopy.Select((_, i) => $"@p{i}"));
 
             using (var selectCmd = srcConn.CreateCommand())
             {
@@ -1169,19 +1346,31 @@ public class InstanceService
                 using var reader = selectCmd.ExecuteReader();
                 while (reader.Read())
                 {
-                    using var insertCmd = destConn.CreateCommand();
-                    insertCmd.Transaction = tx;
-                    insertCmd.CommandText = $"INSERT OR REPLACE INTO `conversation_summaries` ({colListSql}) VALUES ({paramListSql});";
+                    var cid = cidColIdx >= 0 && !reader.IsDBNull(cidColIdx) ? reader.GetString(cidColIdx) : string.Empty;
+                    if (string.IsNullOrEmpty(cid)) continue;
+
+                    if (onlyProjectless)
+                    {
+                        var rowProjId = projColIdx >= 0 && !reader.IsDBNull(projColIdx) ? reader.GetString(projColIdx) : null;
+                        var rowUris = urisColIdx >= 0 && !reader.IsDBNull(urisColIdx) ? reader.GetString(urisColIdx) : null;
+                        if (!ProjectService.IsProjectlessConversation(rowProjId, rowUris)) continue;
+                    }
+
+                    var srcMod = modColIdx >= 0 ? ParseReaderDateTimeUtc(reader, modColIdx) : DateTime.MinValue;
+                    var srcSteps = stepsColIdx >= 0 && !reader.IsDBNull(stepsColIdx) ? reader.GetInt32(stepsColIdx) : 0;
+                    var srcTitle = titleColIdx >= 0 && !reader.IsDBNull(titleColIdx) ? reader.GetString(titleColIdx) : string.Empty;
+                    var vals = new object[colsToCopy.Length];
                     for (var i = 0; i < colsToCopy.Length; i++)
                     {
-                        insertCmd.Parameters.AddWithValue($"@p{i}", GetDbValue(reader, i));
+                        vals[i] = GetDbValue(reader, i);
                     }
-                    insertCmd.ExecuteNonQuery();
+                    srcRows.Add((cid, srcMod, srcSteps, srcTitle, vals));
                 }
             }
 
-            if (TableExists(srcConn, "conversation_parents"))
+            if (TableExists(srcConn, "conversation_parents") && (!onlyProjectless || srcRows.Count > 0))
             {
+                var mergedCids = srcRows.Select(r => r.Cid).ToHashSet(StringComparer.OrdinalIgnoreCase);
                 using var pSelect = srcConn.CreateCommand();
                 pSelect.CommandText = filterConversationId == null
                     ? "SELECT `conversation_id`, `parent_id` FROM `conversation_parents`;"
@@ -1194,35 +1383,187 @@ public class InstanceService
                 using var pReader = pSelect.ExecuteReader();
                 while (pReader.Read())
                 {
-                    using var pInsert = destConn.CreateCommand();
-                    pInsert.Transaction = tx;
-                    pInsert.CommandText = "INSERT OR REPLACE INTO `conversation_parents` (`conversation_id`, `parent_id`) VALUES (@cid, @pid);";
-                    pInsert.Parameters.AddWithValue("@cid", GetDbValue(pReader, 0));
-                    pInsert.Parameters.AddWithValue("@pid", GetDbValue(pReader, 1));
-                    pInsert.ExecuteNonQuery();
+                    if (onlyProjectless)
+                    {
+                        var childId = pReader.IsDBNull(0) ? string.Empty : pReader.GetString(0);
+                        if (!mergedCids.Contains(childId)) continue;
+                    }
+                    srcParents.Add((GetDbValue(pReader, 0), GetDbValue(pReader, 1)));
                 }
             }
 
-            tx.Commit();
+            return true;
+        }, out _);
+
+        if (colsToCopy == null || colsToCopy.Length == 0 || (srcRows.Count == 0 && srcParents.Count == 0))
+            return;
+
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            try
+            {
+                if (!File.Exists(destDb) || !IsUsableSqlite(destDb))
+                {
+                    if (File.Exists(destDb))
+                    {
+                        DiagLog.Swallowed("instance.repair-corrupt-dest-summary", new InvalidDataException($"Recreating unusable summary DB: {destDb}"));
+                    }
+                    ProjectService.CreateBlankSummaryDb(destDb);
+                }
+
+                using var destConn = new SqliteConnection($"Data Source={destDb}");
+                destConn.Open();
+
+                using var tx = destConn.BeginTransaction();
+                ProjectService.EnsureSummarySchema(destConn, tx);
+
+                var existingMeta = new Dictionary<string, (DateTime mod, int steps, string title)>(StringComparer.OrdinalIgnoreCase);
+                using (var metaCmd = destConn.CreateCommand())
+                {
+                    metaCmd.Transaction = tx;
+                    metaCmd.CommandText = filterConversationId == null
+                        ? "SELECT `conversation_id`, `last_modified_time`, `step_count`, `title` FROM `conversation_summaries`;"
+                        : "SELECT `conversation_id`, `last_modified_time`, `step_count`, `title` FROM `conversation_summaries` WHERE `conversation_id` = @cid;";
+                    if (filterConversationId != null) metaCmd.Parameters.AddWithValue("@cid", filterConversationId);
+                    using var mr = metaCmd.ExecuteReader();
+                    while (mr.Read())
+                    {
+                        if (mr.IsDBNull(0)) continue;
+                        var id = mr.GetString(0);
+                        var mod = ParseReaderDateTimeUtc(mr, 1);
+                        var steps = mr.IsDBNull(2) ? 0 : mr.GetInt32(2);
+                        var title = mr.IsDBNull(3) ? string.Empty : mr.GetString(3);
+                        existingMeta[id] = (mod, steps, title);
+                    }
+                }
+
+                var rowsToWrite = srcRows.Where(row =>
+                {
+                    if (!existingMeta.TryGetValue(row.Cid, out var cur)) return true;
+                    if (row.Mod > cur.mod) return true;
+                    if (row.Mod < cur.mod) return false;
+                    if (row.Steps > cur.steps) return true;
+                    if (row.Steps < cur.steps) return false;
+                    return !string.Equals(row.Title, cur.title, StringComparison.Ordinal);
+                }).ToList();
+
+                if (rowsToWrite.Count > 0)
+                {
+                    var colListSql = string.Join(", ", colsToCopy.Select(c => $"`{c}`"));
+                    var paramListSql = string.Join(", ", colsToCopy.Select((_, i) => $"@p{i}"));
+
+                    foreach (var row in rowsToWrite)
+                    {
+                        using var insertCmd = destConn.CreateCommand();
+                        insertCmd.Transaction = tx;
+                        insertCmd.CommandText = $"INSERT OR REPLACE INTO `conversation_summaries` ({colListSql}) VALUES ({paramListSql});";
+                        for (var i = 0; i < colsToCopy.Length; i++)
+                        {
+                            insertCmd.Parameters.AddWithValue($"@p{i}", row.Values[i]);
+                        }
+                        insertCmd.ExecuteNonQuery();
+                    }
+                }
+
+                foreach (var (cidVal, pidVal) in srcParents)
+                {
+                    using var pInsert = destConn.CreateCommand();
+                    pInsert.Transaction = tx;
+                    pInsert.CommandText = "INSERT OR IGNORE INTO `conversation_parents` (`conversation_id`, `parent_id`) VALUES (@cid, @pid);";
+                    pInsert.Parameters.AddWithValue("@cid", cidVal);
+                    pInsert.Parameters.AddWithValue("@pid", pidVal);
+                    pInsert.ExecuteNonQuery();
+                }
+
+                tx.Commit();
+                return;
+            }
+            catch (SqliteException ex) when (attempt == 0 && File.Exists(destDb))
+            {
+                DiagLog.Swallowed("instance.merge-summaries-recover", ex);
+                try { ProjectService.CreateBlankSummaryDb(destDb); } catch { return; }
+            }
+            catch (Exception ex)
+            {
+                DiagLog.Swallowed("instance.merge-summaries", ex);
+                return;
+            }
         }
-        catch (Exception ex) { DiagLog.Swallowed("instance.merge-summaries", ex); }
+    }
+
+    private static DateTime ParseReaderDateTimeUtc(SqliteDataReader reader, int index)
+    {
+        if (reader.IsDBNull(index)) return DateTime.MinValue;
+        try { return reader.GetDateTime(index).ToUniversalTime(); }
+        catch
+        {
+            try
+            {
+                var raw = reader.GetString(index);
+                if (DateTimeOffset.TryParse(raw, out var dto)) return dto.UtcDateTime;
+            }
+            catch { }
+            return DateTime.MinValue;
+        }
     }
 
     private static void MergeSummariesDb(string srcDb, string destDb) =>
         MergeSummaryRows(srcDb, destDb);
 
+    private static void MergeProjectlessSummaryRows(string srcDb, string destDb) =>
+        MergeSummaryRows(srcDb, destDb, onlyProjectless: true);
+
     private void SyncSingleProjectOutput(InstanceProfile inst, ProjectProfile proj, string instGeminiDir)
     {
         var instAntigravity = Path.Combine(instGeminiDir, "antigravity");
+        var instBrain = Path.Combine(instAntigravity, "brain");
+        var instConvos = Path.Combine(instAntigravity, "conversations");
         var instSummaryDb = Path.Combine(instAntigravity, "conversation_summaries.db");
         var instPb = Path.Combine(instAntigravity, "agyhub_summaries_proto.pb");
 
+        var projBrain = _projectService.GetProjectBrainDir(proj.Id);
+        var projConvos = _projectService.GetProjectConversationsDir(proj.Id);
         var projSummaryDb = _projectService.GetProjectSummaryDbPath(proj.Id);
         var projPb = _projectService.GetProjectSummariesPbPath(proj.Id);
 
-        if (File.Exists(instSummaryDb) && ProjectService.IsUsableSqlite(instSummaryDb))
+        var projectlessIds = ReadProjectlessConversationIds(instSummaryDb);
+
+        if (Directory.Exists(instBrain) && !JunctionService.IsJunction(instBrain))
         {
-            ProjectService.CopySqliteSnapshot(instSummaryDb, projSummaryDb);
+            Directory.CreateDirectory(projBrain);
+            foreach (var subDir in Directory.GetDirectories(instBrain))
+            {
+                var cid = Path.GetFileName(subDir);
+                if (string.IsNullOrEmpty(cid)
+                    || cid.Equals("tempmediaStorage", StringComparison.OrdinalIgnoreCase)
+                    || JunctionService.IsJunction(subDir)
+                    || projectlessIds.Contains(cid))
+                {
+                    continue;
+                }
+
+                SyncDirectory(subDir, Path.Combine(projBrain, cid), preferNewer: true);
+            }
+        }
+
+        if (Directory.Exists(instConvos) && !JunctionService.IsJunction(instConvos))
+        {
+            Directory.CreateDirectory(projConvos);
+            foreach (var srcDb in Directory.GetFiles(instConvos, "*.db"))
+            {
+                var cid = Path.GetFileNameWithoutExtension(srcDb);
+                if (string.IsNullOrEmpty(cid) || projectlessIds.Contains(cid)) continue;
+
+                SyncSqliteFile(srcDb, Path.Combine(projConvos, Path.GetFileName(srcDb)), preferNewer: true);
+            }
+        }
+
+        if (File.Exists(instSummaryDb) && IsUsableSqlite(instSummaryDb))
+        {
+            if (ProjectService.CopySqliteSnapshot(instSummaryDb, projSummaryDb))
+            {
+                AlignSummaryProjectIds(projSummaryDb, [proj]);
+            }
         }
 
         if (File.Exists(instPb))
@@ -1247,48 +1588,57 @@ public class InstanceService
         var instConvos = Path.Combine(instAntigravity, "conversations");
         var instSummaryDb = Path.Combine(instAntigravity, "conversation_summaries.db");
 
-        if (!File.Exists(instSummaryDb)) return;
+        if (!File.Exists(instSummaryDb) || !IsUsableSqlite(instSummaryDb)) return;
 
         try
         {
-            using var conn = new SqliteConnection($"Data Source={instSummaryDb};Mode=ReadOnly");
-            conn.Open();
-            using var cmd = conn.CreateCommand();
-            cmd.CommandText = "SELECT conversation_id, workspace_uris, project_id FROM conversation_summaries";
-            using var reader = cmd.ExecuteReader();
-            while (reader.Read())
+            var rows = new List<(string cid, string? urisJson, string? pId)>();
+            ProjectService.TryQuerySqliteSnapshot(instSummaryDb, conn =>
             {
-                var cid = reader.GetString(0);
-                var urisJson = reader.GetString(1);
-                var pId = reader.IsDBNull(2) ? null : reader.GetString(2);
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "SELECT conversation_id, workspace_uris, project_id FROM conversation_summaries";
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read())
+                {
+                    var cid = reader.IsDBNull(0) ? string.Empty : reader.GetString(0);
+                    if (string.IsNullOrEmpty(cid)) continue;
+                    rows.Add((cid, reader.IsDBNull(1) ? null : reader.GetString(1), reader.IsDBNull(2) ? null : reader.GetString(2)));
+                }
+                return true;
+            }, out _);
 
+            foreach (var (cid, urisJson, pId) in rows)
+            {
                 // Project-less chats belong to no workspace; copying them into one would relocate
                 // their brain and make them appear under an unrelated project.
                 if (ProjectService.IsProjectlessConversation(pId, urisJson)) continue;
 
-                var matchedProj = boundProjects.FirstOrDefault(p => !string.IsNullOrEmpty(p.Path) && urisJson.Contains(p.Path.Replace("\\", "/"), StringComparison.OrdinalIgnoreCase));
+                ProjectProfile? matchedProj = null;
+                if (!string.IsNullOrEmpty(pId))
+                {
+                    matchedProj = boundProjects.FirstOrDefault(p => p.Id.Equals(pId, StringComparison.OrdinalIgnoreCase));
+                }
+                matchedProj ??= MatchProjectByWorkspaceUris(boundProjects, urisJson);
+
                 if (matchedProj != null)
                 {
                     var targetBrain = Path.Combine(_projectService.GetProjectBrainDir(matchedProj.Id), cid);
                     var srcBrain = Path.Combine(instBrain, cid);
-                    if (Directory.Exists(srcBrain) && !Directory.Exists(targetBrain) && !JunctionService.IsJunction(srcBrain))
+                    if (Directory.Exists(srcBrain) && !JunctionService.IsJunction(srcBrain))
                     {
-                        try { CopyDirectory(srcBrain, targetBrain); } catch { }
+                        SyncDirectory(srcBrain, targetBrain, preferNewer: true);
                     }
 
                     var targetConvo = Path.Combine(_projectService.GetProjectConversationsDir(matchedProj.Id), $"{cid}.db");
                     var srcConvo = Path.Combine(instConvos, $"{cid}.db");
-                    if (File.Exists(srcConvo) && !File.Exists(targetConvo))
-                    {
-                        try { File.Copy(srcConvo, targetConvo, true); } catch { }
-                    }
+                    SyncSqliteFile(srcConvo, targetConvo, preferNewer: true);
 
-                    // Mirror the summary row.
                     var projDb = _projectService.GetProjectSummaryDbPath(matchedProj.Id);
-                    if (File.Exists(projDb))
+                    if (!File.Exists(projDb) || !IsUsableSqlite(projDb))
                     {
-                        MergeSingleSummary(instSummaryDb, projDb, cid);
+                        _projectService.InitSummaryDb(matchedProj.Id);
                     }
+                    MergeSingleSummary(instSummaryDb, projDb, cid);
                 }
             }
 
@@ -1308,67 +1658,16 @@ public class InstanceService
                 }
             }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            DiagLog.Swallowed("instance.sync-multi", ex);
+        }
     }
 
     private static void MergeSingleSummary(string srcDb, string destDb, string convoId) =>
         MergeSummaryRows(srcDb, destDb, convoId);
 
-    /// <summary>
-    /// SQLite keeps committed-but-unmerged pages in companion files next to the database.
-    /// Moving the .db alone would silently drop them, so the whole family travels together.
-    /// </summary>
-    private static readonly string[] SqliteSiblingSuffixes = ProjectService.SqliteSiblingSuffixes;
-    private static readonly byte[] SqliteHeader = ProjectService.SqliteHeader;
-
     private static bool IsUsableSqlite(string path) => ProjectService.IsUsableSqlite(path);
-
-    private static void MoveSqliteWithSiblings(string sourceDb, string destDb)
-    {
-        // Overwrite semantics: the caller already decided this copy should become the shared one,
-        // and leaving a stale target in place would mix rows from two different databases.
-        if (File.Exists(destDb))
-        {
-            try { File.Delete(destDb); } catch { }
-        }
-
-        // Clear every destination companion first. A leftover -shm or -wal from the previous
-        // occupant would otherwise be paired with the incoming database.
-        DeleteSqliteSiblings(destDb);
-
-        File.Move(sourceDb, destDb);
-
-        foreach (var suffix in SqliteSiblingSuffixes)
-        {
-            var from = sourceDb + suffix;
-            if (!File.Exists(from)) continue;
-
-            try
-            {
-                File.Move(from, destDb + suffix);
-            }
-            catch (Exception ex)
-            {
-                DiagLog.Swallowed("instance.sqlite-sibling-move", ex);
-            }
-        }
-    }
-
-    private static void DeleteSqliteSiblings(string dbPath)
-    {
-        foreach (var suffix in SqliteSiblingSuffixes)
-        {
-            try
-            {
-                var path = dbPath + suffix;
-                if (File.Exists(path)) File.Delete(path);
-            }
-            catch (Exception ex)
-            {
-                DiagLog.Swallowed("instance.sqlite-sibling-delete", ex);
-            }
-        }
-    }
 
     public void ReconcileAndHarvestProjects(InstanceProfile inst)
     {
@@ -1471,7 +1770,7 @@ public class InstanceService
             }
         }
 
-        // Move every real (non-junction) memory entry to shared storage and replace it with a junction.
+        // Sync real (non-junction) memory entries from the instance sandbox into canonical project storage without deleting local copies or creating junctions.
         if (Directory.Exists(instBrain) && !JunctionService.IsJunction(instBrain))
         {
             Directory.CreateDirectory(instConvos);
@@ -1482,7 +1781,6 @@ public class InstanceService
                 if (string.IsNullOrEmpty(cid) || cid.Equals("tempmediaStorage", StringComparison.OrdinalIgnoreCase))
                     continue;
 
-                // Already a junction: nothing to migrate.
                 if (JunctionService.IsJunction(subDir))
                     continue;
 
@@ -1490,12 +1788,10 @@ public class InstanceService
                 var isProjectless = false;
 
                 // A. Resolve project_id / workspace_uris from conversation_summaries.db.
-                if (File.Exists(instSummaryDb))
+                if (File.Exists(instSummaryDb) && IsUsableSqlite(instSummaryDb))
                 {
-                    try
+                    ProjectService.TryQuerySqliteSnapshot(instSummaryDb, conn =>
                     {
-                        using var conn = new SqliteConnection($"Data Source={instSummaryDb};Mode=ReadOnly");
-                        conn.Open();
                         using var cmd = conn.CreateCommand();
                         cmd.CommandText = "SELECT project_id, workspace_uris FROM conversation_summaries WHERE conversation_id=@cid";
                         cmd.Parameters.AddWithValue("@cid", cid);
@@ -1505,9 +1801,6 @@ public class InstanceService
                             var pId = reader.IsDBNull(0) ? null : reader.GetString(0);
                             var urisJson = reader.IsDBNull(1) ? null : reader.GetString(1);
 
-                            // A chat started outside any workspace is not a mismatched project:
-                            // adopting it into one would move its brain into that project and make
-                            // the conversation appear under an unrelated name.
                             isProjectless = ProjectService.IsProjectlessConversation(pId, urisJson);
 
                             if (!isProjectless && !string.IsNullOrEmpty(pId))
@@ -1517,18 +1810,11 @@ public class InstanceService
 
                             if (!isProjectless && matchedProj == null && !string.IsNullOrEmpty(urisJson))
                             {
-                                foreach (var p in _projectService.Projects)
-                                {
-                                    if (!string.IsNullOrEmpty(p.Path) && urisJson.Contains(p.Path.Replace("\\", "/"), StringComparison.OrdinalIgnoreCase))
-                                    {
-                                        matchedProj = p;
-                                        break;
-                                    }
-                                }
+                                matchedProj = MatchProjectByWorkspaceUris(_projectService.Projects, urisJson);
                             }
                         }
-                    }
-                    catch { }
+                        return true;
+                    }, out _);
                 }
 
                 // Project-less chats keep their own store; leave them where Antigravity put them.
@@ -1550,8 +1836,6 @@ public class InstanceService
                 // C. Still unmatched: bind an existing/default workspace or create one.
                 if (matchedProj == null)
                 {
-                    // Only the instance's own workspace is a safe default. Picking an arbitrary
-                    // project here is what made unrelated chats show up under the wrong name.
                     matchedProj = _projectService.Projects.FirstOrDefault(p => p.Name == $"{inst.Name}-工作区");
 
                     if (matchedProj == null)
@@ -1574,64 +1858,43 @@ public class InstanceService
                     instancesChanged = true;
                 }
 
-                // Move brain/{cid} into shared storage.
+                // Sync brain/{cid} incrementally into project storage while leaving instance copy as a real directory.
                 var targetPubBrain = Path.Combine(_projectService.GetProjectBrainDir(matchedProj.Id), cid);
+                bool harvestedChanges = false;
                 try
                 {
-                    if (Directory.Exists(targetPubBrain))
-                    {
-                        CopyDirectory(subDir, targetPubBrain);
-                        Directory.Delete(subDir, true);
-                    }
-                    else
-                    {
-                        var parent = Path.GetDirectoryName(targetPubBrain);
-                        if (!string.IsNullOrEmpty(parent)) Directory.CreateDirectory(parent);
-                        Directory.Move(subDir, targetPubBrain);
-                    }
-
-                    // Recreate the junction link.
-                    JunctionService.CreateJunction(subDir, targetPubBrain);
+                    harvestedChanges |= SyncDirectory(subDir, targetPubBrain, preferNewer: true);
                 }
-                catch (Exception ex) { DiagLog.Swallowed("instance.brain-junction", ex); }
+                catch (Exception ex) { DiagLog.Swallowed("instance.brain-sync", ex); }
 
-                // Move conversations/{cid}.db and hard-link it back.
+                // Sync conversations/{cid}.db cleanly (snapshot newer/missing source -> canonical project store).
                 var srcConvoDb = Path.Combine(instConvos, $"{cid}.db");
                 var targetPubConvoDb = Path.Combine(_projectService.GetProjectConversationsDir(matchedProj.Id), $"{cid}.db");
                 if (File.Exists(srcConvoDb))
                 {
                     try
                     {
-                        var parent = Path.GetDirectoryName(targetPubConvoDb);
-                        if (!string.IsNullOrEmpty(parent)) Directory.CreateDirectory(parent);
-
-                        if (!IsUsableSqlite(targetPubConvoDb))
-                        {
-                            // Target is absent or an empty shell left by an uncheckpointed WAL.
-                            // The instance copy is the only real data, so it becomes the shared one.
-                            MoveSqliteWithSiblings(srcConvoDb, targetPubConvoDb);
-                        }
-                        else
-                        {
-                            // Proven good copy exists; the instance-side duplicate can go.
-                            File.Delete(srcConvoDb);
-                            DeleteSqliteSiblings(srcConvoDb);
-                        }
-
-                        ProjectService.CopySqliteSnapshot(srcConvoDb, targetPubConvoDb);
+                        harvestedChanges |= SyncSqliteFile(srcConvoDb, targetPubConvoDb, preferNewer: true);
                     }
-                    catch (Exception ex) { DiagLog.Swallowed("instance.convo-link", ex); }
+                    catch (Exception ex) { DiagLog.Swallowed("instance.convo-sync", ex); }
                 }
 
-                // Merge the summary rows into the shared project DB.
-                if (File.Exists(instSummaryDb))
+                // Merge the summary row into the shared project DB.
+                if (File.Exists(instSummaryDb) && IsUsableSqlite(instSummaryDb))
                 {
                     var pubDb = _projectService.GetProjectSummaryDbPath(matchedProj.Id);
+                    if (!File.Exists(pubDb) || !IsUsableSqlite(pubDb))
+                    {
+                        _projectService.InitSummaryDb(matchedProj.Id);
+                    }
                     MergeSingleSummary(instSummaryDb, pubDb, cid);
                 }
 
-                _projectService.RefreshProjectMemoryStats(matchedProj);
-                projectsChanged = true;
+                if (harvestedChanges)
+                {
+                    _projectService.RefreshProjectMemoryStats(matchedProj);
+                    projectsChanged = true;
+                }
             }
         }
 
@@ -1840,10 +2103,193 @@ public class InstanceService
         catch { }
     }
 
+    private static ProjectProfile? MatchProjectByWorkspaceUris(IEnumerable<ProjectProfile> candidates, string? workspaceUrisJson)
+    {
+        if (string.IsNullOrWhiteSpace(workspaceUrisJson)) return null;
+
+        var candidateList = candidates
+            .Select(p => (Project: p, NormalizedPath: NormalizeCandidateProjectPath(p.Path)))
+            .Where(x => !string.IsNullOrEmpty(x.NormalizedPath))
+            .ToList();
+
+        if (candidateList.Count == 0) return null;
+
+        var normalizedUris = new List<string>();
+        try
+        {
+            if (JsonNode.Parse(workspaceUrisJson) is JsonArray arr)
+            {
+                foreach (var item in arr)
+                {
+                    var norm = ProjectService.NormalizeWorkspaceUri(item?.ToString());
+                    if (!string.IsNullOrEmpty(norm))
+                    {
+                        normalizedUris.Add(norm.TrimEnd('\\', '/'));
+                    }
+                }
+            }
+        }
+        catch { }
+
+        foreach (var uriPath in normalizedUris)
+        {
+            var match = candidateList.FirstOrDefault(c => string.Equals(c.NormalizedPath, uriPath, StringComparison.OrdinalIgnoreCase)).Project;
+            if (match != null) return match;
+        }
+
+        // Fallback if workspace_uris wasn't well-formed JSON: check both plain and %3A-encoded forms explicitly.
+        if (normalizedUris.Count == 0)
+        {
+            foreach (var (proj, normPath) in candidateList)
+            {
+                var fwd = normPath.Replace('\\', '/');
+                var encoded = fwd.Replace(":", "%3A");
+                if (workspaceUrisJson.Contains(fwd, StringComparison.OrdinalIgnoreCase)
+                    || workspaceUrisJson.Contains(encoded, StringComparison.OrdinalIgnoreCase))
+                {
+                    return proj;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static string NormalizeCandidateProjectPath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return string.Empty;
+        try
+        {
+            return Path.GetFullPath(path.Trim()).TrimEnd('\\', '/');
+        }
+        catch
+        {
+            return path.Trim().Replace('/', '\\').TrimEnd('\\');
+        }
+    }
+
+    private static HashSet<string> ReadProjectlessConversationIds(string summaryDbPath)
+    {
+        var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!File.Exists(summaryDbPath) || !IsUsableSqlite(summaryDbPath)) return ids;
+
+        ProjectService.TryQuerySqliteSnapshot(summaryDbPath, conn =>
+        {
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT conversation_id, project_id, workspace_uris FROM conversation_summaries;";
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                if (reader.IsDBNull(0)) continue;
+                var cid = reader.GetString(0);
+                var pId = reader.IsDBNull(1) ? null : reader.GetString(1);
+                var uris = reader.IsDBNull(2) ? null : reader.GetString(2);
+                if (ProjectService.IsProjectlessConversation(pId, uris))
+                {
+                    ids.Add(cid);
+                }
+            }
+            return true;
+        }, out _);
+
+        return ids;
+    }
+
+    private static DateTime GetEffectiveSqliteWriteTimeUtc(string dbPath)
+    {
+        var best = File.Exists(dbPath) ? File.GetLastWriteTimeUtc(dbPath) : DateTime.MinValue;
+        var wal = dbPath + "-wal";
+        if (File.Exists(wal))
+        {
+            var walTime = File.GetLastWriteTimeUtc(wal);
+            if (walTime > best) best = walTime;
+        }
+        return best;
+    }
+
+    private static long GetEffectiveSqliteLength(string dbPath)
+    {
+        long total = File.Exists(dbPath) ? new FileInfo(dbPath).Length : 0;
+        var wal = dbPath + "-wal";
+        if (File.Exists(wal)) total += new FileInfo(wal).Length;
+        return total;
+    }
+
+    private static bool SyncSqliteFile(string sourceDb, string destDb, bool preferNewer = true)
+    {
+        if (!File.Exists(sourceDb) || !IsUsableSqlite(sourceDb)) return false;
+
+        var destExists = File.Exists(destDb);
+        var destUsable = destExists && IsUsableSqlite(destDb);
+
+        if (destUsable && preferNewer)
+        {
+            var srcTime = GetEffectiveSqliteWriteTimeUtc(sourceDb);
+            var dstTime = GetEffectiveSqliteWriteTimeUtc(destDb);
+            if (srcTime < dstTime) return false;
+            if (srcTime == dstTime && GetEffectiveSqliteLength(sourceDb) <= GetEffectiveSqliteLength(destDb)) return false;
+        }
+
+        return ProjectService.CopySqliteSnapshot(sourceDb, destDb);
+    }
+
+    private static void SyncSqliteDirectory(string sourceDir, string destDir, bool preferNewer = true)
+    {
+        if (!Directory.Exists(sourceDir) || JunctionService.IsJunction(sourceDir)) return;
+        JunctionService.UnwrapJunction(destDir);
+        Directory.CreateDirectory(destDir);
+
+        foreach (var file in Directory.EnumerateFiles(sourceDir, "*.db"))
+        {
+            var dest = Path.Combine(destDir, Path.GetFileName(file));
+            SyncSqliteFile(file, dest, preferNewer);
+        }
+    }
+
+    private static bool SyncDirectory(string sourceDir, string destinationDir, bool preferNewer = true)
+    {
+        var dir = new DirectoryInfo(sourceDir);
+        if (!dir.Exists || (dir.Attributes & FileAttributes.ReparsePoint) != 0) return false;
+
+        JunctionService.UnwrapJunction(destinationDir);
+        Directory.CreateDirectory(destinationDir);
+
+        var anyCopied = false;
+        foreach (var file in dir.GetFiles())
+        {
+            var targetFilePath = Path.Combine(destinationDir, file.Name);
+            var destInfo = new FileInfo(targetFilePath);
+            if (destInfo.Exists && preferNewer)
+            {
+                if (file.LastWriteTimeUtc < destInfo.LastWriteTimeUtc) continue;
+                if (file.LastWriteTimeUtc == destInfo.LastWriteTimeUtc && file.Length <= destInfo.Length) continue;
+            }
+
+            try
+            {
+                file.CopyTo(targetFilePath, true);
+                anyCopied = true;
+            }
+            catch (Exception ex) { DiagLog.Swallowed("instance.sync-file", ex); }
+        }
+
+        foreach (var subDir in dir.GetDirectories())
+        {
+            if ((subDir.Attributes & FileAttributes.ReparsePoint) != 0) continue;
+            var newDestinationDir = Path.Combine(destinationDir, subDir.Name);
+            if (SyncDirectory(subDir.FullName, newDestinationDir, preferNewer))
+            {
+                anyCopied = true;
+            }
+        }
+
+        return anyCopied;
+    }
+
     private static void CopyDirectory(string sourceDir, string destinationDir)
     {
         var dir = new DirectoryInfo(sourceDir);
-        if (!dir.Exists) return;
+        if (!dir.Exists || (dir.Attributes & FileAttributes.ReparsePoint) != 0) return;
 
         Directory.CreateDirectory(destinationDir);
 
@@ -1855,6 +2301,7 @@ public class InstanceService
 
         foreach (var subDir in dir.GetDirectories())
         {
+            if ((subDir.Attributes & FileAttributes.ReparsePoint) != 0) continue;
             var newDestinationDir = Path.Combine(destinationDir, subDir.Name);
             CopyDirectory(subDir.FullName, newDestinationDir);
         }

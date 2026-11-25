@@ -120,7 +120,8 @@ public class ProxyTestResult
 public class ProxyService
 {
     private const string GeminiProbeEndpoint = "https://generativelanguage.googleapis.com/v1beta/models?key=probe";
-    private const string AntigravityProbeEndpoint = "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist";
+    private const string DailyAntigravityProbeEndpoint = AccountPoolService.DailyCloudCodeBaseUrl + AccountPoolService.LoadCodeAssistPath;
+    private const string ProdAntigravityProbeEndpoint = AccountPoolService.ProdCloudCodeBaseUrl + AccountPoolService.LoadCodeAssistPath;
 
     /// <summary>Probes egress IP, Gemini reachability, then Antigravity with a real account credential.</summary>
     public async Task<ProxyTestResult> TestConnectionAsync(
@@ -259,14 +260,16 @@ public class ProxyService
                 return result;
             }
 
-            var agUrl = customAntigravityUrl ?? AntigravityProbeEndpoint;
             ProxyTestResult? lastAgResult = null;
+            var probePayload = AccountPoolService.BuildLoadCodeAssistPayload();
+            var userAgent = AccountPoolService.DefaultUserAgent;
 
             // Try accounts not currently running first; fall through to the rest when a credential fails
             var orderedAccounts = accountList.OrderBy(a => a.IsRunning ? 1 : 0).ToList();
 
             foreach (var chosenAccount in orderedAccounts)
             {
+                var agUrl = customAntigravityUrl ?? (chosenAccount.UsesGcpTos ? ProdAntigravityProbeEndpoint : DailyAntigravityProbeEndpoint);
                 result.TestedAccountEmail = chosenAccount.Email;
                 result.TestedAccountAlias = AccountAlias(chosenAccount);
                 var accessToken = chosenAccount.AccessToken;
@@ -295,7 +298,7 @@ public class ProxyService
                     }
                     else
                     {
-                        var directToken = await RefreshAccessTokenDirectAsync(client, refreshToken);
+                        var directToken = await RefreshAccessTokenDirectAsync(client, chosenAccount, refreshToken);
                         if (!string.IsNullOrWhiteSpace(directToken)) accessToken = directToken;
                     }
                 }
@@ -311,12 +314,14 @@ public class ProxyService
                 var agSw = Stopwatch.StartNew();
                 try
                 {
+                    chosenAccount.AccessTokenLastUsedAt = DateTime.UtcNow;
                     using var agRequest = new HttpRequestMessage(HttpMethod.Post, agUrl)
                     {
-                        Content = new StringContent("{\"metadata\":{\"ideType\":\"ANTIGRAVITY\"}}", System.Text.Encoding.UTF8, "application/json")
+                        Content = new StringContent(probePayload, System.Text.Encoding.UTF8, "application/json")
                     };
                     agRequest.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
-                    agRequest.Headers.TryAddWithoutValidation("User-Agent", "antigravity/2.26.0");
+                    agRequest.Headers.UserAgent.Clear();
+                    agRequest.Headers.TryAddWithoutValidation("User-Agent", userAgent);
 
                     using var agResp = await client.SendAsync(agRequest);
                     agSw.Stop();
@@ -343,24 +348,27 @@ public class ProxyService
                         }
                         else
                         {
-                            refreshedToken = await RefreshAccessTokenDirectAsync(client, refreshToken);
+                            refreshedToken = await RefreshAccessTokenDirectAsync(client, chosenAccount, refreshToken);
                         }
 
                         if (!string.IsNullOrWhiteSpace(refreshedToken))
                         {
                             accessToken = refreshedToken;
+                            chosenAccount.AccessTokenLastUsedAt = DateTime.UtcNow;
                             agSw.Restart();
                             using var retryAgReq = new HttpRequestMessage(HttpMethod.Post, agUrl)
                             {
-                                Content = new StringContent("{\"metadata\":{\"ideType\":\"ANTIGRAVITY\"}}", System.Text.Encoding.UTF8, "application/json")
+                                Content = new StringContent(probePayload, System.Text.Encoding.UTF8, "application/json")
                             };
                             retryAgReq.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
-                            retryAgReq.Headers.TryAddWithoutValidation("User-Agent", "antigravity/2.26.0");
+                            retryAgReq.Headers.UserAgent.Clear();
+                            retryAgReq.Headers.TryAddWithoutValidation("User-Agent", userAgent);
                             using var retryResp = await client.SendAsync(retryAgReq);
                             agSw.Stop();
                             result.AntigravityLatencyMs = agSw.ElapsedMilliseconds;
 
                             var retryBody = await retryResp.Content.ReadAsStringAsync();
+                            accountPoolService?.TrySaveAccounts();
                             var evaluated = EvaluateAntigravityResponse(result, sw, retryResp, retryBody, result.TestedAccountAlias ?? chosenAccount.Email);
                             if (evaluated.AntigravityStatus == ConnectivityStatus.Success || evaluated.AntigravityMessage.Contains("地区受阻"))
                             {
@@ -371,6 +379,7 @@ public class ProxyService
                         }
                     }
 
+                    accountPoolService?.TrySaveAccounts();
                     var eval = EvaluateAntigravityResponse(result, sw, agResp, agBody, result.TestedAccountAlias ?? chosenAccount.Email);
                     if (eval.AntigravityStatus == ConnectivityStatus.Success || eval.AntigravityMessage.Contains("地区受阻"))
                     {
@@ -466,11 +475,15 @@ public class ProxyService
         return result;
     }
 
-    private static async Task<string?> RefreshAccessTokenDirectAsync(HttpClient client, string refreshToken)
+    private static async Task<string?> RefreshAccessTokenDirectAsync(HttpClient client, AccountProfile account, string refreshToken)
     {
         try
         {
-            var oauthClient = AccountPoolService.LoadOAuthClient();
+            var oauthClient = AccountPoolService.LoadOAuthClientForAccount(account);
+            if (string.IsNullOrEmpty(oauthClient.ClientId) || string.IsNullOrEmpty(oauthClient.ClientSecret))
+            {
+                return null;
+            }
             using var req = new HttpRequestMessage(HttpMethod.Post, AccountPoolService.OAuthTokenEndpoint)
             {
                 Content = new FormUrlEncodedContent(new Dictionary<string, string>

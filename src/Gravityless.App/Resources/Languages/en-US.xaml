@@ -427,6 +427,7 @@
     <sys:String x:Key="Accounts_RefreshAllStatus">Refreshing all tokens…</sys:String>
     <sys:String x:Key="Accounts_RefreshAllDoneTitle">Refreshed</sys:String>
     <sys:String x:Key="Accounts_RefreshAllDoneFormat">Done: {0}, failed: {1}.</sys:String>
+    <sys:String x:Key="Accounts_RefreshAllDonePartialFormat">Done: {0}, quota warning: {1}, failed: {2}.</sys:String>
     <sys:String x:Key="Dialogs_SelectWorkspaceTitle">Select workspace folder</sys:String>
     <sys:String x:Key="Dialogs_ImportDoneTitle">Imported</sys:String>
     <sys:String x:Key="Dialogs_ImportNoticeTitle">Import notice</sys:String>
@@ -557,6 +558,18 @@
     <sys:String x:Key="AccountDetails_RefreshFailedFormat">Refresh failed: {0}</sys:String>
     <sys:String x:Key="AccountDetails_TokenValid">Valid</sys:String>
     <sys:String x:Key="AccountDetails_TokenMissing">Missing refresh token</sys:String>
+    <sys:String x:Key="AccountDetails_AccessTokenLabel">Access Token</sys:String>
+    <sys:String x:Key="AccountDetails_RefreshTokenLabel">Refresh Token</sys:String>
+    <sys:String x:Key="AccountDetails_AccessTokenNotFetched">Not fetched</sys:String>
+    <sys:String x:Key="AccountDetails_TokenExpired">Expired</sys:String>
+    <sys:String x:Key="AccountDetails_TokenExpiringSoon">Expiring soon</sys:String>
+    <sys:String x:Key="AccountDetails_RefreshTokenRevoked">Revoked (invalid_grant)</sys:String>
+    <sys:String x:Key="AccountDetails_TokenLastUsedFormat">Last used: {0}</sys:String>
+    <sys:String x:Key="AccountDetails_TokenNeverUsed">Last used: Never</sys:String>
+    <sys:String x:Key="AccountDetails_TokenExpiredAtFormat">Expires: {0} (expired)</sys:String>
+    <sys:String x:Key="AccountDetails_TokenExpiryWithCountdownFormat">Expires: {0} ({1})</sys:String>
+    <sys:String x:Key="AccountDetails_RefreshTokenLongLived">Expires: Long-lived (no server expiry issued)</sys:String>
+    <sys:String x:Key="AccountDetails_RefreshTokenRevokedExpiry">Expires: Revoked (re-capture required)</sys:String>
     <sys:String x:Key="AccountDetails_BoundInstanceIdFormat">Instance ID: {0}</sys:String>
     <sys:String x:Key="AccountDetails_BoundInstanceFormat">Bound (ID: {0})</sys:String>
     <sys:String x:Key="AccountDetails_NotBound">Not bound</sys:String>

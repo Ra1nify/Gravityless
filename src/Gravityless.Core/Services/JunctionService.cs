@@ -169,30 +169,128 @@ public class JunctionService
         return Directory.Exists(junctionPath);
     }
 
+    /// <summary>
+    /// Removes a directory reparse point (NTFS junction) without touching its target.
+    /// Safe to run under Windows ProcessRedirectionTrustPolicy=EnforceRedirectionTrust; no-op on real directories.
+    /// </summary>
+    public static bool UnwrapJunction(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !IsJunction(path))
+            return false;
+
+        try
+        {
+            var di = new DirectoryInfo(path);
+            di.Delete();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Swallowed("junction.unwrap", ex);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Walks <paramref name="rootDir"/> without descending into reparse points and unlinks any
+    /// NTFS junctions found inside, leaving all junction target contents intact.
+    /// </summary>
+    public static void UnwrapAllJunctions(string rootDir)
+    {
+        if (string.IsNullOrWhiteSpace(rootDir))
+            return;
+
+        if (IsJunction(rootDir))
+        {
+            UnwrapJunction(rootDir);
+            return;
+        }
+
+        if (!Directory.Exists(rootDir))
+            return;
+
+        var stack = new Stack<string>();
+        stack.Push(rootDir);
+
+        while (stack.Count > 0)
+        {
+            var current = stack.Pop();
+            string[] subDirs;
+            try
+            {
+                subDirs = Directory.GetDirectories(current);
+            }
+            catch (Exception ex)
+            {
+                DiagLog.Swallowed("junction.unwrap-walk", ex);
+                continue;
+            }
+
+            foreach (var sub in subDirs)
+            {
+                if (IsJunction(sub))
+                {
+                    UnwrapJunction(sub);
+                }
+                else
+                {
+                    stack.Push(sub);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Unlinks any directory junctions inside <paramref name="rootDir"/> first so recursive
+    /// deletion neither follows links into shared storage nor fails under RedirectionTrust.
+    /// </summary>
+    public static void DeleteDirectorySafe(string rootDir)
+    {
+        if (string.IsNullOrWhiteSpace(rootDir))
+            return;
+
+        if (IsJunction(rootDir))
+        {
+            UnwrapJunction(rootDir);
+            return;
+        }
+
+        if (!Directory.Exists(rootDir))
+            return;
+
+        UnwrapAllJunctions(rootDir);
+        Directory.Delete(rootDir, true);
+    }
+
     /// <summary>Removes a junction entry without touching the link target.</summary>
     public static void RemoveJunction(string junctionPath)
     {
-        if (!Directory.Exists(junctionPath))
+        if (IsJunction(junctionPath))
+        {
+            UnwrapJunction(junctionPath);
             return;
-
-        var di = new DirectoryInfo(junctionPath);
-        // ReparsePoint marks the entry as a link; Delete removes only the link itself
-        if ((di.Attributes & FileAttributes.ReparsePoint) == FileAttributes.ReparsePoint)
-        {
-            di.Delete();
         }
-        else
+
+        if (Directory.Exists(junctionPath))
         {
-            Directory.Delete(junctionPath, true);
+            DeleteDirectorySafe(junctionPath);
         }
     }
 
     public static bool IsJunction(string path)
     {
-        if (!Directory.Exists(path))
+        if (string.IsNullOrWhiteSpace(path))
             return false;
 
-        var di = new DirectoryInfo(path);
-        return (di.Attributes & FileAttributes.ReparsePoint) == FileAttributes.ReparsePoint;
+        try
+        {
+            var attrs = File.GetAttributes(path);
+            return (attrs & FileAttributes.Directory) == FileAttributes.Directory
+                && (attrs & FileAttributes.ReparsePoint) == FileAttributes.ReparsePoint;
+        }
+        catch
+        {
+            return false;
+        }
     }
 }

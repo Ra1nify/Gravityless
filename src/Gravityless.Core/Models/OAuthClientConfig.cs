@@ -11,4 +11,6 @@ public class OAuthClientConfig
     public string ClientSecret { get; set; } = string.Empty;
 
     public DateTime ExtractedAt { get; set; } = DateTime.UtcNow;
+
+    public bool Verified { get; set; }
 }

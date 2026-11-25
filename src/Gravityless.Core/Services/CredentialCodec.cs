@@ -5,7 +5,8 @@ using Gravityless.Core.Models;
 namespace Gravityless.Core.Services;
 
 /// <summary>
-/// A credential as it appears in a Windows credential blob or a <c>oauth_creds.json</c> file.
+/// A credential as it appears in a Windows credential blob, <c>jetski-standalone-oauth-token</c>,
+/// or a legacy <c>oauth_creds.json</c> file.
 /// </summary>
 public sealed class CapturedCredential
 {
@@ -15,6 +16,9 @@ public sealed class CapturedCredential
     public string? IdToken { get; init; }
     public string? TokenType { get; init; }
     public DateTimeOffset? Expiry { get; init; }
+    public int? RefreshTokenExpiresInSeconds { get; init; }
+    public string? UserTier { get; init; }
+    public string? TierDisplayName { get; init; }
 
     /// <summary>True when the identity half is present; without it the credential is unusable.</summary>
     public bool HasIdentity => !string.IsNullOrWhiteSpace(RefreshToken) && !string.IsNullOrWhiteSpace(Email);
@@ -27,17 +31,18 @@ public sealed class CapturedCredential
 /// a token. Parsing used to happen on every quota probe and every refresh; the cost was small
 /// per call but the duplication meant each caller could disagree about field names.
 ///
-/// Two shapes are produced on demand:
-///   - a Windows credential blob, for the global slot Antigravity reads at startup;
-///   - <c>oauth_creds.json</c>, for an instance's own sandbox.
+/// Shapes handled:
+///   - Windows credential blob / <c>jetski-standalone-oauth-token</c> (nested <c>token</c> layout);
+///   - legacy <c>oauth_creds.json</c> (flat layout).
 /// </summary>
 public static class CredentialCodec
 {
     private static readonly JsonSerializerOptions Indented = new() { WriteIndented = true };
 
     /// <summary>
-    /// Reads a credential from either shape. Accepts both the nested <c>token</c> object used by
-    /// the Windows blob and the flat layout of <c>oauth_creds.json</c>.
+    /// Reads a credential from any supported shape. Accepts both the nested <c>token</c> object
+    /// used by the Windows blob / <c>jetski-standalone-oauth-token</c> and the flat layout of
+    /// <c>oauth_creds.json</c>.
     /// </summary>
     public static CapturedCredential? Parse(string? raw)
     {
@@ -48,7 +53,7 @@ public static class CredentialCodec
             var node = JsonNode.Parse(raw);
             if (node is not JsonObject root) return null;
 
-            // The blob nests tokens under "token"; the file keeps them at the top level.
+            // StoredToken nests tokens under "token"; legacy oauth_creds.json keeps them at top level.
             var tokens = root["token"] as JsonObject ?? root;
 
             var accessToken = tokens["access_token"]?.ToString();
@@ -58,7 +63,7 @@ public static class CredentialCodec
 
             DateTimeOffset? expiry = null;
 
-            // oauth_creds.json stores expiry as epoch milliseconds; the blob stores an ISO string.
+            // oauth_creds.json stores expiry as epoch milliseconds; StoredToken stores an ISO string.
             var expiryText = tokens["expiry"]?.ToString();
             if (!string.IsNullOrEmpty(expiryText) && DateTimeOffset.TryParse(expiryText, out var iso))
             {
@@ -69,8 +74,17 @@ public static class CredentialCodec
                 expiry = DateTimeOffset.FromUnixTimeMilliseconds(epochMs);
             }
 
+            int? rtExpiresIn = null;
+            if (int.TryParse(tokens["refresh_token_expires_in"]?.ToString(), out var rtSec) && rtSec > 0)
+            {
+                rtExpiresIn = rtSec;
+            }
+
             var email = root["id_token_email"]?.ToString();
             if (string.IsNullOrEmpty(email)) email = ReadEmailFromIdToken(idToken);
+
+            var userTier = root["user_tier"]?.ToString();
+            var tierDisplayName = root["tier_display_name"]?.ToString();
 
             return new CapturedCredential
             {
@@ -80,6 +94,9 @@ public static class CredentialCodec
                 IdToken = idToken,
                 TokenType = tokenType,
                 Expiry = expiry,
+                RefreshTokenExpiresInSeconds = rtExpiresIn,
+                UserTier = userTier,
+                TierDisplayName = tierDisplayName,
             };
         }
         catch

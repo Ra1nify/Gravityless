@@ -187,10 +187,10 @@ public class ProjectService
     public static bool IsProjectlessConversation(string? projectId, string? workspaceUris)
     {
         if (IsLooseChats(projectId ?? string.Empty)) return true;
-        if (string.IsNullOrWhiteSpace(projectId)) return true;
 
         var uris = workspaceUris?.Trim();
-        return string.IsNullOrEmpty(uris) || uris == "[]";
+        var hasNoUris = string.IsNullOrEmpty(uris) || uris == "[]";
+        return string.IsNullOrWhiteSpace(projectId) && hasNoUris;
     }
 
     public string GetProjectMemoryDir(string projectId) =>
@@ -281,22 +281,12 @@ public class ProjectService
 
         try
         {
-            var dbPath = Path.Combine(dir, "conversation_summaries.db");
-            if (File.Exists(dbPath))
+            var looseConvos = GetConversations(LooseChatsProjectId);
+            profile.ConversationCount = looseConvos.Count;
+            if (looseConvos.Count > 0)
             {
-                using var conn = new SqliteConnection($"Data Source={dbPath};Mode=ReadOnly");
-                conn.Open();
-                using var cmd = conn.CreateCommand();
-                cmd.CommandText = "SELECT COUNT(*), MAX(last_modified_time) FROM conversation_summaries";
-                using var reader = cmd.ExecuteReader();
-                if (reader.Read())
-                {
-                    profile.ConversationCount = reader.IsDBNull(0) ? 0 : reader.GetInt32(0);
-                    if (!reader.IsDBNull(1))
-                    {
-                        profile.LastActiveAt = reader.GetDateTime(1);
-                    }
-                }
+                var maxMod = looseConvos.Max(c => c.LastModifiedTime);
+                if (maxMod > DateTime.MinValue) profile.LastActiveAt = maxMod;
             }
         }
         catch { }
@@ -511,6 +501,91 @@ public class ProjectService
     }
 
     /// <summary>Consistent snapshot copy through the SQLite online backup API (never a raw File.Copy of a live DB).</summary>
+    /// <summary>
+    /// Reads a SQLite database safely even when another running process holds WAL locks on it.
+    /// When no <c>-wal</c> companion exists, queries in-place read-only; otherwise copies
+    /// <c>.db</c> + <c>-wal</c> + <c>-shm</c> using <see cref="FileShare.ReadWrite"/> to an isolated
+    /// temp directory so SQLite replays all committed WAL frames without disturbing the live DB.
+    /// </summary>
+    internal static bool TryQuerySqliteSnapshot<T>(string dbPath, Func<SqliteConnection, T> query, out T? result)
+    {
+        result = default;
+        if (string.IsNullOrWhiteSpace(dbPath) || !File.Exists(dbPath)) return false;
+
+        var hasWal = File.Exists(dbPath + "-wal") || File.Exists(dbPath + "-shm");
+        if (!hasWal)
+        {
+            try
+            {
+                using var conn = new SqliteConnection($"Data Source={dbPath};Mode=ReadOnly");
+                conn.Open();
+                result = query(conn);
+                return true;
+            }
+            catch
+            {
+                // Fall through to temp snapshot recovery attempt
+            }
+        }
+
+        string? tempDir = null;
+        try
+        {
+            if (!CopySqliteFamilyToTemp(dbPath, out tempDir, out var tempDbPath))
+            {
+                return false;
+            }
+
+            using var conn = new SqliteConnection($"Data Source={tempDbPath};Pooling=False");
+            conn.Open();
+            result = query(conn);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+        finally
+        {
+            if (tempDir != null && Directory.Exists(tempDir))
+            {
+                try { Directory.Delete(tempDir, true); } catch { }
+            }
+        }
+    }
+
+    private static bool CopySqliteFamilyToTemp(string sourceDb, out string tempDir, out string tempDbPath)
+    {
+        tempDir = Path.Combine(Path.GetTempPath(), $"gl_snap_{Guid.NewGuid():N}");
+        tempDbPath = Path.Combine(tempDir, "snapshot.db");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            CopyFileShared(sourceDb, tempDbPath);
+            foreach (var suffix in SqliteSiblingSuffixes)
+            {
+                var sidecar = sourceDb + suffix;
+                if (File.Exists(sidecar))
+                {
+                    CopyFileShared(sidecar, tempDbPath + suffix);
+                }
+            }
+            return true;
+        }
+        catch
+        {
+            try { if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true); } catch { }
+            return false;
+        }
+    }
+
+    private static void CopyFileShared(string sourcePath, string destPath)
+    {
+        using var src = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var dst = new FileStream(destPath, FileMode.Create, FileAccess.Write, FileShare.None);
+        src.CopyTo(dst);
+    }
+
     public static bool CopySqliteSnapshot(string sourceDb, string destDb)
     {
         try
@@ -544,12 +619,39 @@ public class ProjectService
                 try { File.Delete(destDb); } catch { }
             }
 
-            using var src = new SqliteConnection($"Data Source={sourceDb};Mode=ReadOnly");
-            using var dst = new SqliteConnection($"Data Source={destDb}");
-            src.Open();
-            dst.Open();
-            src.BackupDatabase(dst);
-            return true;
+            try
+            {
+                using var src = new SqliteConnection($"Data Source={sourceDb};Mode=ReadOnly");
+                using var dst = new SqliteConnection($"Data Source={destDb}");
+                src.Open();
+                dst.Open();
+                src.BackupDatabase(dst);
+                return true;
+            }
+            catch
+            {
+                // Live WAL or file lock fallback: copy db+wal+shm via FileShare.ReadWrite and back up from temp.
+                if (!CopySqliteFamilyToTemp(sourceDb, out var tempDir, out var tempDb))
+                {
+                    return false;
+                }
+                try
+                {
+                    using var tempSrc = new SqliteConnection($"Data Source={tempDb};Pooling=False");
+                    using var dst = new SqliteConnection($"Data Source={destDb};Pooling=False");
+                    tempSrc.Open();
+                    dst.Open();
+                    tempSrc.BackupDatabase(dst);
+                    return true;
+                }
+                finally
+                {
+                    if (Directory.Exists(tempDir))
+                    {
+                        try { Directory.Delete(tempDir, true); } catch { }
+                    }
+                }
+            }
         }
         catch
         {
@@ -909,22 +1011,16 @@ public class ProjectService
 
     public void RefreshProjectMemoryStats(ProjectProfile proj)
     {
-        var dbPath = GetProjectSummaryDbPath(proj.Id);
-        if (!File.Exists(dbPath)) return;
-
         try
         {
-            using var conn = new SqliteConnection($"Data Source={dbPath};Mode=ReadOnly");
-            conn.Open();
-            using var cmd = conn.CreateCommand();
-            cmd.CommandText = "SELECT COUNT(*), MAX(last_modified_time) FROM conversation_summaries";
-            using var reader = cmd.ExecuteReader();
-            if (reader.Read())
+            var conversations = GetConversations(proj.Id);
+            proj.ConversationCount = conversations.Count;
+            if (conversations.Count > 0)
             {
-                proj.ConversationCount = reader.IsDBNull(0) ? 0 : reader.GetInt32(0);
-                if (!reader.IsDBNull(1))
+                var maxMod = conversations.Max(c => c.LastModifiedTime);
+                if (maxMod > DateTime.MinValue)
                 {
-                    proj.LastActiveAt = reader.GetDateTime(1);
+                    proj.LastActiveAt = maxMod;
                 }
             }
         }
@@ -937,10 +1033,10 @@ public class ProjectService
         if (full.Length >= 2 && char.IsLetter(full[0]) && full[1] == ':')
         {
             var drive = char.ToLowerInvariant(full[0]);
-            var rest = full.Substring(2);
+            var rest = full.Substring(2).Replace(" ", "%20");
             return $"file:///{drive}%3A{rest}";
         }
-        return $"file:///{full}";
+        return $"file:///{full.Replace(" ", "%20")}";
     }
 
     public static string? DetectGeminiDir(string inputPath)
@@ -1378,9 +1474,9 @@ public class ProjectService
             }
 
             var brainDir = GetConversationBrainDir(projectId, conversationId);
-            if (Directory.Exists(brainDir))
+            if (Directory.Exists(brainDir) || JunctionService.IsJunction(brainDir))
             {
-                try { Directory.Delete(brainDir, true); } catch { }
+                try { JunctionService.DeleteDirectorySafe(brainDir); } catch { }
             }
 
             var convoFile = Path.Combine(GetProjectConversationsDir(projectId), $"{conversationId}.db");
@@ -1389,6 +1485,9 @@ public class ProjectService
                 try { File.Delete(convoFile); } catch { }
                 DeleteSqliteSiblings(convoFile);
             }
+
+            // Remove stopped/unlocked instance copies as well so GetConversations / next harvest won't resurrect it.
+            DeleteConversationFromStoppedInstances(conversationId);
 
             var proj = _projects.FirstOrDefault(p => p.Id == projectId);
             if (proj != null)
@@ -1406,6 +1505,47 @@ public class ProjectService
         }
     }
 
+    private void DeleteConversationFromStoppedInstances(string conversationId)
+    {
+        try
+        {
+            var instancesDir = Path.Combine(_baseDir, "data", "instances");
+            if (!Directory.Exists(instancesDir)) return;
+
+            foreach (var instDir in Directory.GetDirectories(instancesDir))
+            {
+                var instAnti = Path.Combine(instDir, ".gemini", "antigravity");
+                var instDb = Path.Combine(instAnti, "conversation_summaries.db");
+                if (File.Exists(instDb) && IsUsableSqlite(instDb))
+                {
+                    try
+                    {
+                        using var conn = new SqliteConnection($"Data Source={instDb};Default Timeout=1;Pooling=False");
+                        conn.Open();
+                        using var cmd = conn.CreateCommand();
+                        cmd.CommandText = "DELETE FROM conversation_summaries WHERE conversation_id = @id";
+                        cmd.Parameters.AddWithValue("@id", conversationId);
+                        cmd.ExecuteNonQuery();
+                    }
+                    catch { continue; }
+                }
+
+                var instBrain = Path.Combine(instAnti, "brain", conversationId);
+                if (Directory.Exists(instBrain) || JunctionService.IsJunction(instBrain))
+                {
+                    try { JunctionService.DeleteDirectorySafe(instBrain); } catch { }
+                }
+
+                var instConvo = Path.Combine(instAnti, "conversations", $"{conversationId}.db");
+                if (File.Exists(instConvo))
+                {
+                    try { File.Delete(instConvo); DeleteSqliteSiblings(instConvo); } catch { }
+                }
+            }
+        }
+        catch { }
+    }
+
     public bool ForkConversation(
         string projectId, 
         string sourceConversationId, 
@@ -1417,7 +1557,7 @@ public class ProjectService
         newConversationId = Guid.NewGuid().ToString("D");
         error = null;
 
-        var srcBrainDir = GetConversationBrainDir(projectId, sourceConversationId);
+        var srcBrainDir = ResolveConversationBrainDir(projectId, sourceConversationId);
         if (!Directory.Exists(srcBrainDir))
         {
             error = "未找到源会话的脑库资产目录。";
@@ -1435,65 +1575,48 @@ public class ProjectService
         int lastUserInputStepIndex = 0;
         string lastPreview = "";
 
-        // Copy transcript.jsonl up to upToStepIndex.
-        var srcTranscript = Path.Combine(srcLogsDir, "transcript.jsonl");
-        if (File.Exists(srcTranscript))
+        // Aggregate and copy compact transcript lines (chunks + main) up to upToStepIndex.
+        var compactLines = ReadFilteredTranscriptJsonLines(
+            srcLogsDir,
+            chunkSubDir: Path.Combine("chunks", "transcript"),
+            mainFileName: "transcript.jsonl",
+            upToStepIndex);
+        if (compactLines.Count > 0)
         {
             var destTranscript = Path.Combine(destLogsDir, "transcript.jsonl");
-            using var writer = new StreamWriter(destTranscript, false, System.Text.Encoding.UTF8);
-            foreach (var line in File.ReadLines(srcTranscript))
+            using var writer = new StreamWriter(destTranscript, false, Encoding.UTF8);
+            foreach (var (_, line, node) in compactLines)
             {
-                if (string.IsNullOrWhiteSpace(line)) continue;
-                try
+                writer.WriteLine(line);
+                filteredCount++;
+                var step = node["step_index"]?.GetValue<int>() ?? 0;
+                var type = node["type"]?.ToString();
+                var src = node["source"]?.ToString();
+                if (type == "USER_INPUT" || src == "USER_EXPLICIT")
                 {
-                    var node = JsonNode.Parse(line);
-                    if (node != null)
-                    {
-                        int step = node["step_index"]?.GetValue<int>() ?? 0;
-                        if (step <= upToStepIndex)
-                        {
-                            writer.WriteLine(line);
-                            filteredCount++;
-                            var type = node["type"]?.ToString();
-                            var src = node["source"]?.ToString();
-                            if (type == "USER_INPUT" || src == "USER_EXPLICIT")
-                            {
-                                lastUserInputStepIndex = step;
-                            }
-                            var content = node["content"]?.ToString();
-                            if (!string.IsNullOrWhiteSpace(content))
-                            {
-                                lastPreview = content.Length > 120 ? content[..120] + "..." : content;
-                            }
-                        }
-                    }
+                    lastUserInputStepIndex = step;
                 }
-                catch { }
+                var content = node["content"]?.ToString();
+                if (!string.IsNullOrWhiteSpace(content))
+                {
+                    lastPreview = content.Length > 120 ? content[..120] + "..." : content;
+                }
             }
         }
 
-        // Copy transcript_full.jsonl up to upToStepIndex.
-        var srcTranscriptFull = Path.Combine(srcLogsDir, "transcript_full.jsonl");
-        if (File.Exists(srcTranscriptFull))
+        // Aggregate and copy full transcript lines (chunks + main) up to upToStepIndex.
+        var fullLines = ReadFilteredTranscriptJsonLines(
+            srcLogsDir,
+            chunkSubDir: Path.Combine("chunks", "transcript_full"),
+            mainFileName: "transcript_full.jsonl",
+            upToStepIndex);
+        if (fullLines.Count > 0)
         {
             var destTranscriptFull = Path.Combine(destLogsDir, "transcript_full.jsonl");
-            using var writerFull = new StreamWriter(destTranscriptFull, false, System.Text.Encoding.UTF8);
-            foreach (var line in File.ReadLines(srcTranscriptFull))
+            using var writerFull = new StreamWriter(destTranscriptFull, false, Encoding.UTF8);
+            foreach (var (_, line, _) in fullLines)
             {
-                if (string.IsNullOrWhiteSpace(line)) continue;
-                try
-                {
-                    var node = JsonNode.Parse(line);
-                    if (node != null)
-                    {
-                        int step = node["step_index"]?.GetValue<int>() ?? 0;
-                        if (step <= upToStepIndex)
-                        {
-                            writerFull.WriteLine(line);
-                        }
-                    }
-                }
-                catch { }
+                writerFull.WriteLine(line);
             }
         }
 
@@ -1536,9 +1659,10 @@ public class ProjectService
                 string? status = "DONE";
                 string? source = "USER";
                 string? projIdVal = projectId;
-                string? agentName = null;
+                string? agentName = string.Empty;
                 int nestingDepth = 0;
-                string? appDataDir = null;
+                string? appDataDir = string.Empty;
+                var foundSourceMeta = false;
 
                 using (var selectCmd = conn.CreateCommand())
                 {
@@ -1548,40 +1672,85 @@ public class ProjectService
                     using var reader = selectCmd.ExecuteReader();
                     if (reader.Read())
                     {
+                        foundSourceMeta = true;
                         workspaceUris = reader.IsDBNull(0) ? null : reader.GetString(0);
-                        status = reader.IsDBNull(1) ? null : reader.GetString(1);
-                        source = reader.IsDBNull(2) ? null : reader.GetString(2);
-                        projIdVal = reader.IsDBNull(3) ? projectId : reader.GetString(3);
-                        agentName = reader.IsDBNull(4) ? null : reader.GetString(4);
+                        status = reader.IsDBNull(1) ? "DONE" : reader.GetString(1);
+                        source = reader.IsDBNull(2) ? "USER" : reader.GetString(2);
+                        projIdVal = reader.IsDBNull(3) || string.IsNullOrWhiteSpace(reader.GetString(3)) ? projectId : reader.GetString(3);
+                        agentName = reader.IsDBNull(4) ? string.Empty : reader.GetString(4);
                         nestingDepth = reader.IsDBNull(5) ? 0 : reader.GetInt32(5);
-                        appDataDir = reader.IsDBNull(6) ? null : reader.GetString(6);
+                        appDataDir = reader.IsDBNull(6) ? string.Empty : reader.GetString(6);
                     }
                 }
 
+                // Live/unharvested source chats sit inside an instance sandbox summary DB rather than proj memory yet.
+                if (!foundSourceMeta)
+                {
+                    var instancesDir = Path.Combine(_baseDir, "data", "instances");
+                    if (Directory.Exists(instancesDir))
+                    {
+                        foreach (var instDir in Directory.GetDirectories(instancesDir))
+                        {
+                            if (foundSourceMeta || JunctionService.IsJunction(instDir)) continue;
+                            var instDb = Path.Combine(instDir, ".gemini", "antigravity", "conversation_summaries.db");
+                            if (!File.Exists(instDb)) continue;
+                            TryQuerySqliteSnapshot(instDb, instConn =>
+                            {
+                                using var cmd = instConn.CreateCommand();
+                                cmd.CommandText = "SELECT workspace_uris, status, source, project_id, agent_name, nesting_depth, app_data_dir FROM conversation_summaries WHERE conversation_id = @srcId LIMIT 1";
+                                cmd.Parameters.AddWithValue("@srcId", sourceConversationId);
+                                using var r = cmd.ExecuteReader();
+                                if (r.Read())
+                                {
+                                    foundSourceMeta = true;
+                                    workspaceUris = r.IsDBNull(0) ? null : r.GetString(0);
+                                    status = r.IsDBNull(1) ? "DONE" : r.GetString(1);
+                                    source = r.IsDBNull(2) ? "USER" : r.GetString(2);
+                                    projIdVal = r.IsDBNull(3) || string.IsNullOrWhiteSpace(r.GetString(3)) ? projectId : r.GetString(3);
+                                    agentName = r.IsDBNull(4) ? string.Empty : r.GetString(4);
+                                    nestingDepth = r.IsDBNull(5) ? 0 : r.GetInt32(5);
+                                    appDataDir = r.IsDBNull(6) ? string.Empty : r.GetString(6);
+                                }
+                                return true;
+                            }, out _);
+                        }
+                    }
+                }
+
+                if (string.IsNullOrWhiteSpace(workspaceUris))
+                {
+                    var targetProj = _projects.FirstOrDefault(p => p.Id == projectId);
+                    workspaceUris = targetProj != null && !string.IsNullOrWhiteSpace(targetProj.Path)
+                        ? JsonSerializer.Serialize(new[] { ToWorkspaceUri(targetProj.Path) })
+                        : "[]";
+                }
+
+                var nowUtc = DateTime.UtcNow;
                 var inserted = 0;
                 using (var insertCmd = conn.CreateCommand())
                 {
                     insertCmd.Transaction = tx;
                     insertCmd.CommandText = @"
                         INSERT INTO conversation_summaries 
-                        (conversation_id, title, preview, step_count, last_modified_time, workspace_uris, status, source, project_id, agent_name, parent_conversation_id, nesting_depth, last_user_input_step_index, app_data_dir)
+                        (conversation_id, title, preview, step_count, last_modified_time, workspace_uris, status, source, project_id, agent_name, parent_conversation_id, nesting_depth, last_user_input_time, last_user_input_step_index, app_data_dir)
                         VALUES 
-                        (@id, @title, @preview, @steps, @modTime, @uris, @status, @source, @projId, @agent, @parentId, @depth, @lastUserStep, @appDataDir)";
+                        (@id, @title, @preview, @steps, @modTime, @uris, @status, @source, @projId, @agent, @parentId, @depth, @lastUserTime, @lastUserStep, @appDataDir)";
 
                     insertCmd.Parameters.AddWithValue("@id", newConversationId);
                     insertCmd.Parameters.AddWithValue("@title", newTitle);
                     insertCmd.Parameters.AddWithValue("@preview", lastPreview);
                     insertCmd.Parameters.AddWithValue("@steps", filteredCount);
-                    insertCmd.Parameters.AddWithValue("@modTime", DateTime.UtcNow);
-                    insertCmd.Parameters.AddWithValue("@uris", (object?)workspaceUris ?? DBNull.Value);
-                    insertCmd.Parameters.AddWithValue("@status", (object?)status ?? DBNull.Value);
-                    insertCmd.Parameters.AddWithValue("@source", (object?)source ?? DBNull.Value);
-                    insertCmd.Parameters.AddWithValue("@projId", (object?)projIdVal ?? DBNull.Value);
-                    insertCmd.Parameters.AddWithValue("@agent", (object?)agentName ?? DBNull.Value);
+                    insertCmd.Parameters.AddWithValue("@modTime", nowUtc);
+                    insertCmd.Parameters.AddWithValue("@uris", workspaceUris);
+                    insertCmd.Parameters.AddWithValue("@status", status ?? "DONE");
+                    insertCmd.Parameters.AddWithValue("@source", source ?? "USER");
+                    insertCmd.Parameters.AddWithValue("@projId", projIdVal ?? projectId);
+                    insertCmd.Parameters.AddWithValue("@agent", agentName ?? string.Empty);
                     insertCmd.Parameters.AddWithValue("@parentId", sourceConversationId);
                     insertCmd.Parameters.AddWithValue("@depth", nestingDepth);
+                    insertCmd.Parameters.AddWithValue("@lastUserTime", nowUtc);
                     insertCmd.Parameters.AddWithValue("@lastUserStep", lastUserInputStepIndex);
-                    insertCmd.Parameters.AddWithValue("@appDataDir", (object?)appDataDir ?? DBNull.Value);
+                    insertCmd.Parameters.AddWithValue("@appDataDir", appDataDir ?? string.Empty);
                     inserted = insertCmd.ExecuteNonQuery();
                 }
 
@@ -1624,7 +1793,7 @@ public class ProjectService
             }
         }
 
-        var srcConvoFile = Path.Combine(GetProjectConversationsDir(projectId), $"{sourceConversationId}.db");
+        var srcConvoFile = ResolveConversationConvoDbPath(projectId, sourceConversationId);
         var destConvoFile = Path.Combine(GetProjectConversationsDir(projectId), $"{newConversationId}.db");
         if (File.Exists(srcConvoFile))
         {
@@ -1643,92 +1812,640 @@ public class ProjectService
 
     public List<ConversationSummaryItem> GetConversations(string projectId)
     {
+        var byId = new Dictionary<string, ConversationSummaryItem>(StringComparer.OrdinalIgnoreCase);
         var dbPath = GetProjectSummaryDbPath(projectId);
-        if (!File.Exists(dbPath)) return [];
+        var isLoose = IsLooseChats(projectId);
+        var proj = isLoose ? null : _projects.FirstOrDefault(p => p.Id == projectId);
 
-        if (!IsUsableSqlite(dbPath))
+        if (!isLoose)
         {
-            InitSummaryDb(projectId);
+            var needsInit = !File.Exists(dbPath) || !IsUsableSqlite(dbPath);
+            if (needsInit)
+            {
+                try
+                {
+                    if (File.Exists(dbPath))
+                    {
+                        DeleteSqliteSiblings(dbPath);
+                        File.Delete(dbPath);
+                    }
+                    InitSummaryDb(projectId);
+                }
+                catch (Exception ex)
+                {
+                    DiagLog.Swallowed("project.recover-summary-db", ex);
+                }
+            }
+
+            if (File.Exists(dbPath))
+            {
+                if (!TryReadSummaryItems(dbPath, byId))
+                {
+                    // Corrupted B-tree pages (e.g. SQLite Error 26): rebuild cleanly and reindex from brain.
+                    try
+                    {
+                        SqliteConnection.ClearAllPools();
+                        DeleteSqliteSiblings(dbPath);
+                        if (File.Exists(dbPath)) File.Delete(dbPath);
+                        InitSummaryDb(projectId);
+                        byId.Clear();
+                    }
+                    catch (Exception ex)
+                    {
+                        DiagLog.Swallowed("project.reinit-corrupt-summary", ex);
+                    }
+                }
+            }
+
+            // Recover any brain/{cid} conversations missing from conversation_summaries (e.g. after Error 26 wipe).
+            var brainDir = GetProjectBrainDir(projectId);
+            if (Directory.Exists(brainDir) && HasUnindexedBrainConversations(brainDir, byId))
+            {
+                try
+                {
+                    var repair = new ProjectMemoryRepairService(this);
+                    if (repair.ReindexMissingForProject(projectId) > 0 && File.Exists(dbPath))
+                    {
+                        TryReadSummaryItems(dbPath, byId);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    DiagLog.Swallowed("project.auto-reindex", ex);
+                }
+            }
+        }
+        else if (File.Exists(dbPath))
+        {
+            TryReadSummaryItems(dbPath, byId);
         }
 
-        var result = new List<ConversationSummaryItem>();
+        // Surface conversations currently live in any instance sandbox (even before process exit / sync).
+        MergeLiveInstanceConversations(projectId, proj, isLoose, byId);
+
+        return byId.Values
+            .OrderByDescending(c => c.LastModifiedTime)
+            .ToList();
+    }
+
+    private static bool HasUnindexedBrainConversations(string brainDir, IReadOnlyDictionary<string, ConversationSummaryItem> indexed)
+    {
         try
         {
-            using var conn = new SqliteConnection($"Data Source={dbPath};Mode=ReadOnly");
-            conn.Open();
+            foreach (var dir in Directory.EnumerateDirectories(brainDir))
+            {
+                if (JunctionService.IsJunction(dir)) continue;
+                var cid = Path.GetFileName(dir);
+                if (string.IsNullOrEmpty(cid) || cid.Equals("tempmediaStorage", StringComparison.OrdinalIgnoreCase)) continue;
+                if (!indexed.ContainsKey(cid)) return true;
+            }
+        }
+        catch { }
+        return false;
+    }
+
+    private static bool TryReadSummaryItems(string dbPath, Dictionary<string, ConversationSummaryItem> byId)
+    {
+        return TryQuerySqliteSnapshot(dbPath, conn =>
+        {
             using var cmd = conn.CreateCommand();
-            cmd.CommandText = "SELECT conversation_id, title, preview, step_count, last_modified_time FROM conversation_summaries ORDER BY last_modified_time DESC";
+            cmd.CommandText = "SELECT conversation_id, title, preview, step_count, last_modified_time FROM conversation_summaries";
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
             {
-                result.Add(new ConversationSummaryItem
+                var cid = reader.IsDBNull(0) ? string.Empty : reader.GetString(0);
+                if (string.IsNullOrEmpty(cid)) continue;
+
+                var item = new ConversationSummaryItem
                 {
-                    ConversationId = reader.IsDBNull(0) ? string.Empty : reader.GetString(0),
+                    ConversationId = cid,
                     Title = reader.IsDBNull(1) ? string.Empty : reader.GetString(1),
                     Preview = reader.IsDBNull(2) ? string.Empty : reader.GetString(2),
                     StepCount = reader.IsDBNull(3) ? 0 : reader.GetInt32(3),
-                    LastModifiedTime = reader.IsDBNull(4) ? DateTime.MinValue : reader.GetDateTime(4)
-                });
+                    LastModifiedTime = reader.IsDBNull(4) ? DateTime.MinValue : SafeReadDateTime(reader, 4)
+                };
+
+                UpsertNewerSummary(byId, item);
+            }
+            return true;
+        }, out _);
+    }
+
+    private void MergeLiveInstanceConversations(
+        string projectId,
+        ProjectProfile? proj,
+        bool isLoose,
+        Dictionary<string, ConversationSummaryItem> byId)
+    {
+        try
+        {
+            var instancesDir = Path.Combine(_baseDir, "data", "instances");
+            if (!Directory.Exists(instancesDir)) return;
+
+            foreach (var instDir in Directory.GetDirectories(instancesDir))
+            {
+                if (JunctionService.IsJunction(instDir)) continue;
+                var instAnti = Path.Combine(instDir, ".gemini", "antigravity");
+                var instDb = Path.Combine(instAnti, "conversation_summaries.db");
+                if (!File.Exists(instDb)) continue;
+
+                TryQuerySqliteSnapshot(instDb, conn =>
+                {
+                    using var cmd = conn.CreateCommand();
+                    cmd.CommandText = "SELECT conversation_id, title, preview, step_count, last_modified_time, workspace_uris, project_id FROM conversation_summaries";
+                    using var reader = cmd.ExecuteReader();
+                    while (reader.Read())
+                    {
+                        var cid = reader.IsDBNull(0) ? string.Empty : reader.GetString(0);
+                        if (string.IsNullOrEmpty(cid)) continue;
+
+                        var urisJson = reader.IsDBNull(5) ? null : reader.GetString(5);
+                        var pId = reader.IsDBNull(6) ? null : reader.GetString(6);
+
+                        bool belongs;
+                        if (isLoose)
+                        {
+                            belongs = IsProjectlessConversation(pId, urisJson);
+                        }
+                        else
+                        {
+                            if (IsProjectlessConversation(pId, urisJson)) continue;
+                            belongs = string.Equals(pId, projectId, StringComparison.OrdinalIgnoreCase)
+                                || (proj != null && !string.IsNullOrEmpty(proj.Path) && MatchesWorkspaceUris(proj.Path, urisJson));
+                        }
+                        if (!belongs) continue;
+
+                        var hasLocalArtifacts = Directory.Exists(Path.Combine(instAnti, "brain", cid))
+                            || File.Exists(Path.Combine(instAnti, "conversations", $"{cid}.db"));
+                        if (!hasLocalArtifacts) continue;
+
+                        var item = new ConversationSummaryItem
+                        {
+                            ConversationId = cid,
+                            Title = reader.IsDBNull(1) ? string.Empty : reader.GetString(1),
+                            Preview = reader.IsDBNull(2) ? string.Empty : reader.GetString(2),
+                            StepCount = reader.IsDBNull(3) ? 0 : reader.GetInt32(3),
+                            LastModifiedTime = reader.IsDBNull(4) ? DateTime.MinValue : SafeReadDateTime(reader, 4)
+                        };
+                        UpsertNewerSummary(byId, item);
+                    }
+                    return true;
+                }, out _);
+            }
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Swallowed("project.merge-live-instances", ex);
+        }
+    }
+
+    private static void UpsertNewerSummary(Dictionary<string, ConversationSummaryItem> byId, ConversationSummaryItem candidate)
+    {
+        if (!byId.TryGetValue(candidate.ConversationId, out var existing))
+        {
+            byId[candidate.ConversationId] = candidate;
+            return;
+        }
+
+        if (candidate.LastModifiedTime > existing.LastModifiedTime
+            || (candidate.LastModifiedTime == existing.LastModifiedTime && candidate.StepCount > existing.StepCount))
+        {
+            byId[candidate.ConversationId] = candidate;
+        }
+    }
+
+    private static DateTime SafeReadDateTime(SqliteDataReader reader, int index)
+    {
+        try { return reader.GetDateTime(index); }
+        catch
+        {
+            try
+            {
+                var raw = reader.GetString(index);
+                if (DateTime.TryParse(raw, out var dt)) return dt;
+            }
+            catch { }
+            return DateTime.MinValue;
+        }
+    }
+
+    internal static bool MatchesWorkspaceUris(string projectPath, string? workspaceUrisJson)
+    {
+        if (string.IsNullOrWhiteSpace(projectPath) || string.IsNullOrWhiteSpace(workspaceUrisJson)) return false;
+
+        string normProj;
+        try { normProj = Path.GetFullPath(projectPath.Trim()).TrimEnd('\\', '/'); }
+        catch { normProj = projectPath.Trim().Replace('/', '\\').TrimEnd('\\'); }
+
+        try
+        {
+            if (JsonNode.Parse(workspaceUrisJson) is JsonArray arr)
+            {
+                foreach (var entry in arr)
+                {
+                    var normUri = NormalizeWorkspaceUri(entry?.ToString())?.TrimEnd('\\', '/');
+                    if (!string.IsNullOrEmpty(normUri) && string.Equals(normUri, normProj, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+                }
+                return false;
             }
         }
         catch { }
 
-        return result;
+        var fwd = normProj.Replace('\\', '/');
+        var encoded = fwd.Replace(":", "%3A");
+        return workspaceUrisJson.Contains(fwd, StringComparison.OrdinalIgnoreCase)
+            || workspaceUrisJson.Contains(encoded, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Resolves the freshest brain directory for <paramref name="conversationId"/> across both
+    /// canonical project memory and any live instance sandboxes.
+    /// </summary>
+    public string ResolveConversationBrainDir(string projectId, string conversationId)
+    {
+        var canonical = GetConversationBrainDir(projectId, conversationId);
+        var bestDir = canonical;
+        var bestScore = ScoreBrainDir(canonical);
+
+        try
+        {
+            var instancesDir = Path.Combine(_baseDir, "data", "instances");
+            if (Directory.Exists(instancesDir))
+            {
+                foreach (var instDir in Directory.GetDirectories(instancesDir))
+                {
+                    if (JunctionService.IsJunction(instDir)) continue;
+                    var candidate = Path.Combine(instDir, ".gemini", "antigravity", "brain", conversationId);
+                    if (!Directory.Exists(candidate) || JunctionService.IsJunction(candidate)) continue;
+
+                    var score = ScoreBrainDir(candidate);
+                    if (score.hasLogs && (!bestScore.hasLogs
+                        || score.latestWriteUtc > bestScore.latestWriteUtc
+                        || (score.latestWriteUtc == bestScore.latestWriteUtc && score.totalBytes > bestScore.totalBytes)))
+                    {
+                        bestScore = score;
+                        bestDir = candidate;
+                    }
+                }
+            }
+        }
+        catch { }
+
+        return bestDir;
+    }
+
+    private string ResolveConversationConvoDbPath(string projectId, string conversationId)
+    {
+        var canonical = Path.Combine(GetProjectConversationsDir(projectId), $"{conversationId}.db");
+        var bestPath = canonical;
+        var bestTime = File.Exists(canonical) ? File.GetLastWriteTimeUtc(canonical) : DateTime.MinValue;
+
+        try
+        {
+            var instancesDir = Path.Combine(_baseDir, "data", "instances");
+            if (Directory.Exists(instancesDir))
+            {
+                foreach (var instDir in Directory.GetDirectories(instancesDir))
+                {
+                    if (JunctionService.IsJunction(instDir)) continue;
+                    var candidate = Path.Combine(instDir, ".gemini", "antigravity", "conversations", $"{conversationId}.db");
+                    if (!File.Exists(candidate)) continue;
+
+                    var t = File.GetLastWriteTimeUtc(candidate);
+                    var wal = candidate + "-wal";
+                    if (File.Exists(wal))
+                    {
+                        var wt = File.GetLastWriteTimeUtc(wal);
+                        if (wt > t) t = wt;
+                    }
+                    if (!File.Exists(bestPath) || t > bestTime)
+                    {
+                        bestTime = t;
+                        bestPath = candidate;
+                    }
+                }
+            }
+        }
+        catch { }
+
+        return bestPath;
+    }
+
+    private static (bool hasLogs, DateTime latestWriteUtc, long totalBytes) ScoreBrainDir(string brainDir)
+    {
+        if (string.IsNullOrEmpty(brainDir) || !Directory.Exists(brainDir) || JunctionService.IsJunction(brainDir))
+            return (false, DateTime.MinValue, 0);
+
+        var logsDir = Path.Combine(brainDir, ".system_generated", "logs");
+        if (!Directory.Exists(logsDir))
+            return (false, Directory.GetLastWriteTimeUtc(brainDir), 0);
+
+        var hasLogs = false;
+        var latest = DateTime.MinValue;
+        long bytes = 0;
+
+        foreach (var file in EnumerateTranscriptLogFiles(logsDir, includeChunks: true))
+        {
+            hasLogs = true;
+            try
+            {
+                var info = new FileInfo(file);
+                if (info.LastWriteTimeUtc > latest) latest = info.LastWriteTimeUtc;
+                bytes += info.Length;
+            }
+            catch { }
+        }
+
+        return (hasLogs, latest, bytes);
+    }
+
+    private static IEnumerable<string> EnumerateTranscriptLogFiles(string logsDir, bool includeChunks)
+    {
+        foreach (var name in new[] { "transcript.jsonl", "transcript_full.jsonl" })
+        {
+            var p = Path.Combine(logsDir, name);
+            if (File.Exists(p)) yield return p;
+        }
+
+        if (!includeChunks) yield break;
+
+        foreach (var chunkSub in new[] { Path.Combine(logsDir, "chunks", "transcript"), Path.Combine(logsDir, "chunks", "transcript_full") })
+        {
+            if (!Directory.Exists(chunkSub)) continue;
+            IEnumerable<string> chunkFiles;
+            try
+            {
+                chunkFiles = Directory.EnumerateFiles(chunkSub, "*.jsonl")
+                    .OrderBy(f => ExtractLeadingChunkOrder(Path.GetFileNameWithoutExtension(f)))
+                    .ThenBy(f => f, StringComparer.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                continue;
+            }
+
+            foreach (var cf in chunkFiles) yield return cf;
+        }
+    }
+
+    private static List<(int StepIndex, string Line, JsonNode Node)> ReadFilteredTranscriptJsonLines(
+        string srcLogsDir,
+        string chunkSubDir,
+        string mainFileName,
+        int upToStepIndex)
+    {
+        var files = new List<string>();
+        var chunkDir = Path.Combine(srcLogsDir, chunkSubDir);
+        if (Directory.Exists(chunkDir))
+        {
+            try
+            {
+                files.AddRange(Directory.EnumerateFiles(chunkDir, "*.jsonl")
+                    .OrderBy(f => ExtractLeadingChunkOrder(Path.GetFileNameWithoutExtension(f)))
+                    .ThenBy(f => f, StringComparer.OrdinalIgnoreCase));
+            }
+            catch { }
+        }
+
+        var mainFile = Path.Combine(srcLogsDir, mainFileName);
+        if (File.Exists(mainFile)) files.Add(mainFile);
+
+        var byStep = new SortedDictionary<int, (int StepIndex, string Line, JsonNode Node)>();
+        foreach (var file in files)
+        {
+            try
+            {
+                using var fs = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                using var reader = new StreamReader(fs, Encoding.UTF8);
+                string? line;
+                while ((line = reader.ReadLine()) != null)
+                {
+                    if (string.IsNullOrWhiteSpace(line)) continue;
+                    try
+                    {
+                        var node = JsonNode.Parse(line);
+                        if (node == null) continue;
+                        var step = node["step_index"]?.GetValue<int>() ?? 0;
+                        if (step <= upToStepIndex)
+                        {
+                            byStep[step] = (step, line, node);
+                        }
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+        }
+
+        return byStep.Values.ToList();
+    }
+
+    private static int ExtractLeadingChunkOrder(string name)
+    {
+        var digits = new string(name.Where(char.IsDigit).ToArray());
+        return int.TryParse(digits, out var n) ? n : int.MaxValue;
     }
 
     public List<TranscriptStepItem> GetConversationTranscript(string projectId, string conversationId)
     {
-        var brainDir = Path.Combine(GetProjectBrainDir(projectId), conversationId);
-        var logPath = Path.Combine(brainDir, ".system_generated", "logs", "transcript.jsonl");
-        if (!File.Exists(logPath))
-        {
-            logPath = Path.Combine(brainDir, ".system_generated", "logs", "transcript_full.jsonl");
-        }
-        if (!File.Exists(logPath)) return [];
+        var brainDir = ResolveConversationBrainDir(projectId, conversationId);
+        return ReadMergedTranscriptSteps(brainDir);
+    }
 
-        var list = new List<TranscriptStepItem>();
-        try
+    /// <summary>
+    /// Reads and merges Antigravity 2.35+ transcript logs (<c>transcript.jsonl</c>, <c>transcript_full.jsonl</c>,
+    /// and <c>chunks/transcript*/</c>) using <see cref="FileShare.ReadWrite"/> so live sessions stay readable
+    /// and truncated compact entries are upgraded from full logs.
+    /// </summary>
+    public static List<TranscriptStepItem> ReadMergedTranscriptSteps(string brainDir)
+    {
+        if (string.IsNullOrWhiteSpace(brainDir) || !Directory.Exists(brainDir)) return [];
+
+        var logsDir = Path.Combine(brainDir, ".system_generated", "logs");
+        if (!Directory.Exists(logsDir)) return [];
+
+        var byStep = new Dictionary<int, TranscriptStepItem>();
+        var truncatedMap = new Dictionary<int, HashSet<string>>();
+
+        void IngestFile(string filePath, bool isFullSource)
         {
-            foreach (var line in File.ReadLines(logPath))
+            if (!File.Exists(filePath)) return;
+            try
             {
-                if (string.IsNullOrWhiteSpace(line)) continue;
-                try
+                using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                using var reader = new StreamReader(fs, Encoding.UTF8);
+                string? line;
+                int lineOrdinal = 0;
+                while ((line = reader.ReadLine()) != null)
                 {
-                    var node = JsonNode.Parse(line);
-                    if (node == null) continue;
-
-                    var item = new TranscriptStepItem
+                    if (string.IsNullOrWhiteSpace(line)) continue;
+                    try
                     {
-                        StepIndex = node["step_index"]?.GetValue<int>() ?? 0,
-                        Source = node["source"]?.ToString() ?? string.Empty,
-                        Type = node["type"]?.ToString() ?? string.Empty,
-                        Content = node["content"]?.ToString() ?? string.Empty,
-                        Thinking = node["thinking"]?.ToString(),
-                        InputTokens = node["input_tokens"]?.GetValue<int>(),
-                        OutputTokens = node["output_tokens"]?.GetValue<int>()
-                    };
+                        var node = JsonNode.Parse(line);
+                        if (node == null) continue;
 
-                    if (DateTime.TryParse(node["created_at"]?.ToString(), out var dt))
-                    {
-                        item.CreatedAt = dt;
+                        var stepIndex = node["step_index"]?.GetValue<int>() ?? lineOrdinal;
+                        lineOrdinal++;
+
+                        var item = new TranscriptStepItem
+                        {
+                            StepIndex = stepIndex,
+                            Source = node["source"]?.ToString() ?? string.Empty,
+                            Type = node["type"]?.ToString() ?? string.Empty,
+                            Content = node["content"]?.ToString() ?? string.Empty,
+                            Thinking = node["thinking"]?.ToString(),
+                            InputTokens = node["input_tokens"]?.GetValue<int>(),
+                            OutputTokens = node["output_tokens"]?.GetValue<int>()
+                        };
+
+                        if (DateTime.TryParse(node["created_at"]?.ToString(), out var dt))
+                        {
+                            item.CreatedAt = dt;
+                        }
+
+                        if (node["tool_calls"] is JsonArray tools && tools.Count > 0)
+                        {
+                            PopulateToolCallFields(item, tools);
+                        }
+
+                        HashSet<string>? truncFields = null;
+                        if (node["truncated_fields"] is JsonArray tf && tf.Count > 0)
+                        {
+                            truncFields = tf
+                                .Select(x => x?.ToString())
+                                .Where(x => !string.IsNullOrEmpty(x))
+                                .Select(x => x!)
+                                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                        }
+
+                        if (!byStep.TryGetValue(stepIndex, out var existing))
+                        {
+                            byStep[stepIndex] = item;
+                            if (!isFullSource && truncFields != null)
+                            {
+                                truncatedMap[stepIndex] = truncFields;
+                            }
+                            continue;
+                        }
+
+                        truncatedMap.TryGetValue(stepIndex, out var prevTrunc);
+                        var contentTruncated = prevTrunc?.Contains("content") == true;
+                        var thinkingTruncated = prevTrunc?.Contains("thinking") == true;
+
+                        if (!string.IsNullOrEmpty(item.Content) &&
+                            (string.IsNullOrEmpty(existing.Content)
+                             || (isFullSource && (contentTruncated || item.Content.Length >= existing.Content.Length))
+                             || item.Content.Length > existing.Content.Length))
+                        {
+                            existing.Content = item.Content;
+                            if (isFullSource) prevTrunc?.Remove("content");
+                        }
+
+                        if (!string.IsNullOrEmpty(item.Thinking) &&
+                            (string.IsNullOrEmpty(existing.Thinking)
+                             || (isFullSource && (thinkingTruncated || item.Thinking.Length >= existing.Thinking.Length))
+                             || item.Thinking.Length > existing.Thinking.Length))
+                        {
+                            existing.Thinking = item.Thinking;
+                            if (isFullSource) prevTrunc?.Remove("thinking");
+                        }
+
+                        if (!string.IsNullOrEmpty(item.ToolName) &&
+                            (string.IsNullOrEmpty(existing.ToolName)
+                             || (item.ToolArgs?.Length ?? 0) > (existing.ToolArgs?.Length ?? 0)))
+                        {
+                            existing.ToolName = item.ToolName;
+                            existing.ToolSummary = item.ToolSummary;
+                            existing.ToolArgs = item.ToolArgs;
+                        }
+
+                        if (string.IsNullOrEmpty(existing.Source)) existing.Source = item.Source;
+                        if (string.IsNullOrEmpty(existing.Type)) existing.Type = item.Type;
+                        if (existing.CreatedAt == DateTime.MinValue) existing.CreatedAt = item.CreatedAt;
+                        existing.InputTokens ??= item.InputTokens;
+                        existing.OutputTokens ??= item.OutputTokens;
                     }
-
-                    if (node["tool_calls"] is JsonArray tools && tools.Count > 0)
-                    {
-                        var first = tools[0];
-                        item.ToolName = first?["name"]?.ToString();
-                        item.ToolArgs = first?["args"]?.ToJsonString();
-                        item.ToolSummary = first?["args"]?["toolSummary"]?.ToString();
-                    }
-
-                    list.Add(item);
+                    catch { }
                 }
-                catch { }
+            }
+            catch { }
+        }
+
+        // First read compact transcripts (chunks + main), then upgrade with untruncated full transcripts.
+        var chunkCompactDir = Path.Combine(logsDir, "chunks", "transcript");
+        if (Directory.Exists(chunkCompactDir))
+        {
+            foreach (var cf in Directory.EnumerateFiles(chunkCompactDir, "*.jsonl")
+                .OrderBy(f => ExtractLeadingChunkOrder(Path.GetFileNameWithoutExtension(f)))
+                .ThenBy(f => f, StringComparer.OrdinalIgnoreCase))
+            {
+                IngestFile(cf, isFullSource: false);
             }
         }
-        catch { }
+        IngestFile(Path.Combine(logsDir, "transcript.jsonl"), isFullSource: false);
 
-        return list;
+        var chunkFullDir = Path.Combine(logsDir, "chunks", "transcript_full");
+        if (Directory.Exists(chunkFullDir))
+        {
+            foreach (var cf in Directory.EnumerateFiles(chunkFullDir, "*.jsonl")
+                .OrderBy(f => ExtractLeadingChunkOrder(Path.GetFileNameWithoutExtension(f)))
+                .ThenBy(f => f, StringComparer.OrdinalIgnoreCase))
+            {
+                IngestFile(cf, isFullSource: true);
+            }
+        }
+        IngestFile(Path.Combine(logsDir, "transcript_full.jsonl"), isFullSource: true);
+
+        return byStep.Values.OrderBy(s => s.StepIndex).ToList();
+    }
+
+    private static void PopulateToolCallFields(TranscriptStepItem item, JsonArray tools)
+    {
+        if (tools.Count == 1)
+        {
+            var first = tools[0];
+            item.ToolName = first?["name"]?.ToString();
+            item.ToolArgs = first?["args"]?.ToJsonString();
+            item.ToolSummary = first?["args"]?["toolSummary"]?.ToString();
+            return;
+        }
+
+        var names = new List<string>(tools.Count);
+        var summaries = new List<string>(tools.Count);
+        var argsSb = new StringBuilder();
+
+        for (var i = 0; i < tools.Count; i++)
+        {
+            var tool = tools[i];
+            var name = tool?["name"]?.ToString() ?? $"tool_{i + 1}";
+            var summary = tool?["args"]?["toolSummary"]?.ToString();
+            var argsJson = tool?["args"]?.ToJsonString();
+
+            names.Add(name);
+            if (!string.IsNullOrWhiteSpace(summary)) summaries.Add(summary!);
+
+            if (argsSb.Length > 0) argsSb.AppendLine().AppendLine();
+            argsSb.Append('[').Append(i + 1).Append("] ").Append(name);
+            if (!string.IsNullOrWhiteSpace(summary))
+            {
+                argsSb.Append(" (").Append(summary).Append(')');
+            }
+            if (!string.IsNullOrEmpty(argsJson))
+            {
+                argsSb.AppendLine().Append(argsJson);
+            }
+        }
+
+        item.ToolName = names.Count <= 2
+            ? string.Join(", ", names)
+            : $"{names[0]} (+{tools.Count - 1})";
+        item.ToolSummary = summaries.Count > 0
+            ? string.Join(" | ", summaries)
+            : $"{tools.Count} calls";
+        item.ToolArgs = argsSb.ToString();
     }
 
     public bool ExportConversationToMarkdown(string projectId, string conversationId, string targetFilePath, out string errorMessage)

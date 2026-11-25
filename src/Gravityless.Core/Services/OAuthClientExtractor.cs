@@ -25,24 +25,26 @@ public static class OAuthClientExtractor
     private static IEnumerable<string> CandidateBinaries(string coreDir)
     {
         yield return Path.Combine(coreDir, "resources", "bin", "language_server.exe");
+        yield return Path.Combine(coreDir, "resources", "app", "dist", "remote", "signInUrls.js");
         yield return Path.Combine(coreDir, "resources", "app", "dist", "main.js");
         yield return Path.Combine(coreDir, "resources", "app", "dist", "utils.js");
         yield return Path.Combine(coreDir, "Antigravity.exe");
     }
 
-    private sealed record CandidateMatch(string ClientId, string ClientSecret, int Distance, int Tier);
+    private sealed record CandidateMatch(string ClientId, string ClientSecret, int Distance, int Tier, int LoginPriority);
 
     /// <summary>
     /// Scans candidate binaries and returns (clientId, clientSecret) combinations.
-    /// Uses contextual proximity (思路 C): candidates found in the same chunk and closest
-    /// to each other in bytecode/text offset are sorted first, ensuring the genuine pair
-    /// is verified on the very first refresh attempt.
+    /// Prioritizes OAuth client IDs declared in <c>signInUrls.js</c> (Personal and Business
+    /// login clients, excluding unrelated internal clients such as MCP), then ranks pairs
+    /// by proximity and cross-binary fallback.
     /// </summary>
     public static List<(string ClientId, string ClientSecret)> FindCandidates(string coreDir)
     {
         var matchedPairs = new List<CandidateMatch>();
-        var allIds = new HashSet<string>();
-        var allSecrets = new HashSet<string>();
+        var allIds = new HashSet<string>(StringComparer.Ordinal);
+        var allSecrets = new HashSet<string>(StringComparer.Ordinal);
+        var signInClientIds = ExtractSignInClientIds(coreDir);
 
         int binaryIndex = 0;
         foreach (var binary in CandidateBinaries(coreDir))
@@ -72,29 +74,31 @@ public static class OAuthClientExtractor
                     fileSecrets.Add((s.Value, chunkBaseOffset + s.Pos));
                 }
 
-                // Tier 0: Same chunk proximity (the real pair is usually < 256 bytes apart)
+                // Tier 0: Same chunk proximity (where JS files place pairs together)
                 foreach (var id in chunkIds)
                 {
+                    int loginPriority = signInClientIds.Count == 0 || signInClientIds.Contains(id.Value) ? 0 : 1;
                     foreach (var sec in chunkSecrets)
                     {
                         var dist = Math.Abs(id.Pos - sec.Pos);
                         int tier = dist <= 4096 ? 0 : 1;
-                        matchedPairs.Add(new CandidateMatch(id.Value, sec.Value, dist + binaryIndex * 10000, tier));
+                        matchedPairs.Add(new CandidateMatch(id.Value, sec.Value, dist + binaryIndex * 10000, tier, loginPriority));
                     }
                 }
 
                 chunkBaseOffset += text.Length;
             }
 
-            // Tier 2: Same file, across different chunks
+            // Tier 2: Same file, across different chunks (Go binaries pack literals by length)
             if (fileIds.Count > 0 && fileSecrets.Count > 0)
             {
                 foreach (var id in fileIds)
                 {
+                    int loginPriority = signInClientIds.Count == 0 || signInClientIds.Contains(id.Value) ? 0 : 1;
                     foreach (var sec in fileSecrets)
                     {
                         var dist = Math.Abs(id.Pos - sec.Pos);
-                        matchedPairs.Add(new CandidateMatch(id.Value, sec.Value, dist + binaryIndex * 50000, 2));
+                        matchedPairs.Add(new CandidateMatch(id.Value, sec.Value, dist + binaryIndex * 50000, 2, loginPriority));
                     }
                 }
             }
@@ -102,20 +106,24 @@ public static class OAuthClientExtractor
             binaryIndex++;
         }
 
-        // Tier 3: Cross-binary fallback Cartesian product
+        // Tier 3: Cross-binary fallback Cartesian product (e.g., ID in signInUrls.js, secret in language_server.exe)
         foreach (var id in allIds)
         {
+            int loginPriority = signInClientIds.Count == 0 || signInClientIds.Contains(id) ? 0 : 1;
             foreach (var sec in allSecrets)
             {
-                matchedPairs.Add(new CandidateMatch(id, sec, int.MaxValue / 2, 3));
+                matchedPairs.Add(new CandidateMatch(id, sec, int.MaxValue / 2, 3, loginPriority));
             }
         }
 
-        // Order by Tier ASC, Distance ASC, and deduplicate
+        // Prefer known login client IDs first, then Tier ASC, Distance ASC, and deduplicate
         var result = new List<(string ClientId, string ClientSecret)>();
         var seen = new HashSet<(string, string)>();
 
-        foreach (var match in matchedPairs.OrderBy(m => m.Tier).ThenBy(m => m.Distance))
+        foreach (var match in matchedPairs
+                     .OrderBy(m => m.LoginPriority)
+                     .ThenBy(m => m.Tier)
+                     .ThenBy(m => m.Distance))
         {
             var key = (match.ClientId, match.ClientSecret);
             if (seen.Add(key))
@@ -125,6 +133,26 @@ public static class OAuthClientExtractor
         }
 
         return result;
+    }
+
+    private static HashSet<string> ExtractSignInClientIds(string coreDir)
+    {
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        try
+        {
+            var signInUrlsPath = Path.Combine(coreDir, "resources", "app", "dist", "remote", "signInUrls.js");
+            if (!File.Exists(signInUrlsPath)) return ids;
+
+            var content = File.ReadAllText(signInUrlsPath);
+            foreach (Match m in ClientIdPattern.Matches(content))
+            {
+                ids.Add(m.Value);
+            }
+        }
+        catch
+        {
+        }
+        return ids;
     }
 
     /// <summary>
@@ -137,29 +165,56 @@ public static class OAuthClientExtractor
         ProxyConfig? proxy,
         CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(refreshToken)) return null;
+        var (config, _) = await ResolveWithTokenResponseAsync(coreDir, refreshToken, proxy, cancellationToken)
+            .ConfigureAwait(false);
+        return config;
+    }
+
+    /// <summary>
+    /// Resolves the matching OAuth client pair for <paramref name="refreshToken"/> and also
+    /// returns the raw OAuth token JSON from the successful exchange so callers avoid a second
+    /// redundant token round-trip.
+    /// </summary>
+    public static async Task<(OAuthClientConfig? Config, string? TokenResponseBody)> ResolveWithTokenResponseAsync(
+        string coreDir,
+        string refreshToken,
+        ProxyConfig? proxy,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(refreshToken)) return (null, null);
 
         var candidates = FindCandidates(coreDir);
+        if (candidates.Count == 0) return (null, null);
 
         using var client = AccountPoolService.CreateHttpClientForOAuth(proxy);
 
         foreach (var (clientId, clientSecret) in candidates)
         {
-            if (await VerifyAsync(client, clientId, clientSecret, refreshToken, cancellationToken))
+            var (ok, body, isInvalidGrant) = await VerifyAsync(client, clientId, clientSecret, refreshToken, cancellationToken)
+                .ConfigureAwait(false);
+            if (ok)
             {
-                return new OAuthClientConfig
+                return (new OAuthClientConfig
                 {
                     ClientId = clientId,
                     ClientSecret = clientSecret,
-                    ExtractedAt = DateTime.UtcNow
-                };
+                    ExtractedAt = DateTime.UtcNow,
+                    Verified = true
+                }, body);
+            }
+
+            // If Google specifically returned invalid_grant, the client auth succeeded and the
+            // refresh token itself is revoked/expired — retrying other clients won't help.
+            if (isInvalidGrant)
+            {
+                return (null, body);
             }
         }
 
-        return null;
+        return (null, null);
     }
 
-    private static async Task<bool> VerifyAsync(
+    private static async Task<(bool Ok, string? Body, bool IsInvalidGrant)> VerifyAsync(
         HttpClient client,
         string clientId,
         string clientSecret,
@@ -180,14 +235,19 @@ public static class OAuthClientExtractor
             };
 
             using var response = await client.SendAsync(request, cancellationToken);
-            if (!response.IsSuccessStatusCode) return false;
-
             var body = await response.Content.ReadAsStringAsync(cancellationToken);
-            return body.Contains("access_token", StringComparison.Ordinal);
+            if (!response.IsSuccessStatusCode)
+            {
+                bool invalidGrant = body.Contains("invalid_grant", StringComparison.OrdinalIgnoreCase);
+                return (false, body, invalidGrant);
+            }
+
+            bool ok = body.Contains("access_token", StringComparison.Ordinal);
+            return (ok, body, false);
         }
         catch
         {
-            return false;
+            return (false, null, false);
         }
     }
 

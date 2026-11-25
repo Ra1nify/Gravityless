@@ -125,36 +125,69 @@ public class AccountPoolService
         var acc = _accounts.FirstOrDefault(a => a.Id == accountId);
         if (acc == null) return;
 
-        // Prefer the instance-local oauth_creds.json, refreshed by language_server while the instance ran.
-        var instOauthCredsPath = Path.Combine(instanceGeminiDir, "oauth_creds.json");
-        if (File.Exists(instOauthCredsPath))
+        // Collect all present token sources (2.35.1 fallback file, legacy file, and Windows
+        // credential slot) belonging to this account and adopt the freshest access token.
+        var candidateBlobs = new List<string>();
+        foreach (var fileName in new[] { StandaloneOAuthTokenFileName, LegacyOauthCredsFileName })
         {
+            var path = Path.Combine(instanceGeminiDir, fileName);
+            if (!File.Exists(path)) continue;
             try
             {
-                // CredentialCodec accepts both the flat file and the nested blob layout, so the
-                // file can be handed over as-is.
-                var credJson = File.ReadAllText(instOauthCredsPath);
-                AdoptTokensIfOwned(acc, credJson, "account.checkin-instance");
+                candidateBlobs.Add(File.ReadAllText(path));
             }
             catch (Exception ex)
             {
                 DiagLog.Swallowed("account.checkin-read", ex);
             }
         }
-        else
+
+        var latestCred = CredentialManager.ReadCredential();
+        if (!string.IsNullOrEmpty(latestCred))
         {
-            // Copy the latest Windows Credential Manager token back into the account.
-            // The credential slot is global, so only adopt a blob whose email matches this account.
-            var latestCred = CredentialManager.ReadCredential();
-            if (!string.IsNullOrEmpty(latestCred))
+            candidateBlobs.Add(latestCred);
+        }
+
+        CapturedCredential? freshestOwned = null;
+        foreach (var raw in candidateBlobs)
+        {
+            var parsed = CredentialCodec.Parse(raw);
+            if (parsed == null || string.IsNullOrEmpty(parsed.Email))
             {
-                AdoptTokensIfOwned(acc, latestCred, "account.checkin-slot");
+                DiagLog.Swallowed("account.checkin", new InvalidOperationException(
+                    $"credential has no identity; not adopted for {acc.Email}"));
+                continue;
+            }
+            if (!parsed.Email.Equals(acc.Email, StringComparison.OrdinalIgnoreCase))
+            {
+                DiagLog.Swallowed("account.checkin", new InvalidOperationException(
+                    $"credential belongs to {parsed.Email}; not adopted for {acc.Email}"));
+                continue;
+            }
+            if (string.IsNullOrEmpty(parsed.AccessToken)) continue;
+
+            if (freshestOwned == null ||
+                (parsed.Expiry.HasValue && (!freshestOwned.Expiry.HasValue || parsed.Expiry.Value > freshestOwned.Expiry.Value)))
+            {
+                freshestOwned = parsed;
             }
         }
+
+        if (freshestOwned != null)
+        {
+            AdoptParsedCredential(acc, freshestOwned);
+        }
+
+        // Remove transient fallback token files/markers after harvesting so future launches start cleanly.
+        ClearTransientGeminiCredentialFiles(instanceGeminiDir);
 
         acc.IsRunning = false;
         acc.BoundInstanceId = null;
         acc.LastActiveAt = DateTime.UtcNow;
+        if (!string.IsNullOrEmpty(acc.AccessToken))
+        {
+            acc.AccessTokenLastUsedAt ??= DateTime.UtcNow;
+        }
         SaveAccounts();
 
         // Archive into the per-account storage directory.
@@ -162,39 +195,27 @@ public class AccountPoolService
         InjectAccountToGeminiDir(accountDir, acc);
     }
 
-    /// <summary>
-    /// Takes the access token from a freshly observed credential, but only when that credential
-    /// belongs to <paramref name="account"/>.
-    ///
-    /// The refresh token is never copied: it is the account's identity and is fixed at capture.
-    /// A credential whose identity cannot be read is refused outright, because accepting it is
-    /// how one account's tokens end up filed under another.
-    /// </summary>
-    private static bool AdoptTokensIfOwned(AccountProfile account, string? candidate, string context)
+    private static void AdoptParsedCredential(AccountProfile account, CapturedCredential cred)
     {
-        var cred = CredentialCodec.Parse(candidate);
+        if (string.IsNullOrEmpty(cred.AccessToken)) return;
 
-        if (cred == null || string.IsNullOrEmpty(cred.Email))
+        var incomingExpiry = cred.Expiry?.UtcDateTime;
+        var currentExpiry = account.AccessTokenExpiresAt;
+        if (currentExpiry.HasValue && incomingExpiry.HasValue && incomingExpiry.Value < currentExpiry.Value)
         {
-            DiagLog.Swallowed(context, new InvalidOperationException(
-                $"credential has no identity; not adopted for {account.Email}"));
-            return false;
+            return;
         }
 
-        if (!cred.Email.Equals(account.Email, StringComparison.OrdinalIgnoreCase))
-        {
-            DiagLog.Swallowed(context, new InvalidOperationException(
-                $"credential belongs to {cred.Email}; not adopted for {account.Email}"));
-            return false;
-        }
-
-        if (!string.IsNullOrEmpty(cred.AccessToken))
+        if (!string.Equals(account.AccessToken, cred.AccessToken, StringComparison.Ordinal))
         {
             account.AccessToken = cred.AccessToken;
-            account.AccessTokenExpiresAt = cred.Expiry?.UtcDateTime;
+            account.AccessTokenExpiresAt = incomingExpiry;
+            account.AccessTokenLastUsedAt = DateTime.UtcNow;
         }
-
-        return true;
+        else if (incomingExpiry.HasValue)
+        {
+            account.AccessTokenExpiresAt = incomingExpiry;
+        }
     }
 
     /// <summary>Turns a freshly captured credential into a profile. Identity is set once, here.</summary>
@@ -203,10 +224,16 @@ public class AccountPoolService
         Email = cred.Email!,
         DisplayName = cred.Email!.Split('@')[0],
         RefreshToken = cred.RefreshToken!,
+        RefreshTokenExpiresAt = cred.RefreshTokenExpiresInSeconds is > 0
+            ? DateTime.UtcNow.AddSeconds(cred.RefreshTokenExpiresInSeconds.Value)
+            : null,
+        RefreshTokenRevoked = false,
         IdToken = cred.IdToken,
         TokenType = cred.TokenType ?? "Bearer",
         AccessToken = cred.AccessToken,
         AccessTokenExpiresAt = cred.Expiry?.UtcDateTime,
+        AccountTierId = cred.UserTier,
+        AccountTierName = cred.TierDisplayName,
         InstallationId = Guid.NewGuid().ToString(),
     };
 
@@ -262,12 +289,22 @@ public class AccountPoolService
     }
 
     public const string OAuthTokenEndpoint = "https://oauth2.googleapis.com/token";
-    public const string CloudCodeQuotaSummaryEndpoint = "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary";
-    public const string CloudCodeQuotaEndpoint = "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota";
-    public const string CloudCodeAvailableModelsEndpoint = "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels";
-    public const string CloudCodeAssistEndpoint = "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist";
+    public const string DailyCloudCodeBaseUrl = "https://daily-cloudcode-pa.googleapis.com";
+    public const string ProdCloudCodeBaseUrl = "https://cloudcode-pa.googleapis.com";
+    public const string LoadCodeAssistPath = "/v1internal:loadCodeAssist";
+    public const string RetrieveUserQuotaSummaryPath = "/v1internal:retrieveUserQuotaSummary";
+    public const string RetrieveUserQuotaPath = "/v1internal:retrieveUserQuota";
+    public const string FetchAvailableModelsPath = "/v1internal:fetchAvailableModels";
+
+    public const string StandaloneOAuthTokenFileName = "jetski-standalone-oauth-token";
+    public const string LegacyOauthCredsFileName = "oauth_creds.json";
+    public const string KeyringUnavailableMarkerFileName = "antigravity-keyring-unavailable";
+
     private const string FallbackAntigravityVersion = "2.35.1";
     public static string DefaultUserAgent => $"antigravity/{ResolveAntigravityVersion(null)}";
+
+    public static string GetCloudCodeBaseUrl(AccountProfile? account) =>
+        account?.UsesGcpTos == true ? ProdCloudCodeBaseUrl : DailyCloudCodeBaseUrl;
 
     /// <summary>
     /// OAuth client pair used for token refresh, read from <c>data/oauth_client.json</c>.
@@ -276,24 +313,101 @@ public class AccountPoolService
     /// </summary>
     public static (string ClientId, string ClientSecret) LoadOAuthClient(string? baseDir = null)
     {
+        var (primary, verified) = LoadOAuthClientCache(baseDir);
+        if (primary != null && primary.Verified)
+        {
+            return (primary.ClientId, primary.ClientSecret);
+        }
+        if (verified.Count > 0)
+        {
+            return (verified[0].ClientId, verified[0].ClientSecret);
+        }
+        if (primary != null && !string.IsNullOrEmpty(primary.ClientId) && !string.IsNullOrEmpty(primary.ClientSecret))
+        {
+            return (primary.ClientId, primary.ClientSecret);
+        }
+
+        return (string.Empty, string.Empty);
+    }
+
+    public static bool HasVerifiedOAuthClient(string? baseDir = null)
+    {
+        var (primary, verified) = LoadOAuthClientCache(baseDir);
+        return (primary != null && primary.Verified) || verified.Count > 0;
+    }
+
+    public static (string ClientId, string ClientSecret) LoadOAuthClientForAccount(AccountProfile? account, string? baseDir = null)
+    {
+        var (primary, verified) = LoadOAuthClientCache(baseDir);
+        if (!string.IsNullOrWhiteSpace(account?.OAuthClientId))
+        {
+            var match = verified.FirstOrDefault(c => string.Equals(c.ClientId, account.OAuthClientId, StringComparison.Ordinal));
+            if (match != null)
+            {
+                return (match.ClientId, match.ClientSecret);
+            }
+            if (primary != null && string.Equals(primary.ClientId, account.OAuthClientId, StringComparison.Ordinal))
+            {
+                return (primary.ClientId, primary.ClientSecret);
+            }
+        }
+
+        return LoadOAuthClient(baseDir);
+    }
+
+    private static (OAuthClientConfig? Primary, List<OAuthClientConfig> VerifiedClients) LoadOAuthClientCache(string? baseDir = null)
+    {
+        var verified = new List<OAuthClientConfig>();
+        OAuthClientConfig? primary = null;
+
         try
         {
             var root = baseDir ?? AppDomain.CurrentDomain.BaseDirectory;
             var path = Path.Combine(root, "data", "oauth_client.json");
-            if (File.Exists(path))
+            if (!File.Exists(path)) return (null, verified);
+
+            var node = JsonNode.Parse(File.ReadAllText(path));
+            var id = node?["client_id"]?.ToString();
+            var secret = node?["client_secret"]?.ToString();
+            var verifiedProp = node?["verified"];
+            bool primaryVerified = verifiedProp != null && bool.TryParse(verifiedProp.ToString(), out var v) && v;
+
+            if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(secret))
             {
-                var node = JsonNode.Parse(File.ReadAllText(path));
-                var id = node?["client_id"]?.ToString();
-                var secret = node?["client_secret"]?.ToString();
-                if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(secret))
+                primary = new OAuthClientConfig
                 {
-                    return (id, secret);
+                    ClientId = id,
+                    ClientSecret = secret,
+                    Verified = primaryVerified
+                };
+                if (primaryVerified)
+                {
+                    verified.Add(primary);
+                }
+            }
+
+            if (node?["verified_clients"] is JsonArray arr)
+            {
+                foreach (var item in arr)
+                {
+                    var cid = item?["client_id"]?.ToString();
+                    var csec = item?["client_secret"]?.ToString();
+                    if (!string.IsNullOrEmpty(cid) && !string.IsNullOrEmpty(csec) &&
+                        !verified.Any(c => string.Equals(c.ClientId, cid, StringComparison.Ordinal)))
+                    {
+                        verified.Add(new OAuthClientConfig
+                        {
+                            ClientId = cid,
+                            ClientSecret = csec,
+                            Verified = true
+                        });
+                    }
                 }
             }
         }
         catch { }
 
-        return (string.Empty, string.Empty);
+        return (primary, verified);
     }
 
     public static void SaveOAuthClient(OAuthClientConfig config, string? baseDir = null)
@@ -304,11 +418,31 @@ public class AccountPoolService
             var dataDir = Path.Combine(root, "data");
             Directory.CreateDirectory(dataDir);
 
+            var (_, existingVerified) = LoadOAuthClientCache(baseDir);
+            if (config.Verified && !string.IsNullOrEmpty(config.ClientId) && !string.IsNullOrEmpty(config.ClientSecret))
+            {
+                existingVerified.RemoveAll(c => string.Equals(c.ClientId, config.ClientId, StringComparison.Ordinal));
+                existingVerified.Insert(0, config);
+            }
+
+            var verifiedArray = new JsonArray();
+            foreach (var vc in existingVerified)
+            {
+                verifiedArray.Add(new JsonObject
+                {
+                    ["client_id"] = vc.ClientId,
+                    ["client_secret"] = vc.ClientSecret,
+                    ["extracted_at"] = vc.ExtractedAt.ToString("o")
+                });
+            }
+
             var node = new JsonObject
             {
                 ["client_id"] = config.ClientId,
                 ["client_secret"] = config.ClientSecret,
-                ["extracted_at"] = config.ExtractedAt.ToString("o")
+                ["verified"] = config.Verified,
+                ["extracted_at"] = config.ExtractedAt.ToString("o"),
+                ["verified_clients"] = verifiedArray
             };
 
             File.WriteAllText(
@@ -322,53 +456,45 @@ public class AccountPoolService
     }
 
     /// <summary>
-    /// Returns the cached OAuth pair, extracting it from the installed Antigravity binaries
-    /// when the cache is missing. Verification needs a live refresh token, so it is skipped
-    /// when none is supplied; the first candidate pair is cached unverified in that case.
+    /// Ensures a verified OAuth client pair is cached in <c>data/oauth_client.json</c>.
+    /// Only verified pairs are persisted so unverified binary scan guesses are never locked
+    /// into disk when the pool has zero accounts.
     /// </summary>
     public async Task<OAuthClientConfig?> EnsureOAuthClientAsync(
         ProxyConfig? proxy = null,
         CancellationToken cancellationToken = default)
     {
-        var cached = LoadOAuthClient(_baseDir);
-        if (!string.IsNullOrEmpty(cached.ClientId) && !string.IsNullOrEmpty(cached.ClientSecret))
+        var (primary, verified) = LoadOAuthClientCache(_baseDir);
+        if (primary != null && primary.Verified)
         {
-            return new OAuthClientConfig { ClientId = cached.ClientId, ClientSecret = cached.ClientSecret };
+            return primary;
+        }
+        if (verified.Count > 0)
+        {
+            return verified[0];
         }
 
         var coreDir = Path.Combine(_baseDir, "core");
         if (!Directory.Exists(coreDir)) return null;
 
         // Any stored refresh token can certify a candidate pair.
-        var refreshToken = _accounts
-            .Select(a => a.RefreshToken)
-            .FirstOrDefault(t => !string.IsNullOrWhiteSpace(t));
-
-        OAuthClientConfig? resolved = null;
-
-        if (!string.IsNullOrWhiteSpace(refreshToken))
+        var sampleAccount = _accounts.FirstOrDefault(a => !string.IsNullOrWhiteSpace(a.RefreshToken));
+        if (sampleAccount == null)
         {
-            resolved = await OAuthClientExtractor.ResolveAsync(coreDir, refreshToken, proxy, cancellationToken);
+            // No live refresh token yet: do not persist an unverified guess to disk.
+            return null;
         }
 
-        if (resolved == null)
-        {
-            // Nothing to verify against: cache the first candidate so a later refresh has
-            // something to try. The refresh path reports failure honestly if it is wrong.
-            var candidates = OAuthClientExtractor.FindCandidates(coreDir);
-            if (candidates.Count > 0)
-            {
-                resolved = new OAuthClientConfig
-                {
-                    ClientId = candidates[0].ClientId,
-                    ClientSecret = candidates[0].ClientSecret
-                };
-            }
-        }
-
+        var resolved = await OAuthClientExtractor.ResolveAsync(coreDir, sampleAccount.RefreshToken, proxy, cancellationToken);
         if (resolved != null)
         {
+            resolved.Verified = true;
             SaveOAuthClient(resolved, _baseDir);
+            if (string.IsNullOrEmpty(sampleAccount.OAuthClientId))
+            {
+                sampleAccount.OAuthClientId = resolved.ClientId;
+                TrySaveAccounts();
+            }
         }
 
         return resolved;
@@ -414,8 +540,23 @@ public class AccountPoolService
             .ConfigureAwait(false);
     }
 
-    /// <summary>Refreshes the account access token; up to 3 attempts, 10s apart, when autoRetry is set.</summary>
+    /// <summary>Refreshes the account access token and syncs quota; up to 3 attempts, 10s apart, when autoRetry is set.</summary>
     public async Task<(bool success, string message)> RefreshTokenAsync(
+        string accountId,
+        ProxyConfig? proxyConfig = null,
+        bool autoRetry = true,
+        CancellationToken cancellationToken = default)
+    {
+        var (tokenOk, _, message) = await RefreshTokenAndQuotaAsync(accountId, proxyConfig, autoRetry, cancellationToken)
+            .ConfigureAwait(false);
+        return (tokenOk, message);
+    }
+
+    /// <summary>
+    /// Exchanges the account's refresh token for a fresh access token and then queries quota,
+    /// returning separate status flags for token refresh and quota sync.
+    /// </summary>
+    public async Task<(bool tokenSuccess, bool quotaSuccess, string message)> RefreshTokenAndQuotaAsync(
         string accountId,
         ProxyConfig? proxyConfig = null,
         bool autoRetry = true,
@@ -424,23 +565,33 @@ public class AccountPoolService
         var acc = _accounts.FirstOrDefault(a => a.Id == accountId);
         if (acc == null)
         {
-            return (false, "找不到指定的账号");
+            return (false, false, "找不到指定的账号");
         }
 
         var refreshToken = acc.RefreshToken;
         if (string.IsNullOrWhiteSpace(refreshToken))
         {
-            return (false, "账号未包含 Refresh Token 凭据，无法自动刷新");
+            return (false, false, "账号未包含 Refresh Token 凭据，无法自动刷新");
         }
 
         int maxAttempts = autoRetry ? 3 : 1;
+        var coreDir = Path.Combine(_baseDir, "core");
 
-        // The file path is a cache populated ahead of time (startup and after each capture).
-        // Reading it here keeps the refresh path free of binary scanning, which takes seconds.
-        var oauthClient = LoadOAuthClient(_baseDir);
+        var oauthClient = LoadOAuthClientForAccount(acc, _baseDir);
+        bool usedCachedClient = !string.IsNullOrEmpty(oauthClient.ClientId) && !string.IsNullOrEmpty(oauthClient.ClientSecret);
+
+        if (!usedCachedClient && Directory.Exists(coreDir))
+        {
+            var candidates = OAuthClientExtractor.FindCandidates(coreDir);
+            if (candidates.Count > 0)
+            {
+                oauthClient = candidates[0];
+            }
+        }
+
         if (string.IsNullOrEmpty(oauthClient.ClientId) || string.IsNullOrEmpty(oauthClient.ClientSecret))
         {
-            return (false, "缺少 OAuth 客户端配置，请先在概览页同步核心后重启应用");
+            return (false, false, "缺少 OAuth 客户端配置，请先在概览页同步核心后重试");
         }
 
         using var client = CreateHttpClient(proxyConfig);
@@ -449,6 +600,8 @@ public class AccountPoolService
         {
             try
             {
+                acc.RefreshTokenLastUsedAt = DateTime.UtcNow;
+
                 using var request = new HttpRequestMessage(HttpMethod.Post, OAuthTokenEndpoint)
                 {
                     Content = new FormUrlEncodedContent(new Dictionary<string, string>
@@ -463,69 +616,48 @@ public class AccountPoolService
                 using var response = await client.SendAsync(request, cancellationToken);
                 var respBody = await response.Content.ReadAsStringAsync(cancellationToken);
 
+                if (!response.IsSuccessStatusCode && IsOAuthClientMismatchError(respBody) && Directory.Exists(coreDir))
+                {
+                    var (resolved, resolvedBody) = await OAuthClientExtractor.ResolveWithTokenResponseAsync(
+                        coreDir, refreshToken, proxyConfig, cancellationToken).ConfigureAwait(false);
+                    if (resolved != null && !string.IsNullOrWhiteSpace(resolvedBody))
+                    {
+                        oauthClient = (resolved.ClientId, resolved.ClientSecret);
+                        respBody = resolvedBody;
+                        return await CompleteTokenRefreshAndSyncQuotaAsync(
+                            acc, oauthClient, respBody, client, cancellationToken).ConfigureAwait(false);
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(resolvedBody) &&
+                        resolvedBody.Contains("invalid_grant", StringComparison.OrdinalIgnoreCase))
+                    {
+                        respBody = resolvedBody;
+                    }
+                }
+
                 if (response.IsSuccessStatusCode)
                 {
-                    var respNode = JsonNode.Parse(respBody);
-                    var newAccessToken = respNode?["access_token"]?.ToString();
-                    var expiresIn = respNode?["expires_in"]?.GetValue<int>() ?? 3599;
-
-                    if (!string.IsNullOrEmpty(newAccessToken))
-                    {
-                        // The refresh token identifies the account, so a token minted from it
-                        // cannot belong anywhere else; storing it is a plain field assignment.
-                        acc.AccessToken = newAccessToken;
-                        acc.AccessTokenExpiresAt = DateTime.UtcNow.AddSeconds(expiresIn);
-                        acc.FailedRefreshAttempts = 0;
-                        acc.LastActiveAt = DateTime.UtcNow;
-
-                        // Also refresh the 5h/weekly model quota groups and reset times.
-                        bool quotaOk = false;
-                        string quotaMsg = string.Empty;
-                        try
-                        {
-                            (quotaOk, quotaMsg) = await FetchAndSaveAccountQuotaInternalAsync(acc, newAccessToken, client, cancellationToken);
-                        }
-                        catch (Exception qEx)
-                        {
-                            quotaMsg = qEx.Message;
-                            acc.QuotaLastError = qEx.Message;
-                        }
-
-                        SaveAccounts();
-
-                        if (!string.IsNullOrEmpty(acc.BoundInstanceId))
-                        {
-                            var instDir = Path.Combine(_baseDir, "data", "instances", acc.BoundInstanceId);
-                            InjectAccountToGeminiDir(instDir, acc);
-                        }
-
-                        var accDir = GetAccountStorageDir(acc.Id);
-                        InjectAccountToGeminiDir(accDir, acc);
-
-                        return quotaOk
-                            ? (true, "Token 刷新成功！模型配额已同步就绪。")
-                            : (true, $"Token 刷新成功，但配额查询失败: {quotaMsg}");
-                    }
+                    return await CompleteTokenRefreshAndSyncQuotaAsync(
+                        acc, oauthClient, respBody, client, cancellationToken).ConfigureAwait(false);
                 }
-                else
+
+                if (respBody.Contains("invalid_grant", StringComparison.OrdinalIgnoreCase))
                 {
-                    if (respBody.Contains("invalid_grant", StringComparison.OrdinalIgnoreCase))
-                    {
-                        acc.FailedRefreshAttempts = 3;
-                        SaveAccounts();
-                        return (false, "凭据已失效或被撤销 (invalid_grant)，需重新登录");
-                    }
-
-                    if (attempt < maxAttempts)
-                    {
-                        await Task.Delay(10000, cancellationToken);
-                        continue;
-                    }
-
-                    acc.FailedRefreshAttempts = Math.Min(3, acc.FailedRefreshAttempts + 1);
+                    acc.RefreshTokenRevoked = true;
+                    acc.FailedRefreshAttempts = 3;
                     SaveAccounts();
-                    return (false, $"刷新失败 (HTTP {(int)response.StatusCode}): {respBody}");
+                    return (false, false, "凭据已失效或被撤销 (invalid_grant)，需重新登录");
                 }
+
+                if (attempt < maxAttempts)
+                {
+                    await Task.Delay(10000, cancellationToken);
+                    continue;
+                }
+
+                acc.FailedRefreshAttempts = Math.Min(3, acc.FailedRefreshAttempts + 1);
+                SaveAccounts();
+                return (false, false, $"刷新失败 (HTTP {(int)response.StatusCode}): {respBody}");
             }
             catch (Exception ex)
             {
@@ -537,14 +669,112 @@ public class AccountPoolService
 
                 acc.FailedRefreshAttempts = Math.Min(3, acc.FailedRefreshAttempts + 1);
                 SaveAccounts();
-                return (false, $"网络请求异常: {ex.Message}");
+                return (false, false, $"网络请求异常: {ex.Message}");
             }
         }
 
-        return (false, "刷新失败（已重试 3 次仍未成功）");
+        return (false, false, "刷新失败（已重试 3 次仍未成功）");
     }
 
-    /// <summary>Refreshes the token of every account in the pool (single attempt each).</summary>
+    private async Task<(bool tokenSuccess, bool quotaSuccess, string message)> CompleteTokenRefreshAndSyncQuotaAsync(
+        AccountProfile acc,
+        (string ClientId, string ClientSecret) oauthClient,
+        string respBody,
+        HttpClient client,
+        CancellationToken cancellationToken)
+    {
+        var respNode = JsonNode.Parse(respBody);
+        var newAccessToken = respNode?["access_token"]?.ToString();
+        if (string.IsNullOrEmpty(newAccessToken))
+        {
+            acc.FailedRefreshAttempts = Math.Min(3, acc.FailedRefreshAttempts + 1);
+            SaveAccounts();
+            return (false, false, $"刷新响应缺少 access_token: {respBody}");
+        }
+
+        var expiresIn = TryReadInt(respNode?["expires_in"]) ?? 3599;
+        var now = DateTime.UtcNow;
+
+        acc.AccessToken = newAccessToken;
+        acc.AccessTokenExpiresAt = now.AddSeconds(expiresIn);
+        acc.RefreshTokenLastUsedAt = now;
+        acc.RefreshTokenRevoked = false;
+        acc.FailedRefreshAttempts = 0;
+        acc.LastActiveAt = now;
+        acc.OAuthClientId = oauthClient.ClientId;
+
+        var rotatedRefreshToken = respNode?["refresh_token"]?.ToString();
+        if (!string.IsNullOrWhiteSpace(rotatedRefreshToken))
+        {
+            acc.RefreshToken = rotatedRefreshToken;
+        }
+
+        var rtExpiresIn = TryReadInt(respNode?["refresh_token_expires_in"]);
+        if (rtExpiresIn is > 0)
+        {
+            acc.RefreshTokenExpiresAt = now.AddSeconds(rtExpiresIn.Value);
+        }
+
+        var newIdToken = respNode?["id_token"]?.ToString();
+        if (!string.IsNullOrWhiteSpace(newIdToken))
+        {
+            var idEmail = CredentialCodec.ReadEmailFromIdToken(newIdToken);
+            if (string.IsNullOrEmpty(idEmail) || idEmail.Equals(acc.Email, StringComparison.OrdinalIgnoreCase))
+            {
+                acc.IdToken = newIdToken;
+            }
+        }
+
+        SaveOAuthClient(new OAuthClientConfig
+        {
+            ClientId = oauthClient.ClientId,
+            ClientSecret = oauthClient.ClientSecret,
+            ExtractedAt = now,
+            Verified = true
+        }, _baseDir);
+
+        // Also refresh the 5h/weekly model quota groups and reset times.
+        bool quotaOk = false;
+        string quotaMsg = string.Empty;
+        try
+        {
+            (quotaOk, quotaMsg) = await FetchAndSaveAccountQuotaInternalAsync(acc, newAccessToken, client, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception qEx)
+        {
+            quotaMsg = qEx.Message;
+            acc.QuotaLastError = qEx.Message;
+        }
+
+        SaveAccounts();
+
+        if (!string.IsNullOrEmpty(acc.BoundInstanceId))
+        {
+            var instGeminiDir = Path.Combine(_baseDir, "data", "instances", acc.BoundInstanceId, ".gemini");
+            InjectAccountToGeminiDir(instGeminiDir, acc);
+        }
+
+        var accDir = GetAccountStorageDir(acc.Id);
+        InjectAccountToGeminiDir(accDir, acc);
+
+        return quotaOk
+            ? (true, true, acc.HasArgonEntitlement ? "Token 刷新成功！模型配额已同步就绪（含 Argon）。" : "Token 刷新成功！模型配额已同步就绪。")
+            : (true, false, $"Token 刷新成功，但配额查询失败: {quotaMsg}");
+    }
+
+    private static bool IsOAuthClientMismatchError(string respBody) =>
+        respBody.Contains("invalid_client", StringComparison.OrdinalIgnoreCase)
+        || respBody.Contains("unauthorized_client", StringComparison.OrdinalIgnoreCase);
+
+    private static int? TryReadInt(JsonNode? node)
+    {
+        if (node == null) return null;
+        return int.TryParse(node.ToString(), System.Globalization.CultureInfo.InvariantCulture, out var val)
+            ? val
+            : null;
+    }
+
     /// <summary>
     /// Refreshes every account in turn. Each account exchanges its refresh token for a fresh
     /// access token and then re-reads its quota, so a completed run leaves both current.
@@ -555,17 +785,29 @@ public class AccountPoolService
         Action<int, int, string>? onProgress = null,
         CancellationToken cancellationToken = default)
     {
-        var accounts = _accounts.ToList();
-        if (accounts.Count == 0) return (0, 0);
+        var (success, _, failed) = await RefreshAllTokensDetailedAsync(proxyConfig, onProgress, cancellationToken)
+            .ConfigureAwait(false);
+        return (success, failed);
+    }
 
-        int success = 0;
+    /// <summary>
+    /// Refreshes every account and returns separate counts for full success (token + quota),
+    /// token-only success (quota failed), and token refresh failure.
+    /// </summary>
+    public async Task<(int fullSuccessCount, int quotaWarningCount, int failedCount)> RefreshAllTokensDetailedAsync(
+        ProxyConfig? proxyConfig = null,
+        Action<int, int, string>? onProgress = null,
+        CancellationToken cancellationToken = default)
+    {
+        var accounts = _accounts.ToList();
+        if (accounts.Count == 0) return (0, 0, 0);
+
+        int fullSuccess = 0;
+        int quotaWarning = 0;
         int failed = 0;
         int completed = 0;
         var counterLock = new object();
 
-        // A few refreshes run at once so a long list does not spend its whole time waiting on
-        // latency, but the degree is capped: the token endpoint rate-limits, and firing twenty
-        // requests together would turn a working batch into a run of 429s.
         var options = new ParallelOptions
         {
             MaxDegreeOfParallelism = RefreshConcurrency,
@@ -574,21 +816,20 @@ public class AccountPoolService
 
         await Parallel.ForEachAsync(accounts, options, async (acc, ct) =>
         {
-            // autoRetry stays on: a transient network fault should not mark an account dead
-            // for the rest of the batch.
-            var res = await RefreshTokenAsync(acc.Id, proxyConfig, autoRetry: true, ct)
+            var (tokenOk, quotaOk, _) = await RefreshTokenAndQuotaAsync(acc.Id, proxyConfig, autoRetry: true, ct)
                 .ConfigureAwait(false);
 
             lock (counterLock)
             {
-                if (res.success) success++;
-                else failed++;
+                if (!tokenOk) failed++;
+                else if (!quotaOk) quotaWarning++;
+                else fullSuccess++;
                 completed++;
                 onProgress?.Invoke(completed, accounts.Count, acc.Email);
             }
         }).ConfigureAwait(false);
 
-        return (success, failed);
+        return (fullSuccess, quotaWarning, failed);
     }
 
     /// <summary>One account whose stored credentials do not belong to it.</summary>
@@ -621,7 +862,6 @@ public class AccountPoolService
         var accounts = _accounts.ToList();
         if (accounts.Count == 0) return mismatches;
 
-        var oauthClient = LoadOAuthClient(_baseDir);
         var counterLock = new object();
         int checkedCount = 0;
 
@@ -633,6 +873,7 @@ public class AccountPoolService
 
         await Parallel.ForEachAsync(accounts, options, async (acc, ct) =>
         {
+            var oauthClient = LoadOAuthClientForAccount(acc, _baseDir);
             var mismatch = await VerifyOneAsync(acc, oauthClient, proxyConfig, ct).ConfigureAwait(false);
 
             lock (counterLock)
@@ -678,6 +919,16 @@ public class AccountPoolService
 
         // The stored identity matches, but the refresh token itself may still belong elsewhere.
         // Exchanging it and reading the returned id_token is the only way to tell.
+        var coreDir = Path.Combine(_baseDir, "core");
+        if (string.IsNullOrEmpty(oauthClient.ClientId) || string.IsNullOrEmpty(oauthClient.ClientSecret))
+        {
+            if (Directory.Exists(coreDir))
+            {
+                var candidates = OAuthClientExtractor.FindCandidates(coreDir);
+                if (candidates.Count > 0) oauthClient = candidates[0];
+            }
+        }
+
         if (string.IsNullOrEmpty(oauthClient.ClientId) || string.IsNullOrEmpty(oauthClient.ClientSecret))
         {
             return null;
@@ -698,9 +949,23 @@ public class AccountPoolService
             };
 
             using var response = await client.SendAsync(request, cancellationToken).ConfigureAwait(false);
-            if (!response.IsSuccessStatusCode) return null;   // Network or revocation: not identity damage.
-
             var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+
+            if (!response.IsSuccessStatusCode && IsOAuthClientMismatchError(body) && Directory.Exists(coreDir))
+            {
+                var (resolved, resolvedBody) = await OAuthClientExtractor.ResolveWithTokenResponseAsync(
+                    coreDir, refreshToken, proxyConfig, cancellationToken).ConfigureAwait(false);
+                if (resolved == null || string.IsNullOrWhiteSpace(resolvedBody))
+                {
+                    return null;
+                }
+                body = resolvedBody;
+            }
+            else if (!response.IsSuccessStatusCode)
+            {
+                return null;   // Network or revocation: not identity damage.
+            }
+
             var node = JsonNode.Parse(body);
 
             var tokenEmail = node?["id_token_email"]?.ToString();
@@ -850,85 +1115,83 @@ public class AccountPoolService
     {
         try
         {
-            // 1. Discover companion project ID and tier metadata (helps summary + exposes tier).
-            var assistInfo = await DiscoverCloudCodeInfoAsync(client, accessToken, cancellationToken);
-            var projectId = assistInfo.ProjectId ?? string.Empty;
-            var projectPayload = string.IsNullOrEmpty(projectId)
-                ? "{}"
-                : JsonSerializer.Serialize(new { project = projectId });
+            acc.AccessTokenLastUsedAt = DateTime.UtcNow;
 
-            // 2. Primary query: retrieveUserQuotaSummary returns grouped 5h / weekly / daily limits.
-            var (success, statusCode, body, errDetail) = await SendCloudCodePostAsync(
-                client, CloudCodeQuotaSummaryEndpoint, accessToken, projectPayload, cancellationToken);
+            var activeBaseUrl = GetCloudCodeBaseUrl(acc);
 
-            // If project payload failed unexpectedly, retry with empty payload (or discover if omitted).
-            if (!success && !string.IsNullOrEmpty(projectId) && statusCode == 400)
+            // 1. Discover companion project ID, tier metadata, and GCP-TOS routing switch.
+            var assistInfo = await DiscoverCloudCodeInfoAsync(client, activeBaseUrl, accessToken, cancellationToken);
+            if (assistInfo.UsesGcpTos == true)
             {
-                (success, statusCode, body, errDetail) = await SendCloudCodePostAsync(
-                    client, CloudCodeQuotaSummaryEndpoint, accessToken, "{}", cancellationToken);
+                acc.UsesGcpTos = true;
+                if (!string.Equals(activeBaseUrl, ProdCloudCodeBaseUrl, StringComparison.OrdinalIgnoreCase))
+                {
+                    activeBaseUrl = ProdCloudCodeBaseUrl;
+                    var prodAssist = await DiscoverCloudCodeInfoAsync(client, activeBaseUrl, accessToken, cancellationToken);
+                    if (!string.IsNullOrEmpty(prodAssist.ProjectId) || !string.IsNullOrEmpty(prodAssist.TierId))
+                    {
+                        assistInfo = prodAssist;
+                    }
+                }
+            }
+            else if (assistInfo.UsesGcpTos == false)
+            {
+                acc.UsesGcpTos = false;
             }
 
-            AccountQuotaParsedResult? parsed = null;
-            if (success && !string.IsNullOrWhiteSpace(body))
+            var (success, statusCode, body, errDetail, parsed, usedBaseUrl) = await QueryQuotaFromBaseUrlAsync(
+                client, activeBaseUrl, accessToken, assistInfo.ProjectId, cancellationToken);
+
+            // If daily-cloudcode-pa failed without an explicit UsesGcpTos=false (and wasn't 401),
+            // probe prod cloudcode-pa once so enterprise accounts without cached flag still resolve.
+            if ((!success || parsed == null || parsed.Groups.Count == 0)
+                && string.Equals(activeBaseUrl, DailyCloudCodeBaseUrl, StringComparison.OrdinalIgnoreCase)
+                && assistInfo.UsesGcpTos == null
+                && statusCode != 401)
             {
-                parsed = ParseQuotaResponse(body, sourceEndpoint: "retrieveUserQuotaSummary");
+                var prodAssist = await DiscoverCloudCodeInfoAsync(client, ProdCloudCodeBaseUrl, accessToken, cancellationToken);
+                var prodResult = await QueryQuotaFromBaseUrlAsync(
+                    client, ProdCloudCodeBaseUrl, accessToken, prodAssist.ProjectId ?? assistInfo.ProjectId, cancellationToken);
+                if (prodResult.Success && prodResult.Parsed != null && prodResult.Parsed.Groups.Count > 0)
+                {
+                    success = prodResult.Success;
+                    statusCode = prodResult.StatusCode;
+                    body = prodResult.Body;
+                    errDetail = prodResult.ErrorDetail;
+                    parsed = prodResult.Parsed;
+                    usedBaseUrl = prodResult.UsedBaseUrl;
+                    if (!string.IsNullOrEmpty(prodAssist.ProjectId) || !string.IsNullOrEmpty(prodAssist.TierId))
+                    {
+                        assistInfo = prodAssist;
+                    }
+                    if (prodAssist.UsesGcpTos.HasValue)
+                    {
+                        acc.UsesGcpTos = prodAssist.UsesGcpTos.Value;
+                    }
+                }
             }
 
-            // 3. Fallback to retrieveUserQuota or fetchAvailableModels if summary failed or yielded no pools.
             if (!success || parsed == null || parsed.Groups.Count == 0)
             {
-                var (qOk, _, qBody, qErr) = await SendCloudCodePostAsync(
-                    client, CloudCodeQuotaEndpoint, accessToken, projectPayload, cancellationToken);
-                if (qOk && !string.IsNullOrWhiteSpace(qBody))
-                {
-                    var qParsed = ParseQuotaResponse(qBody, sourceEndpoint: "retrieveUserQuota");
-                    if (qParsed.Groups.Count > 0)
-                    {
-                        success = true;
-                        body = qBody;
-                        parsed = qParsed;
-                    }
-                }
-                else if (!success && string.IsNullOrEmpty(errDetail))
-                {
-                    errDetail = qErr;
-                }
-
-                if (!success || parsed == null || parsed.Groups.Count == 0)
-                {
-                    var (mOk, _, mBody, mErr) = await SendCloudCodePostAsync(
-                        client, CloudCodeAvailableModelsEndpoint, accessToken, projectPayload, cancellationToken);
-                    if (mOk && !string.IsNullOrWhiteSpace(mBody))
-                    {
-                        var mParsed = ParseQuotaResponse(mBody, sourceEndpoint: "fetchAvailableModels");
-                        if (mParsed.Groups.Count > 0)
-                        {
-                            success = true;
-                            body = mBody;
-                            parsed = mParsed;
-                        }
-                    }
-                    else if (!success && string.IsNullOrEmpty(errDetail))
-                    {
-                        errDetail = mErr;
-                    }
-                }
-            }
-
-            if (!success || parsed == null)
-            {
-                var failureReason = string.IsNullOrWhiteSpace(errDetail) ? body : errDetail;
+                var failureReason = !string.IsNullOrWhiteSpace(errDetail)
+                    ? errDetail
+                    : (success ? "接口返回空配额分组" : body);
                 acc.QuotaLastError = failureReason;
                 SaveAccounts();
                 return (false, $"配额查询未就绪: {failureReason}");
             }
+
+            var projectId = assistInfo.ProjectId ?? string.Empty;
+            var projectPayload = string.IsNullOrEmpty(projectId)
+                ? "{}"
+                : JsonSerializer.Serialize(new { project = projectId });
 
             // 4. Experimental Argon probe: when summary lacks an Argon pool, inspect fetchAvailableModels
             //    (non-fatal; accounts without Argon entitlement keep Argon* = null cleanly).
             if (parsed.ArgonGroup == null)
             {
                 var (mOk, _, mBody, _) = await SendCloudCodePostAsync(
-                    client, CloudCodeAvailableModelsEndpoint, accessToken, projectPayload, cancellationToken, maxAttempts: 1);
+                    client, usedBaseUrl + FetchAvailableModelsPath, accessToken, projectPayload, cancellationToken, maxAttempts: 1);
                 if (mOk && !string.IsNullOrWhiteSpace(mBody))
                 {
                     MergeArgonQuotaFromPayload(parsed, mBody, "fetchAvailableModels");
@@ -937,7 +1200,7 @@ public class AccountPoolService
                 if (parsed.ArgonGroup == null)
                 {
                     var (qOk, _, qBody, _) = await SendCloudCodePostAsync(
-                        client, CloudCodeQuotaEndpoint, accessToken, projectPayload, cancellationToken, maxAttempts: 1);
+                        client, usedBaseUrl + RetrieveUserQuotaPath, accessToken, projectPayload, cancellationToken, maxAttempts: 1);
                     if (qOk && !string.IsNullOrWhiteSpace(qBody))
                     {
                         MergeArgonQuotaFromPayload(parsed, qBody, "retrieveUserQuota");
@@ -990,6 +1253,83 @@ public class AccountPoolService
             SaveAccounts();
             return (false, $"配额网络请求异常: {ex.Message}");
         }
+    }
+
+    private async Task<(bool Success, int StatusCode, string Body, string ErrorDetail, AccountQuotaParsedResult? Parsed, string UsedBaseUrl)>
+        QueryQuotaFromBaseUrlAsync(
+            HttpClient client,
+            string baseUrl,
+            string accessToken,
+            string? projectId,
+            CancellationToken cancellationToken)
+    {
+        var projectPayload = string.IsNullOrEmpty(projectId)
+            ? "{}"
+            : JsonSerializer.Serialize(new { project = projectId });
+
+        // Primary query: retrieveUserQuotaSummary returns grouped 5h / weekly / daily limits.
+        var (success, statusCode, body, errDetail) = await SendCloudCodePostAsync(
+            client, baseUrl + RetrieveUserQuotaSummaryPath, accessToken, projectPayload, cancellationToken);
+
+        // If project payload failed unexpectedly, retry with empty payload.
+        if (!success && !string.IsNullOrEmpty(projectId) && statusCode == 400)
+        {
+            (success, statusCode, body, errDetail) = await SendCloudCodePostAsync(
+                client, baseUrl + RetrieveUserQuotaSummaryPath, accessToken, "{}", cancellationToken);
+        }
+
+        AccountQuotaParsedResult? parsed = null;
+        if (success && !string.IsNullOrWhiteSpace(body))
+        {
+            parsed = ParseQuotaResponse(body, sourceEndpoint: "retrieveUserQuotaSummary");
+        }
+
+        // Fallback to retrieveUserQuota or fetchAvailableModels if summary failed or yielded no pools.
+        if (!success || parsed == null || parsed.Groups.Count == 0)
+        {
+            var (qOk, qStatus, qBody, qErr) = await SendCloudCodePostAsync(
+                client, baseUrl + RetrieveUserQuotaPath, accessToken, projectPayload, cancellationToken);
+            if (qOk && !string.IsNullOrWhiteSpace(qBody))
+            {
+                var qParsed = ParseQuotaResponse(qBody, sourceEndpoint: "retrieveUserQuota");
+                if (qParsed.Groups.Count > 0)
+                {
+                    success = true;
+                    statusCode = qStatus;
+                    body = qBody;
+                    parsed = qParsed;
+                }
+            }
+            else if (!success && string.IsNullOrEmpty(errDetail))
+            {
+                statusCode = qStatus;
+                errDetail = qErr;
+            }
+
+            if (!success || parsed == null || parsed.Groups.Count == 0)
+            {
+                var (mOk, mStatus, mBody, mErr) = await SendCloudCodePostAsync(
+                    client, baseUrl + FetchAvailableModelsPath, accessToken, projectPayload, cancellationToken);
+                if (mOk && !string.IsNullOrWhiteSpace(mBody))
+                {
+                    var mParsed = ParseQuotaResponse(mBody, sourceEndpoint: "fetchAvailableModels");
+                    if (mParsed.Groups.Count > 0)
+                    {
+                        success = true;
+                        statusCode = mStatus;
+                        body = mBody;
+                        parsed = mParsed;
+                    }
+                }
+                else if (!success && string.IsNullOrEmpty(errDetail))
+                {
+                    statusCode = mStatus;
+                    errDetail = mErr;
+                }
+            }
+        }
+
+        return (success, statusCode, body, errDetail, parsed, baseUrl);
     }
 
     private async Task<(bool success, int statusCode, string body, string errorDetail)> SendCloudCodePostAsync(
@@ -1052,40 +1392,71 @@ public class AccountPoolService
         return (false, lastStatus, lastBody, lastError);
     }
 
-    private sealed record CloudCodeAssistInfo(string? ProjectId, string? TierId, string? TierName);
+    private sealed record CloudCodeAssistInfo(string? ProjectId, string? TierId, string? TierName, bool? UsesGcpTos);
+
+    public static string BuildLoadCodeAssistPayload(string? baseDir = null)
+    {
+        return JsonSerializer.Serialize(new
+        {
+            metadata = new
+            {
+                ideType = "ANTIGRAVITY",
+                ideName = "antigravity",
+                ideVersion = ResolveAntigravityVersion(baseDir),
+                platform = "WINDOWS_AMD64",
+                pluginType = "GEMINI"
+            }
+        });
+    }
 
     private async Task<CloudCodeAssistInfo> DiscoverCloudCodeInfoAsync(
         HttpClient client,
+        string baseUrl,
         string accessToken,
         CancellationToken cancellationToken)
     {
         try
         {
+            var payload = BuildLoadCodeAssistPayload(_baseDir);
             var (ok, _, body, _) = await SendCloudCodePostAsync(
                 client,
-                CloudCodeAssistEndpoint,
+                baseUrl + LoadCodeAssistPath,
                 accessToken,
-                "{\"metadata\":{\"ideType\":\"ANTIGRAVITY\"}}",
+                payload,
                 cancellationToken);
             if (!ok || string.IsNullOrWhiteSpace(body))
             {
-                return new CloudCodeAssistInfo(null, null, null);
+                return new CloudCodeAssistInfo(null, null, null, null);
             }
 
             var node = JsonNode.Parse(body);
-            var projectId = node?["cloudaicompanionProject"]?.ToString()
+            var projectNode = node?["cloudaicompanionProject"];
+            var projectId = (projectNode as JsonObject)?["id"]?.ToString()
+                ?? projectNode?.ToString()
                 ?? node?["project"]?.ToString()
                 ?? node?["projectId"]?.ToString();
 
-            var tierNode = node?["paidTier"] ?? node?["currentTier"];
+            var paidTier = node?["paidTier"];
+            var currentTier = node?["currentTier"];
+            var tierNode = paidTier ?? currentTier;
             var tierId = tierNode?["id"]?.ToString();
             var tierName = tierNode?["name"]?.ToString();
-            return new CloudCodeAssistInfo(projectId, tierId, tierName);
+
+            bool? usesGcpTos = TryReadBool(paidTier?["usesGcpTos"] ?? paidTier?["uses_gcp_tos"])
+                ?? TryReadBool(currentTier?["usesGcpTos"] ?? currentTier?["uses_gcp_tos"]);
+
+            return new CloudCodeAssistInfo(projectId, tierId, tierName, usesGcpTos);
         }
         catch
         {
-            return new CloudCodeAssistInfo(null, null, null);
+            return new CloudCodeAssistInfo(null, null, null, null);
         }
+    }
+
+    private static bool? TryReadBool(JsonNode? node)
+    {
+        if (node == null) return null;
+        return bool.TryParse(node.ToString(), out var b) ? b : null;
     }
 
     /// <summary>
@@ -1276,11 +1647,36 @@ public class AccountPoolService
             var (poolKey, canonicalName) = ClassifyPool(modelId, displayName, modelId);
             if (argonOnly && poolKey != "argon") continue;
 
-            var quotaNode = modelNode["quotaInfo"] ?? modelNode;
-            if (quotaNode == null) continue;
+            var quotaObj = modelNode["quotaInfo"] as JsonObject;
+            bool modelDisabled = TryReadBool(modelNode["disabled"] ?? modelNode["isDisabled"]) == true;
 
-            var (bucketInfo, windowKind) = ExtractBucketInfo(quotaNode, utcNow, overrideBucketId: modelId, overrideDisplayName: displayName);
-            if (!bucketInfo.RemainingFraction.HasValue && !bucketInfo.RemainingAmount.HasValue) continue;
+            JsonNode? quotaNode = quotaObj;
+            bool defaultZeroWhenMissing = quotaObj != null && !modelDisabled;
+
+            if (quotaNode == null)
+            {
+                // Models without quotaInfo only contribute when explicit quota fields appear directly.
+                bool hasExplicitQuota = modelNode["remainingFraction"] != null
+                    || modelNode["remaining_fraction"] != null
+                    || modelNode["remainingAmount"] != null
+                    || modelNode["remaining_amount"] != null
+                    || modelNode["usedPercent"] != null;
+                if (!hasExplicitQuota) continue;
+                quotaNode = modelNode;
+            }
+
+            var (bucketInfo, windowKind) = ExtractBucketInfo(
+                quotaNode,
+                utcNow,
+                overrideBucketId: modelId,
+                overrideDisplayName: displayName,
+                defaultZeroWhenMissing: defaultZeroWhenMissing);
+            if (modelDisabled)
+            {
+                bucketInfo.Disabled = true;
+                bucketInfo.RemainingFraction = null;
+            }
+            if (!bucketInfo.Disabled && !bucketInfo.RemainingFraction.HasValue && !bucketInfo.RemainingAmount.HasValue) continue;
 
             var group = GetOrCreateGroup(result, poolKey, canonicalName, string.Empty, sourceEndpoint);
             AddBucketToGroup(group, bucketInfo, windowKind);
@@ -1293,6 +1689,10 @@ public class AccountPoolService
         return lower.StartsWith("tab_", StringComparison.Ordinal)
             || lower.StartsWith("chat_", StringComparison.Ordinal);
     }
+
+    private static readonly System.Text.RegularExpressions.Regex WordProPattern = new(
+        @"\bpro\b",
+        System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
     private static (string poolKey, string canonicalName) ClassifyPool(string primaryName, string description, string bucketHint)
     {
@@ -1312,9 +1712,14 @@ public class AccountPoolService
             || combined.Contains("gpt", StringComparison.Ordinal)
             || combined.Contains("3p", StringComparison.Ordinal)
             || combined.Contains("sonnet", StringComparison.Ordinal)
-            || combined.Contains("opus", StringComparison.Ordinal))
+            || combined.Contains("opus", StringComparison.Ordinal)
+            || combined.Contains("haiku", StringComparison.Ordinal)
+            || combined.Contains("anthropic", StringComparison.Ordinal)
+            || combined.Contains("openai", StringComparison.Ordinal))
         {
-            var displayName = string.IsNullOrWhiteSpace(primaryName) || primaryName.StartsWith("claude", StringComparison.OrdinalIgnoreCase) || primaryName.StartsWith("gpt", StringComparison.OrdinalIgnoreCase)
+            var displayName = string.IsNullOrWhiteSpace(primaryName)
+                || primaryName.StartsWith("claude", StringComparison.OrdinalIgnoreCase)
+                || primaryName.StartsWith("gpt", StringComparison.OrdinalIgnoreCase)
                 ? "Claude and GPT models"
                 : primaryName.Trim();
             return ("claude_gpt", displayName);
@@ -1322,10 +1727,10 @@ public class AccountPoolService
 
         if (combined.Contains("gemini", StringComparison.Ordinal)
             || combined.Contains("flash", StringComparison.Ordinal)
-            || combined.Contains("model", StringComparison.Ordinal)
-            || combined.Contains("pro", StringComparison.Ordinal))
+            || WordProPattern.IsMatch(combined))
         {
-            var displayName = string.IsNullOrWhiteSpace(primaryName) || primaryName.StartsWith("gemini-", StringComparison.OrdinalIgnoreCase)
+            var displayName = string.IsNullOrWhiteSpace(primaryName)
+                || primaryName.StartsWith("gemini-", StringComparison.OrdinalIgnoreCase)
                 ? "Gemini Models"
                 : primaryName.Trim();
             return ("gemini", displayName);
@@ -1370,20 +1775,21 @@ public class AccountPoolService
         JsonNode b,
         DateTime utcNow,
         string? overrideBucketId = null,
-        string? overrideDisplayName = null)
+        string? overrideDisplayName = null,
+        bool defaultZeroWhenMissing = true)
     {
         double? fraction = null;
         if (b["remainingFraction"] != null && double.TryParse(b["remainingFraction"]!.ToString(), System.Globalization.CultureInfo.InvariantCulture, out var f1))
         {
-            fraction = f1;
+            fraction = Math.Clamp(f1, 0.0, 1.0);
         }
         else if (b["remaining_fraction"] != null && double.TryParse(b["remaining_fraction"]!.ToString(), System.Globalization.CultureInfo.InvariantCulture, out var f2))
         {
-            fraction = f2;
+            fraction = Math.Clamp(f2, 0.0, 1.0);
         }
         else if (b["usedPercent"] != null && double.TryParse(b["usedPercent"]!.ToString(), System.Globalization.CultureInfo.InvariantCulture, out var u1))
         {
-            fraction = Math.Max(0.0, 1.0 - (u1 > 1.0 ? u1 / 100.0 : u1));
+            fraction = Math.Clamp(1.0 - (u1 > 1.0 ? u1 / 100.0 : u1), 0.0, 1.0);
         }
 
         long? amount = null;
@@ -1403,10 +1809,12 @@ public class AccountPoolService
             resetDt = dt.ToUniversalTime();
         }
 
-        bool disabled = false;
-        if (b["disabled"] != null && bool.TryParse(b["disabled"]!.ToString(), out var dis))
+        bool disabled = TryReadBool(b["disabled"] ?? b["isDisabled"]) == true;
+
+        // Proto3 JSON omits default scalar 0.0 for remainingFraction on enabled buckets/quotaInfo.
+        if (defaultZeroWhenMissing && !disabled && !fraction.HasValue && (!amount.HasValue || amount.Value == 0))
         {
-            disabled = dis;
+            fraction = 0.0;
         }
 
         var bucketId = overrideBucketId
@@ -1417,7 +1825,12 @@ public class AccountPoolService
             ?? string.Empty;
 
         var displayName = overrideDisplayName ?? b["displayName"]?.ToString() ?? string.Empty;
-        var rawWindow = b["window"]?.ToString() ?? b["windowDuration"]?.ToString() ?? b["duration"]?.ToString() ?? string.Empty;
+        var rawWindow = b["window"]?.ToString()
+            ?? b["windowDuration"]?.ToString()
+            ?? b["duration"]?.ToString()
+            ?? b["refreshWindowLabel"]?.ToString()
+            ?? b["refresh_window_label"]?.ToString()
+            ?? string.Empty;
 
         var windowKind = NormalizeWindow(rawWindow, bucketId, displayName, resetDt, utcNow);
 
@@ -1497,24 +1910,45 @@ public class AccountPoolService
     private static void AddBucketToGroup(QuotaGroupInfo group, QuotaBucketInfo bucket, string windowKind)
     {
         group.Buckets.Add(bucket);
-        if (!bucket.RemainingFraction.HasValue) return;
+        if (bucket.Disabled || !bucket.RemainingFraction.HasValue) return;
 
-        static double? MinFraction(double? current, double incoming) =>
-            current.HasValue ? Math.Min(current.Value, incoming) : incoming;
+        static void ApplyMin(ref double? targetFraction, ref DateTime? targetReset, double incomingFraction, DateTime? incomingReset)
+        {
+            if (!targetFraction.HasValue || incomingFraction < targetFraction.Value)
+            {
+                targetFraction = incomingFraction;
+                if (incomingReset.HasValue) targetReset = incomingReset;
+            }
+            else
+            {
+                targetReset ??= incomingReset;
+            }
+        }
 
+        double? f;
+        DateTime? r;
         switch (windowKind)
         {
             case "5h":
-                group.FiveHourFraction = MinFraction(group.FiveHourFraction, bucket.RemainingFraction.Value);
-                group.FiveHourResetTime ??= bucket.ResetTime;
+                f = group.FiveHourFraction;
+                r = group.FiveHourResetTime;
+                ApplyMin(ref f, ref r, bucket.RemainingFraction.Value, bucket.ResetTime);
+                group.FiveHourFraction = f;
+                group.FiveHourResetTime = r;
                 break;
             case "daily":
-                group.DailyFraction = MinFraction(group.DailyFraction, bucket.RemainingFraction.Value);
-                group.DailyResetTime ??= bucket.ResetTime;
+                f = group.DailyFraction;
+                r = group.DailyResetTime;
+                ApplyMin(ref f, ref r, bucket.RemainingFraction.Value, bucket.ResetTime);
+                group.DailyFraction = f;
+                group.DailyResetTime = r;
                 break;
             case "weekly":
-                group.WeeklyFraction = MinFraction(group.WeeklyFraction, bucket.RemainingFraction.Value);
-                group.WeeklyResetTime ??= bucket.ResetTime;
+                f = group.WeeklyFraction;
+                r = group.WeeklyResetTime;
+                ApplyMin(ref f, ref r, bucket.RemainingFraction.Value, bucket.ResetTime);
+                group.WeeklyFraction = f;
+                group.WeeklyResetTime = r;
                 break;
         }
     }
@@ -1638,10 +2072,11 @@ public class AccountPoolService
 
         timer.Elapsed += (_, _) =>
         {
-            // A. Watch oauth_creds.json inside the sandbox.
-            var credFile = Path.Combine(tempGemini, "oauth_creds.json");
-            if (File.Exists(credFile))
+            // A. Watch 2.35.1 fallback token file and legacy oauth_creds.json inside the sandbox.
+            foreach (var fileName in new[] { StandaloneOAuthTokenFileName, LegacyOauthCredsFileName })
             {
+                var credFile = Path.Combine(tempGemini, fileName);
+                if (!File.Exists(credFile)) continue;
                 try
                 {
                     var fileContent = File.ReadAllText(credFile);
@@ -1744,16 +2179,18 @@ public class AccountPoolService
             }
             else
             {
-                // One last check.
-                var credFile = Path.Combine(tempGemini, "oauth_creds.json");
-                if (File.Exists(credFile))
+                // One last check across 2.35.1 fallback file and legacy oauth_creds.json.
+                foreach (var fileName in new[] { StandaloneOAuthTokenFileName, LegacyOauthCredsFileName })
                 {
+                    var credFile = Path.Combine(tempGemini, fileName);
+                    if (!File.Exists(credFile)) continue;
                     try
                     {
                         var cred = CredentialCodec.Parse(File.ReadAllText(credFile));
                         if (cred?.HasIdentity == true)
                         {
                             profile = NewProfileFrom(cred);
+                            break;
                         }
                     }
                     catch { }
@@ -1766,12 +2203,18 @@ public class AccountPoolService
                 if (existing != null)
                 {
                     // Re-capturing the same address is an explicit re-login, so the identity
-                    // fields are replaced along with the token cache.
+                    // fields and credential lifecycle state are replaced along with the token cache.
                     existing.RefreshToken = profile.RefreshToken;
+                    existing.RefreshTokenExpiresAt = profile.RefreshTokenExpiresAt;
+                    existing.RefreshTokenLastUsedAt = null;
+                    existing.RefreshTokenRevoked = false;
+                    existing.OAuthClientId = null;
+                    existing.FailedRefreshAttempts = 0;
                     existing.IdToken = profile.IdToken;
                     existing.TokenType = profile.TokenType;
                     existing.AccessToken = profile.AccessToken;
                     existing.AccessTokenExpiresAt = profile.AccessTokenExpiresAt;
+                    existing.AccessTokenLastUsedAt = null;
                     existing.LastActiveAt = DateTime.UtcNow;
                     profile = existing;
                 }
@@ -1788,9 +2231,22 @@ public class AccountPoolService
                 // The captured refresh token is guaranteed to be live, so it is the most
                 // reliable moment to certify an OAuth client pair. Fire and forget: capture
                 // has already succeeded and must not block on a 2 s binary scan.
+                var capturedProfile = profile;
                 _ = Task.Run(async () =>
                 {
-                    try { await EnsureOAuthClientAsync(null); }
+                    try
+                    {
+                        var coreDir = Path.Combine(_baseDir, "core");
+                        if (!Directory.Exists(coreDir)) return;
+                        var resolved = await OAuthClientExtractor.ResolveAsync(coreDir, capturedProfile.RefreshToken, proxy);
+                        if (resolved != null)
+                        {
+                            resolved.Verified = true;
+                            SaveOAuthClient(resolved, _baseDir);
+                            capturedProfile.OAuthClientId = resolved.ClientId;
+                            TrySaveAccounts();
+                        }
+                    }
                     catch (Exception ex) { DiagLog.Swallowed("account.oauth-client-post-capture", ex); }
                 });
             }
@@ -1908,10 +2364,37 @@ public class AccountPoolService
         catch { }
     }
 
-    /// <summary>Writes google_accounts.json, oauth_creds.json and installation_id into a .gemini directory.</summary>
+    /// <summary>
+    /// Removes stale fallback credential files (<c>jetski-standalone-oauth-token</c>, legacy
+    /// <c>oauth_creds.json</c>) and the keyring-unavailable marker from a <c>.gemini</c> folder.
+    /// </summary>
+    public static void ClearTransientGeminiCredentialFiles(string geminiDir)
+    {
+        if (string.IsNullOrWhiteSpace(geminiDir)) return;
+
+        foreach (var path in new[]
+        {
+            Path.Combine(geminiDir, StandaloneOAuthTokenFileName),
+            Path.Combine(geminiDir, LegacyOauthCredsFileName),
+            Path.Combine(geminiDir, "cache", KeyringUnavailableMarkerFileName)
+        })
+        {
+            try
+            {
+                if (File.Exists(path)) File.Delete(path);
+            }
+            catch (Exception ex)
+            {
+                DiagLog.Swallowed("account.clear-transient-cred", ex);
+            }
+        }
+    }
+
+    /// <summary>Writes google_accounts.json and installation_id into a .gemini directory, clearing stale token files.</summary>
     public static void InjectAccountToGeminiDir(string geminiDir, AccountProfile account)
     {
         Directory.CreateDirectory(geminiDir);
+        ClearTransientGeminiCredentialFiles(geminiDir);
 
         // 1. google_accounts.json
         var accountsObj = new JsonObject
@@ -1922,10 +2405,6 @@ public class AccountPoolService
         File.WriteAllText(Path.Combine(geminiDir, "google_accounts.json"), accountsObj.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
 
         // 2. installation_id (isolates the device fingerprint)
-        //
-        // oauth_creds.json is deliberately not written. Antigravity 2.29 no longer references
-        // that file at all — the language server reads its token from the Windows credential
-        // slot — so writing it only suggested a channel that no longer exists.
         if (!string.IsNullOrEmpty(account.InstallationId))
         {
             File.WriteAllText(Path.Combine(geminiDir, "installation_id"), account.InstallationId);

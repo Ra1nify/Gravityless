@@ -3,11 +3,10 @@
 /// <summary>
 /// One pooled account.
 ///
-/// Credentials are stored as typed fields rather than an opaque JSON blob. The identity half —
-/// email, refresh token, id token — is written once when the account is captured and never
-/// modified afterwards, so an account cannot drift into holding another account's identity.
-/// Only the access token and its expiry change over time; both are a cache that can be thrown
-/// away and rebuilt from the refresh token.
+/// Credentials are stored as typed fields rather than an opaque JSON blob. Email is the
+/// stable identity anchor; the refresh token is the long-lived base credential (updated only
+/// on re-capture or if the OAuth token endpoint explicitly rotates it), while the access
+/// token is a short-lived runtime credential rebuilt from the refresh token.
 /// </summary>
 public class AccountProfile
 {
@@ -28,30 +27,61 @@ public class AccountProfile
 
     public DateTime LastActiveAt { get; set; } = DateTime.UtcNow;
 
-    // ---------------------------------------------------------------- identity (immutable)
+    // ---------------------------------------------------------------- refresh token (long-lived base credential)
 
     /// <summary>
-    /// The refresh token. This is the account's identity as far as the token endpoint is
-    /// concerned: everything else is derived from it. Set at capture, never written again.
+    /// The long-lived refresh token used to mint short-lived access tokens at the OAuth
+    /// token endpoint. Set at capture and only updated if re-captured or rotated by Google.
     /// </summary>
     public string RefreshToken { get; set; } = string.Empty;
+
+    public DateTime? RefreshTokenLastUsedAt { get; set; }
+
+    /// <summary>
+    /// Refresh token expiration when Google returns <c>refresh_token_expires_in</c>;
+    /// null when the server issues a non-expiring desktop token.
+    /// </summary>
+    public DateTime? RefreshTokenExpiresAt { get; set; }
+
+    /// <summary>True when the token endpoint rejected the refresh token with <c>invalid_grant</c>.</summary>
+    public bool RefreshTokenRevoked { get; set; }
+
+    /// <summary>OAuth client ID that issued/verified this account's refresh token (personal vs GCP-TOS).</summary>
+    public string? OAuthClientId { get; set; }
 
     /// <summary>OpenID token carrying the email claim. Also part of the identity.</summary>
     public string? IdToken { get; set; }
 
     public string TokenType { get; set; } = "Bearer";
 
-    // ---------------------------------------------------------------- access token (cache)
+    // ---------------------------------------------------------------- access token (short-lived runtime credential)
 
     public string? AccessToken { get; set; }
 
     public DateTime? AccessTokenExpiresAt { get; set; }
 
+    public DateTime? AccessTokenLastUsedAt { get; set; }
+
+    /// <summary>True when CloudCode reports <c>usesGcpTos</c>, routing requests to prod <c>cloudcode-pa</c>.</summary>
+    public bool UsesGcpTos { get; set; }
+
     /// <summary>True when the cached access token is missing or within a minute of expiring.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
     public bool NeedsRefresh =>
         string.IsNullOrEmpty(AccessToken)
         || AccessTokenExpiresAt is null
         || AccessTokenExpiresAt.Value <= DateTime.UtcNow.AddMinutes(1);
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool IsAccessTokenExpired =>
+        string.IsNullOrEmpty(AccessToken)
+        || AccessTokenExpiresAt is null
+        || AccessTokenExpiresAt.Value <= DateTime.UtcNow;
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool IsRefreshTokenExpired =>
+        RefreshTokenRevoked
+        || (RefreshTokenExpiresAt.HasValue && RefreshTokenExpiresAt.Value <= DateTime.UtcNow);
 
     // ---------------------------------------------------------------- runtime lock
 

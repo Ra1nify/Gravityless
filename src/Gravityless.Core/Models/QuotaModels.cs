@@ -66,6 +66,7 @@ public class QuotaGroupInfo
             Consider(WeeklyFraction);
             foreach (var bucket in Buckets)
             {
+                if (bucket.Disabled) continue;
                 Consider(bucket.RemainingFraction);
             }
             return min;
@@ -80,7 +81,7 @@ public class QuotaGroupInfo
         FiveHourFraction.HasValue
         || WeeklyFraction.HasValue
         || DailyFraction.HasValue
-        || Buckets.Any(b => b.RemainingFraction.HasValue);
+        || Buckets.Any(b => !b.Disabled && b.RemainingFraction.HasValue);
 
     /// <summary>Formats non-null window fractions for compact list summaries.</summary>
     public string FormatWindowsSummary()
@@ -102,7 +103,7 @@ public class QuotaGroupInfo
         // Preserve any non-standard windows (e.g. 5d) not already mapped into 5h/daily/weekly.
         foreach (var bucket in Buckets)
         {
-            if (!bucket.RemainingFraction.HasValue) continue;
+            if (bucket.Disabled || !bucket.RemainingFraction.HasValue) continue;
             var w = bucket.Window.Trim().ToLowerInvariant();
             if (w is "5h" or "daily" or "1d" or "24h" or "weekly" or "7d") continue;
             var label = string.IsNullOrWhiteSpace(w) ? "quota" : w;
