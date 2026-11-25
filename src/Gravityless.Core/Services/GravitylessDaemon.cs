@@ -94,6 +94,7 @@ public class GravitylessDaemon : IDisposable
             IsRunning = true;
         }
 
+        SaveThemeConfig();
         Task.Run(ListenLoop);
     }
 
@@ -372,6 +373,7 @@ public class GravitylessDaemon : IDisposable
     {
         ThemeMode = NormalizeThemeMode(mode);
         SaveThemeConfig();
+        BroadcastThemeReload();
     }
     public void UpdateTheme(string material, double opacity, double? popupOpacity = null, string? accent = null)
     {

@@ -51,8 +51,8 @@ public partial class App : Application
             return;
         }
 
-        // Apply the persisted mode before subscribing to system changes.
-        ThemeMode = ReadThemeModeFromDisk();
+        // Apply the persisted material, opacity, and theme mode before MainWindow initializes.
+        InitializePersistedThemeDefaults();
         ApplySystemTheme(ResolveTheme(ThemeMode));
         ApplicationThemeManager.Changed += OnSystemThemeChanged;
 
@@ -181,25 +181,39 @@ public partial class App : Application
         _ => "auto"
     };
 
-    /// <summary>Reads ThemeMode from data/theme_config.json; runs before any window exists.</summary>
-    private static string ReadThemeModeFromDisk()
+    /// <summary>Loads ThemeMode and backdrop defaults from data/theme_config.json before any window exists.</summary>
+    private static void InitializePersistedThemeDefaults()
     {
         try
         {
             var file = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "data", "theme_config.json");
             if (!File.Exists(file))
             {
-                return "auto";
+                ThemeMode = "auto";
+                return;
             }
 
             using var document = JsonDocument.Parse(File.ReadAllText(file));
-            return document.RootElement.TryGetProperty("ThemeMode", out var value)
-                ? NormalizeThemeMode(value.GetString())
+            var root = document.RootElement;
+            ThemeMode = root.TryGetProperty("ThemeMode", out var modeVal)
+                ? NormalizeThemeMode(modeVal.GetString())
                 : "auto";
+
+            var material = root.TryGetProperty("Material", out var matVal) && matVal.ValueKind == JsonValueKind.String
+                ? matVal.GetString() ?? "mica"
+                : "mica";
+            var opacity = root.TryGetProperty("Opacity", out var opVal) && opVal.TryGetDouble(out var op)
+                ? op
+                : 0.72;
+            var popupOpacity = root.TryGetProperty("PopupOpacity", out var popVal) && popVal.TryGetDouble(out var pop) && pop > 0
+                ? pop
+                : 0.60;
+
+            ThemeService.Update(material, opacity, popupOpacity);
         }
         catch
         {
-            return "auto";
+            ThemeMode = "auto";
         }
     }
 

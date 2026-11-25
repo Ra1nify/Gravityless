@@ -15,7 +15,7 @@ public class PatchService
     /// Version stamp for the runtime bootstrap script. Bump whenever template semantics change
     /// to trigger re-generation of gravityless-bootstrap.js.
     /// </summary>
-    private const int PatchVersion = 58;
+    private const int PatchVersion = 59;
     private static readonly string PatchStamp = $"/* GRAVITYLESS_BOOTSTRAP_VERSION: {PatchVersion} */";
 
     /// <summary>Unpacks an Electron ASAR archive into outputDir using only managed code.</summary>
@@ -674,21 +674,50 @@ __PATCH_VERSION_STAMP__
     let currentNoiseBase = Number(loadedConfig?.NoiseBaseAlpha) || 0.35;
     let daemonPort = process.env.GRAVITYLESS_DAEMON_PORT || loadedConfig?.DaemonPort;
 
+    function scheduleWindowMaterialSync(win, delayMs) {
+        if (!win || win.isDestroyed()) return;
+        const run = () => {
+            try {
+                if (!win.isDestroyed()) applyMaterialToWindow(win, currentMaterial);
+            } catch (_) {}
+        };
+        if (typeof delayMs === 'number' && delayMs > 0) {
+            setTimeout(run, delayMs);
+        } else if (typeof setImmediate === 'function') {
+            setImmediate(run);
+        } else {
+            setTimeout(run, 0);
+        }
+    }
+
     function applyWindowEffects(win) {
         if (!win || win.isDestroyed()) return;
-        if (currentMaterial === 'none') return;
 
-        // Window reveals only when first frame is rendered to prevent transparent frame flash
-        win.once('ready-to-show', () => {
-            try { win.show(); } catch (_) {}
-        });
-
-        if (typeof win.setBackgroundMaterial === 'function') {
-            try { win.setBackgroundMaterial(currentMaterial); } catch (_) {}
+        // BrowserWindow exposes ready-to-show; BaseWindow does not.
+        if (typeof win.webContents === 'object' && win.webContents) {
             win.once('ready-to-show', () => {
-                try { win.setBackgroundMaterial(currentMaterial); } catch (_) {}
+                try {
+                    if (currentMaterial !== 'none') win.show();
+                } catch (_) {}
+                scheduleWindowMaterialSync(win, 0);
             });
         }
+
+        if (currentMaterial !== 'none' && typeof win.setBackgroundMaterial === 'function') {
+            try { win.setBackgroundMaterial(currentMaterial); } catch (_) {}
+        }
+
+        // Re-apply after initial addChildView / maximize / window show on Windows DWM (BaseWindow in Electron 44+).
+        scheduleWindowMaterialSync(win, 0);
+        scheduleWindowMaterialSync(win, 80);
+
+        const reapply = () => scheduleWindowMaterialSync(win, 20);
+        win.once('show', reapply);
+        win.on('show', reapply);
+        win.on('maximize', reapply);
+        win.on('unmaximize', reapply);
+        win.on('restore', reapply);
+        win.once('focus', reapply);
     }
 
     // ── 7. Hook BrowserWindow & BaseWindow ──
@@ -902,7 +931,9 @@ __PATCH_VERSION_STAMP__
                             }
                         }
                     } catch (_) {}
-                    return origAddChild.call(this, view, index);
+                    const result = origAddChild.call(this, view, index);
+                    scheduleWindowMaterialSync(win, 0);
+                    return result;
                 };
             }
 
@@ -1466,104 +1497,134 @@ body[data-agy-theme].dark .agy-sidebar-raised {
         } catch (_) {}
     }
 
-    // ── 9. Auto-attach dom-ready on all webContents ──
+    // ── 9. Auto-attach dom-ready & did-finish-load on all webContents ──
+    let windowMaterialDebounceTimer = null;
+    function scheduleApplyMaterialToWindows() {
+        if (windowMaterialDebounceTimer) return;
+        windowMaterialDebounceTimer = setTimeout(function() {
+            windowMaterialDebounceTimer = null;
+            applyMaterialToWindows(currentMaterial);
+        }, 30);
+    }
+
     if (electron.app) {
         electron.app.on('web-contents-created', function(_evt, contents) {
             try {
-                contents.on('dom-ready', function() {
+                const applyOnContents = function() {
                     try { attach(contents); } catch (_) {}
+                    scheduleApplyMaterialToWindows();
+                };
+                contents.on('dom-ready', function() {
+                    applyOnContents();
                     try { injectI18n(contents); } catch (_) {}
                 });
+                contents.on('did-finish-load', applyOnContents);
             } catch (_) {}
         });
+
+        if (typeof electron.app.whenReady === 'function') {
+            electron.app.whenReady().then(function() {
+                scheduleApplyMaterialToWindows();
+            }).catch(function() {});
+        }
     }
 
     // ── 10. Daemon SSE & Real-time Theme Sync ──
-    if (!daemonPort) return;
-
-    function applyMaterialToWindows(material) {
-        if (!material) return;
+    function applyMaterialToWindow(win, material) {
+        if (!win || !material) return;
         const revertAll = (material === 'none');
         const solidBg = currentLight ? '#FAFAFA' : '#131313';
-        const baseWins = typeof electron.BaseWindow?.getAllWindows === 'function' ? electron.BaseWindow.getAllWindows() : [];
-        const browserWins = typeof electron.BrowserWindow?.getAllWindows === 'function' ? electron.BrowserWindow.getAllWindows() : [];
-        for (const win of [...baseWins, ...browserWins]) {
-            try {
-                if (win.isDestroyed()) continue;
-                if (typeof win.setBackgroundMaterial === 'function') {
-                    win.setBackgroundMaterial(revertAll ? 'none' : material);
-                }
-                if (typeof win.setBackgroundColor === 'function') {
-                    win.setBackgroundColor(revertAll ? solidBg : '#00000000');
-                }
-                if (typeof win.setTitleBarOverlay === 'function') {
+        try {
+            if (win.isDestroyed()) return;
+            if (typeof win.setBackgroundMaterial === 'function') {
+                try { win.setBackgroundMaterial(revertAll ? 'none' : material); } catch (_) {}
+            }
+            if (typeof win.setBackgroundColor === 'function') {
+                try { win.setBackgroundColor(revertAll ? solidBg : '#00000000'); } catch (_) {}
+            }
+            if (typeof win.setTitleBarOverlay === 'function') {
+                try {
                     win.setTitleBarOverlay({
                         color: revertAll ? solidBg : '#00000000',
                         symbolColor: currentLight ? '#383A42' : '#FAFAFA'
                     });
-                }
-                if (win.contentView && Array.isArray(win.contentView.children)) {
-                    const kids = win.contentView.children;
-                    const hubContents = win.webContents;
-                    const contentSize = typeof win.getContentSize === 'function' ? win.getContentSize() : (typeof win.getSize === 'function' ? win.getSize() : [1280, 800]);
-                    const [w, h] = contentSize;
+                } catch (_) {}
+            }
+            if (win.contentView && Array.isArray(win.contentView.children)) {
+                const kids = win.contentView.children;
+                const hubContents = win.webContents;
+                const contentSize = typeof win.getContentSize === 'function' ? win.getContentSize() : (typeof win.getSize === 'function' ? win.getSize() : [1280, 800]);
+                const [w, h] = contentSize;
 
-                    for (let k = 0; k < kids.length; k++) {
-                        const child = kids[k];
-                        const isHubWcv = (hubContents && child.webContents === hubContents) || (k === 1);
-                        const isCurtain = child && (child.__gravitylessIsCurtain !== undefined
-                            ? child.__gravitylessIsCurtain
-                            : (k === 0 && Boolean(child.webContents)));
-                        const isClipView = (k === 0 && child && !child.webContents && !isCurtain);
+                for (let k = 0; k < kids.length; k++) {
+                    const child = kids[k];
+                    const isHubWcv = hubContents ? Boolean(child && child.webContents === hubContents) : (k === 1);
+                    const isCurtain = child && (child.__gravitylessIsCurtain !== undefined
+                        ? child.__gravitylessIsCurtain
+                        : (k === 0 && Boolean(child.webContents) && !isHubWcv));
+                    const isClipView = Boolean(child && !child.webContents && !isCurtain && !isHubWcv);
 
-                        if (isHubWcv) {
-                            if (typeof child.__origSetVisible === 'function') {
-                                child.__origSetVisible.call(child, true);
-                            } else if (typeof child.setVisible === 'function') {
-                                child.setVisible(true);
-                            }
-                            if (typeof child.__origSetBg === 'function') {
-                                child.__origSetBg.call(child, revertAll ? solidBg : '#00000000');
-                            } else if (typeof child.setBackgroundColor === 'function') {
-                                child.setBackgroundColor(revertAll ? solidBg : '#00000000');
-                            }
-                            if (typeof child.__origSetBounds === 'function') {
-                                child.__origSetBounds.call(child, { x: 0, y: 0, width: w, height: h });
-                            } else if (typeof child.setBounds === 'function') {
-                                child.setBounds({ x: 0, y: 0, width: w, height: h });
-                            }
-                        } else if (isCurtain) {
-                            // 2-layer curtainView underlay: hide/0x0 under material mode, restore on none
-                            if (typeof child.__origSetVisible === 'function') {
-                                child.__origSetVisible.call(child, revertAll ? true : false);
-                            } else if (typeof child.setVisible === 'function') {
-                                child.setVisible(revertAll ? true : false);
-                            }
-                            if (typeof child.__origSetBg === 'function') {
-                                child.__origSetBg.call(child, revertAll ? solidBg : '#00000000');
-                            } else if (typeof child.setBackgroundColor === 'function') {
-                                child.setBackgroundColor(revertAll ? solidBg : '#00000000');
-                            }
-                            if (typeof child.__origSetBounds === 'function') {
-                                child.__origSetBounds.call(child, revertAll ? { x: 0, y: 0, width: w, height: h } : { x: 0, y: 0, width: 0, height: 0 });
-                            } else if (typeof child.setBounds === 'function') {
-                                child.setBounds(revertAll ? { x: 0, y: 0, width: w, height: h } : { x: 0, y: 0, width: 0, height: 0 });
-                            }
-                        } else if (isClipView) {
-                            // 3-layer clipView: never alter visibility or bounds; only sync background color
-                            if (typeof child.__origSetBg === 'function') {
-                                child.__origSetBg.call(child, revertAll ? solidBg : '#00000000');
-                            } else if (typeof child.setBackgroundColor === 'function') {
-                                child.setBackgroundColor(revertAll ? solidBg : '#00000000');
-                            }
-                        } else if (!revertAll && typeof child.setBackgroundColor === 'function') {
-                            child.setBackgroundColor('#00000000');
+                    if (isHubWcv) {
+                        if (typeof child.__origSetVisible === 'function') {
+                            child.__origSetVisible.call(child, true);
+                        } else if (typeof child.setVisible === 'function') {
+                            child.setVisible(true);
                         }
+                        if (typeof child.__origSetBg === 'function') {
+                            child.__origSetBg.call(child, revertAll ? solidBg : '#00000000');
+                        } else if (typeof child.setBackgroundColor === 'function') {
+                            child.setBackgroundColor(revertAll ? solidBg : '#00000000');
+                        }
+                        if (typeof child.__origSetBounds === 'function') {
+                            child.__origSetBounds.call(child, { x: 0, y: 0, width: w, height: h });
+                        } else if (typeof child.setBounds === 'function') {
+                            child.setBounds({ x: 0, y: 0, width: w, height: h });
+                        }
+                    } else if (isCurtain) {
+                        // 2-layer curtainView underlay: hide/0x0 under material mode, restore on none
+                        if (typeof child.__origSetVisible === 'function') {
+                            child.__origSetVisible.call(child, revertAll ? true : false);
+                        } else if (typeof child.setVisible === 'function') {
+                            child.setVisible(revertAll ? true : false);
+                        }
+                        if (typeof child.__origSetBg === 'function') {
+                            child.__origSetBg.call(child, revertAll ? solidBg : '#00000000');
+                        } else if (typeof child.setBackgroundColor === 'function') {
+                            child.setBackgroundColor(revertAll ? solidBg : '#00000000');
+                        }
+                        if (typeof child.__origSetBounds === 'function') {
+                            child.__origSetBounds.call(child, revertAll ? { x: 0, y: 0, width: w, height: h } : { x: 0, y: 0, width: 0, height: 0 });
+                        } else if (typeof child.setBounds === 'function') {
+                            child.setBounds(revertAll ? { x: 0, y: 0, width: w, height: h } : { x: 0, y: 0, width: 0, height: 0 });
+                        }
+                    } else if (isClipView) {
+                        // 3-layer clipView: never alter visibility or bounds; only sync background color
+                        if (typeof child.__origSetBg === 'function') {
+                            child.__origSetBg.call(child, revertAll ? solidBg : '#00000000');
+                        } else if (typeof child.setBackgroundColor === 'function') {
+                            child.setBackgroundColor(revertAll ? solidBg : '#00000000');
+                        }
+                    } else if (!revertAll && typeof child.setBackgroundColor === 'function') {
+                        child.setBackgroundColor('#00000000');
                     }
                 }
-            } catch (_) {}
+            }
+        } catch (_) {}
+    }
+
+    function applyMaterialToWindows(material) {
+        if (!material) return;
+        const baseWins = typeof electron.BaseWindow?.getAllWindows === 'function' ? electron.BaseWindow.getAllWindows() : [];
+        const browserWins = typeof electron.BrowserWindow?.getAllWindows === 'function' ? electron.BrowserWindow.getAllWindows() : [];
+        const seen = new Set();
+        for (const win of [...baseWins, ...browserWins]) {
+            if (!win || seen.has(win)) continue;
+            seen.add(win);
+            applyMaterialToWindow(win, material);
         }
     }
+
+    if (!daemonPort) return;
 
     function syncTheme() {
         http.get('http://127.0.0.1:' + daemonPort + '/api/v1/theme.json?t=' + Date.now(), function(res) {
@@ -1597,7 +1658,7 @@ body[data-agy-theme].dark .agy-sidebar-raised {
         const req = http.get('http://127.0.0.1:' + daemonPort + '/api/v1/events', function(res) {
             res.on('data', function(chunk) {
                 const str = chunk.toString();
-                if (str.indexOf('theme_reload') >= 0) syncTheme();
+                if (str.indexOf('event: connected') >= 0 || str.indexOf('theme_reload') >= 0) syncTheme();
                 if (str.indexOf('i18n_reload') >= 0) {
                     let newLang = '';
                     for (const line of str.split('\n')) {

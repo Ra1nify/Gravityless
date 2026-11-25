@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Interop;
 using System.Windows.Media;
 using Wpf.Ui.Controls;
 
@@ -75,9 +76,17 @@ public static class ThemeService
     {
         if (window == null) return;
 
-        window.WindowBackdropType = CurrentBackdropType;
+        var backdrop = CurrentBackdropType;
+        window.WindowBackdropType = backdrop;
         window.Background = Brushes.Transparent;
         window.WindowCornerPreference = WindowCornerPreference.Round;
+
+        // Explicitly re-apply onto an already-created HWND even when WindowBackdropType matches the XAML default.
+        if (new WindowInteropHelper(window).Handle != IntPtr.Zero)
+        {
+            WindowBackdrop.RemoveBackground(window);
+            WindowBackdrop.ApplyBackdrop(window, backdrop);
+        }
 
         // The main window manages its own surface overlay.
         if (window is not MainWindow)

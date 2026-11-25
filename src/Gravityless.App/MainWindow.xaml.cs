@@ -156,22 +156,18 @@ public partial class MainWindow
                 if (mat == "none" && NoneRadioBtn != null)
                 {
                     NoneRadioBtn.IsChecked = true;
-                    this.WindowBackdropType = Wpf.Ui.Controls.WindowBackdropType.None;
                 }
                 else if (mat == "acrylic" && AcrylicRadioBtn != null)
                 {
                     AcrylicRadioBtn.IsChecked = true;
-                    this.WindowBackdropType = Wpf.Ui.Controls.WindowBackdropType.Acrylic;
                 }
                 else if (mat == "tabbed" && TabbedRadioBtn != null)
                 {
                     TabbedRadioBtn.IsChecked = true;
-                    this.WindowBackdropType = Wpf.Ui.Controls.WindowBackdropType.Tabbed;
                 }
                 else if (MicaRadioBtn != null)
                 {
                     MicaRadioBtn.IsChecked = true;
-                    this.WindowBackdropType = Wpf.Ui.Controls.WindowBackdropType.Mica;
                 }
 
                 // Slider shows transparency: 0% = opaque, 100% = fully transparent.
@@ -221,6 +217,9 @@ public partial class MainWindow
                 {
                     AccentInteractionCheck.IsChecked = _daemon.AccentInteraction;
                 }
+
+                ThemeService.Update(mat, opacity, _daemon.PopupOpacity);
+                ThemeService.ApplyTheme(this);
                 ApplyHostWindowOpacity(opacity);
             }
             finally
