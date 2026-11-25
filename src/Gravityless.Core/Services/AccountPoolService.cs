@@ -264,8 +264,10 @@ public class AccountPoolService
     public const string OAuthTokenEndpoint = "https://oauth2.googleapis.com/token";
     public const string CloudCodeQuotaSummaryEndpoint = "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary";
     public const string CloudCodeQuotaEndpoint = "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota";
+    public const string CloudCodeAvailableModelsEndpoint = "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels";
     public const string CloudCodeAssistEndpoint = "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist";
-    public static string DefaultUserAgent => $"antigravity/{AppVersion.ReadOfficialVersion()}";
+    private const string FallbackAntigravityVersion = "2.35.1";
+    public static string DefaultUserAgent => $"antigravity/{ResolveAntigravityVersion(null)}";
 
     /// <summary>
     /// OAuth client pair used for token refresh, read from <c>data/oauth_client.json</c>.
@@ -476,12 +478,18 @@ public class AccountPoolService
                         acc.FailedRefreshAttempts = 0;
                         acc.LastActiveAt = DateTime.UtcNow;
 
-                        // Also refresh the 5h/7d model quota fractions and reset times.
+                        // Also refresh the 5h/weekly model quota groups and reset times.
+                        bool quotaOk = false;
+                        string quotaMsg = string.Empty;
                         try
                         {
-                            await FetchAndSaveAccountQuotaInternalAsync(acc, newAccessToken, client, cancellationToken);
+                            (quotaOk, quotaMsg) = await FetchAndSaveAccountQuotaInternalAsync(acc, newAccessToken, client, cancellationToken);
                         }
-                        catch { }
+                        catch (Exception qEx)
+                        {
+                            quotaMsg = qEx.Message;
+                            acc.QuotaLastError = qEx.Message;
+                        }
 
                         SaveAccounts();
 
@@ -494,7 +502,9 @@ public class AccountPoolService
                         var accDir = GetAccountStorageDir(acc.Id);
                         InjectAccountToGeminiDir(accDir, acc);
 
-                        return (true, "Token 刷新成功！模型配额已同步就绪。");
+                        return quotaOk
+                            ? (true, "Token 刷新成功！模型配额已同步就绪。")
+                            : (true, $"Token 刷新成功，但配额查询失败: {quotaMsg}");
                     }
                 }
                 else
@@ -711,7 +721,75 @@ public class AccountPoolService
         }
     }
 
-    /// <summary>Queries the quota gateway for the 5h/7d remaining fractions (0.0-1.0) and reset times.</summary>
+    /// <summary>
+    /// Resolves the Antigravity client version sent in the <c>User-Agent</c> header.
+    /// Reads <c>core/resources/app/package.json</c> when present and compares against the
+    /// compiled <see cref="AppVersion"/>, ensuring Google CloudCode never strips newer quota
+    /// groups (such as Gemini or Argon) due to an outdated or test fallback version string.
+    /// </summary>
+    public static string ResolveAntigravityVersion(string? baseDir = null)
+    {
+        Version? bestVer = null;
+        string? bestStr = null;
+
+        void Consider(string? raw)
+        {
+            if (TryParseThreePartVersion(raw, out var ver, out var normalized) && ver!.Major >= 2)
+            {
+                if (bestVer == null || ver > bestVer)
+                {
+                    bestVer = ver;
+                    bestStr = normalized;
+                }
+            }
+        }
+
+        Consider(AppVersion.ReadOfficialVersion());
+
+        if (!string.IsNullOrWhiteSpace(baseDir))
+        {
+            try
+            {
+                var pkgPath = Path.Combine(baseDir, "core", "resources", "app", "package.json");
+                if (File.Exists(pkgPath))
+                {
+                    using var doc = JsonDocument.Parse(File.ReadAllText(pkgPath));
+                    if (doc.RootElement.TryGetProperty("version", out var vProp))
+                    {
+                        Consider(vProp.GetString());
+                    }
+                }
+            }
+            catch { }
+        }
+
+        Consider(FallbackAntigravityVersion);
+        return bestStr ?? FallbackAntigravityVersion;
+    }
+
+    private string GetUserAgent() => $"antigravity/{ResolveAntigravityVersion(_baseDir)}";
+
+    private static bool TryParseThreePartVersion(string? raw, out Version? parsed, out string normalized)
+    {
+        parsed = null;
+        normalized = string.Empty;
+        if (string.IsNullOrWhiteSpace(raw)) return false;
+
+        var parts = raw.Trim().TrimStart('v', 'V').Split('.');
+        if (parts.Length < 3) return false;
+        if (!int.TryParse(parts[0], out var major) ||
+            !int.TryParse(parts[1], out var minor) ||
+            !int.TryParse(parts[2], out var patch))
+        {
+            return false;
+        }
+
+        parsed = new Version(major, minor, patch);
+        normalized = $"{major}.{minor}.{patch}";
+        return true;
+    }
+
+    /// <summary>Queries the quota gateway for structured pool quotas, windows, and experimental Argon status.</summary>
     public async Task<(bool success, string message)> FetchAccountQuotaAsync(
         string accountId,
         ProxyConfig? proxyConfig = null,
@@ -720,12 +798,20 @@ public class AccountPoolService
         var acc = _accounts.FirstOrDefault(a => a.Id == accountId);
         if (acc == null) return (false, "找不到指定的账号");
 
+        bool justRefreshed = false;
         // Ensure token is fresh before querying quota (Google OAuth access tokens expire after 1h).
         if (string.IsNullOrWhiteSpace(acc.AccessToken) ||
             (acc.AccessTokenExpiresAt.HasValue && acc.AccessTokenExpiresAt.Value <= DateTime.UtcNow.AddMinutes(2)))
         {
             var (refreshOk, refreshMsg) = await RefreshTokenAsync(accountId, proxyConfig, autoRetry: true, cancellationToken);
             if (!refreshOk) return (false, $"刷新凭据失败: {refreshMsg}");
+            justRefreshed = true;
+        }
+
+        // RefreshTokenAsync already fetched quota; avoid duplicate HTTP round-trips when it succeeded cleanly.
+        if (justRefreshed && string.IsNullOrEmpty(acc.QuotaLastError))
+        {
+            return (true, acc.HasArgonEntitlement ? "模型配额同步成功（含 Argon）" : "模型配额同步成功");
         }
 
         var accessToken = acc.AccessToken;
@@ -740,8 +826,14 @@ public class AccountPoolService
         // If unauthorized (401), access token might have been invalidated; refresh and retry once.
         if (!result.success && result.message.Contains("401", StringComparison.OrdinalIgnoreCase))
         {
-            var (refreshOk, _) = await RefreshTokenAsync(accountId, proxyConfig, autoRetry: true, cancellationToken);
-            if (refreshOk && !string.IsNullOrWhiteSpace(acc.AccessToken))
+            var (refreshOk, refreshMsg) = await RefreshTokenAsync(accountId, proxyConfig, autoRetry: true, cancellationToken);
+            if (!refreshOk) return (false, $"刷新凭据失败: {refreshMsg}");
+            if (string.IsNullOrEmpty(acc.QuotaLastError))
+            {
+                return (true, acc.HasArgonEntitlement ? "模型配额同步成功（含 Argon）" : "模型配额同步成功");
+            }
+
+            if (!string.IsNullOrWhiteSpace(acc.AccessToken))
             {
                 result = await FetchAndSaveAccountQuotaInternalAsync(acc, acc.AccessToken, client, cancellationToken);
             }
@@ -758,41 +850,105 @@ public class AccountPoolService
     {
         try
         {
-            // Try retrieveUserQuotaSummary for the grouped 5h / 7d quota first.
-            var (success, body) = await SendRetrieveUserQuotaSummaryRequestAsync(client, accessToken, "", cancellationToken);
+            // 1. Discover companion project ID and tier metadata (helps summary + exposes tier).
+            var assistInfo = await DiscoverCloudCodeInfoAsync(client, accessToken, cancellationToken);
+            var projectId = assistInfo.ProjectId ?? string.Empty;
+            var projectPayload = string.IsNullOrEmpty(projectId)
+                ? "{}"
+                : JsonSerializer.Serialize(new { project = projectId });
 
-            // If empty payload failed, try discovering the companion project and retry summary.
-            if (!success && (body.Contains("project", StringComparison.OrdinalIgnoreCase) || body.Contains("INVALID_ARGUMENT", StringComparison.OrdinalIgnoreCase)))
+            // 2. Primary query: retrieveUserQuotaSummary returns grouped 5h / weekly / daily limits.
+            var (success, statusCode, body, errDetail) = await SendCloudCodePostAsync(
+                client, CloudCodeQuotaSummaryEndpoint, accessToken, projectPayload, cancellationToken);
+
+            // If project payload failed unexpectedly, retry with empty payload (or discover if omitted).
+            if (!success && !string.IsNullOrEmpty(projectId) && statusCode == 400)
             {
-                var discoveredProject = await DiscoverCloudCodeProjectAsync(client, accessToken, cancellationToken);
-                if (!string.IsNullOrEmpty(discoveredProject))
-                {
-                    (success, body) = await SendRetrieveUserQuotaSummaryRequestAsync(client, accessToken, discoveredProject, cancellationToken);
-                }
+                (success, statusCode, body, errDetail) = await SendCloudCodePostAsync(
+                    client, CloudCodeQuotaSummaryEndpoint, accessToken, "{}", cancellationToken);
             }
 
-            // Fall back to retrieveUserQuota if retrieveUserQuotaSummary is not supported.
-            if (!success)
+            AccountQuotaParsedResult? parsed = null;
+            if (success && !string.IsNullOrWhiteSpace(body))
             {
-                (success, body) = await SendRetrieveUserQuotaRequestAsync(client, accessToken, "", cancellationToken);
+                parsed = ParseQuotaResponse(body, sourceEndpoint: "retrieveUserQuotaSummary");
+            }
 
-                if (!success && (body.Contains("project", StringComparison.OrdinalIgnoreCase) || body.Contains("INVALID_ARGUMENT", StringComparison.OrdinalIgnoreCase)))
+            // 3. Fallback to retrieveUserQuota or fetchAvailableModels if summary failed or yielded no pools.
+            if (!success || parsed == null || parsed.Groups.Count == 0)
+            {
+                var (qOk, _, qBody, qErr) = await SendCloudCodePostAsync(
+                    client, CloudCodeQuotaEndpoint, accessToken, projectPayload, cancellationToken);
+                if (qOk && !string.IsNullOrWhiteSpace(qBody))
                 {
-                    var discoveredProject = await DiscoverCloudCodeProjectAsync(client, accessToken, cancellationToken);
-                    if (!string.IsNullOrEmpty(discoveredProject))
+                    var qParsed = ParseQuotaResponse(qBody, sourceEndpoint: "retrieveUserQuota");
+                    if (qParsed.Groups.Count > 0)
                     {
-                        (success, body) = await SendRetrieveUserQuotaRequestAsync(client, accessToken, discoveredProject, cancellationToken);
+                        success = true;
+                        body = qBody;
+                        parsed = qParsed;
+                    }
+                }
+                else if (!success && string.IsNullOrEmpty(errDetail))
+                {
+                    errDetail = qErr;
+                }
+
+                if (!success || parsed == null || parsed.Groups.Count == 0)
+                {
+                    var (mOk, _, mBody, mErr) = await SendCloudCodePostAsync(
+                        client, CloudCodeAvailableModelsEndpoint, accessToken, projectPayload, cancellationToken);
+                    if (mOk && !string.IsNullOrWhiteSpace(mBody))
+                    {
+                        var mParsed = ParseQuotaResponse(mBody, sourceEndpoint: "fetchAvailableModels");
+                        if (mParsed.Groups.Count > 0)
+                        {
+                            success = true;
+                            body = mBody;
+                            parsed = mParsed;
+                        }
+                    }
+                    else if (!success && string.IsNullOrEmpty(errDetail))
+                    {
+                        errDetail = mErr;
                     }
                 }
             }
 
-            if (!success)
+            if (!success || parsed == null)
             {
-                return (false, $"配额查询未就绪: {body}");
+                var failureReason = string.IsNullOrWhiteSpace(errDetail) ? body : errDetail;
+                acc.QuotaLastError = failureReason;
+                SaveAccounts();
+                return (false, $"配额查询未就绪: {failureReason}");
             }
 
-            // Parse the response (5h / 7d windows).
-            var parsed = ParseQuotaResponse(body);
+            // 4. Experimental Argon probe: when summary lacks an Argon pool, inspect fetchAvailableModels
+            //    (non-fatal; accounts without Argon entitlement keep Argon* = null cleanly).
+            if (parsed.ArgonGroup == null)
+            {
+                var (mOk, _, mBody, _) = await SendCloudCodePostAsync(
+                    client, CloudCodeAvailableModelsEndpoint, accessToken, projectPayload, cancellationToken, maxAttempts: 1);
+                if (mOk && !string.IsNullOrWhiteSpace(mBody))
+                {
+                    MergeArgonQuotaFromPayload(parsed, mBody, "fetchAvailableModels");
+                }
+
+                if (parsed.ArgonGroup == null)
+                {
+                    var (qOk, _, qBody, _) = await SendCloudCodePostAsync(
+                        client, CloudCodeQuotaEndpoint, accessToken, projectPayload, cancellationToken, maxAttempts: 1);
+                    if (qOk && !string.IsNullOrWhiteSpace(qBody))
+                    {
+                        MergeArgonQuotaFromPayload(parsed, qBody, "retrieveUserQuota");
+                    }
+                }
+            }
+
+            // 5. Apply structured pools + backward-compatible scalar fields (strictly isolated per pool).
+            parsed.SyncLegacyScalarProperties();
+            acc.QuotaGroups = parsed.Groups;
+
             acc.Gemini5hFraction = parsed.Gemini5hFraction;
             acc.Gemini5hResetTime = parsed.Gemini5hReset;
             acc.Gemini7dFraction = parsed.Gemini7dFraction;
@@ -803,101 +959,155 @@ public class AccountPoolService
             acc.Claude7dFraction = parsed.Claude7dFraction;
             acc.Claude7dResetTime = parsed.Claude7dReset;
 
+            acc.Argon5hFraction = parsed.Argon5hFraction;
+            acc.Argon5hResetTime = parsed.Argon5hReset;
+            acc.Argon7dFraction = parsed.Argon7dFraction;
+            acc.Argon7dResetTime = parsed.Argon7dReset;
+
+            if (!string.IsNullOrWhiteSpace(assistInfo.TierId))
+            {
+                acc.AccountTierId = assistInfo.TierId;
+            }
+            if (!string.IsNullOrWhiteSpace(assistInfo.TierName))
+            {
+                acc.AccountTierName = assistInfo.TierName;
+            }
+            if (!string.IsNullOrWhiteSpace(parsed.Description))
+            {
+                acc.QuotaSummaryDescription = parsed.Description;
+            }
+
+            acc.QuotaLastError = null;
             acc.QuotaLastFetchedAt = DateTime.UtcNow;
             acc.QuotaRawText = body;
 
             SaveAccounts();
-            return (true, "模型配额同步成功");
+            return (true, parsed.ArgonGroup != null ? "模型配额同步成功（含 Argon）" : "模型配额同步成功");
         }
         catch (Exception ex)
         {
+            acc.QuotaLastError = ex.Message;
+            SaveAccounts();
             return (false, $"配额网络请求异常: {ex.Message}");
         }
     }
 
-    private static async Task<(bool success, string body)> SendRetrieveUserQuotaSummaryRequestAsync(
+    private async Task<(bool success, int statusCode, string body, string errorDetail)> SendCloudCodePostAsync(
+        HttpClient client,
+        string endpoint,
+        string accessToken,
+        string payloadJson,
+        CancellationToken cancellationToken,
+        int maxAttempts = 2)
+    {
+        var userAgent = GetUserAgent();
+        string lastError = string.Empty;
+        int lastStatus = 0;
+        string lastBody = string.Empty;
+
+        for (int attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                using var req = new HttpRequestMessage(HttpMethod.Post, endpoint);
+                req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
+                // Clear factory default ("Gravityless") so CloudCode only receives antigravity/<ver>.
+                req.Headers.UserAgent.Clear();
+                req.Headers.TryAddWithoutValidation("User-Agent", userAgent);
+                req.Content = new StringContent(payloadJson, System.Text.Encoding.UTF8, "application/json");
+
+                using var resp = await client.SendAsync(req, cancellationToken);
+                lastStatus = (int)resp.StatusCode;
+                lastBody = await resp.Content.ReadAsStringAsync(cancellationToken);
+
+                if (resp.IsSuccessStatusCode)
+                {
+                    return (true, lastStatus, lastBody, string.Empty);
+                }
+
+                lastError = $"HTTP {lastStatus}: {(lastBody.Length > 200 ? lastBody[..200] : lastBody)}";
+                bool transientHttp = lastStatus == 429 || lastStatus >= 500;
+                if (!transientHttp || attempt >= maxAttempts)
+                {
+                    return (false, lastStatus, lastBody, lastError);
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                lastError = ex.Message;
+                if (attempt >= maxAttempts)
+                {
+                    return (false, lastStatus, lastBody, lastError);
+                }
+            }
+
+            await Task.Delay(250 * attempt, cancellationToken);
+        }
+
+        return (false, lastStatus, lastBody, lastError);
+    }
+
+    private sealed record CloudCodeAssistInfo(string? ProjectId, string? TierId, string? TierName);
+
+    private async Task<CloudCodeAssistInfo> DiscoverCloudCodeInfoAsync(
         HttpClient client,
         string accessToken,
-        string projectId = "",
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken)
     {
         try
         {
-            using var req = new HttpRequestMessage(HttpMethod.Post, CloudCodeQuotaSummaryEndpoint);
-            req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
-            req.Headers.TryAddWithoutValidation("User-Agent", DefaultUserAgent);
-            var payload = string.IsNullOrEmpty(projectId)
-                ? "{}"
-                : JsonSerializer.Serialize(new { project = projectId });
-            req.Content = new StringContent(payload, System.Text.Encoding.UTF8, "application/json");
+            var (ok, _, body, _) = await SendCloudCodePostAsync(
+                client,
+                CloudCodeAssistEndpoint,
+                accessToken,
+                "{\"metadata\":{\"ideType\":\"ANTIGRAVITY\"}}",
+                cancellationToken);
+            if (!ok || string.IsNullOrWhiteSpace(body))
+            {
+                return new CloudCodeAssistInfo(null, null, null);
+            }
 
-            using var resp = await client.SendAsync(req, cancellationToken);
-            var body = await resp.Content.ReadAsStringAsync(cancellationToken);
-            return (resp.IsSuccessStatusCode, body);
-        }
-        catch
-        {
-            return (false, "");
-        }
-    }
-
-    private static async Task<(bool success, string body)> SendRetrieveUserQuotaRequestAsync(
-        HttpClient client,
-        string accessToken,
-        string projectId,
-        CancellationToken cancellationToken)
-    {
-        using var req = new HttpRequestMessage(HttpMethod.Post, CloudCodeQuotaEndpoint);
-        req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
-        req.Headers.TryAddWithoutValidation("User-Agent", DefaultUserAgent);
-
-        var payload = string.IsNullOrEmpty(projectId) 
-            ? "{}" 
-            : JsonSerializer.Serialize(new { project = projectId });
-        req.Content = new StringContent(payload, System.Text.Encoding.UTF8, "application/json");
-
-        using var resp = await client.SendAsync(req, cancellationToken);
-        var body = await resp.Content.ReadAsStringAsync(cancellationToken);
-        return (resp.IsSuccessStatusCode, body);
-    }
-
-    private static async Task<string?> DiscoverCloudCodeProjectAsync(
-        HttpClient client,
-        string accessToken,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            using var req = new HttpRequestMessage(HttpMethod.Post, CloudCodeAssistEndpoint);
-            req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
-            req.Headers.TryAddWithoutValidation("User-Agent", DefaultUserAgent);
-            req.Content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
-
-            using var resp = await client.SendAsync(req, cancellationToken);
-            if (!resp.IsSuccessStatusCode) return null;
-
-            var body = await resp.Content.ReadAsStringAsync(cancellationToken);
             var node = JsonNode.Parse(body);
-            return node?["cloudaicompanionProject"]?.ToString() 
-                ?? node?["project"]?.ToString() 
+            var projectId = node?["cloudaicompanionProject"]?.ToString()
+                ?? node?["project"]?.ToString()
                 ?? node?["projectId"]?.ToString();
+
+            var tierNode = node?["paidTier"] ?? node?["currentTier"];
+            var tierId = tierNode?["id"]?.ToString();
+            var tierName = tierNode?["name"]?.ToString();
+            return new CloudCodeAssistInfo(projectId, tierId, tierName);
         }
         catch
         {
-            return null;
+            return new CloudCodeAssistInfo(null, null, null);
         }
     }
 
-    public static AccountQuotaParsedResult ParseQuotaResponse(string json)
+    /// <summary>
+    /// Parses CloudCode quota JSON into field-matched <see cref="QuotaGroupInfo"/> entries
+    /// (<c>Name</c>, <c>5h</c>, <c>Weekly</c>, <c>Daily</c>, extra windows) and populates
+    /// backward-compatible scalar properties.
+    /// </summary>
+    public static AccountQuotaParsedResult ParseQuotaResponse(string json, string sourceEndpoint = "retrieveUserQuotaSummary")
     {
         var result = new AccountQuotaParsedResult();
+        if (string.IsNullOrWhiteSpace(json)) return result;
+
         try
         {
             var root = JsonNode.Parse(json);
             if (root == null) return result;
 
-            // Path A: summary mode (groups[]).
-            var groupsNode = root["groups"] as JsonArray 
+            var utcNow = DateTime.UtcNow;
+            result.Description = root["description"]?.ToString();
+
+            // Path A: grouped summary mode (retrieveUserQuotaSummary).
+            var groupsNode = root["groups"] as JsonArray
                 ?? root["command"]?["data"]?["groups"] as JsonArray
                 ?? root["data"]?["groups"] as JsonArray;
 
@@ -906,122 +1116,261 @@ public class AccountPoolService
                 foreach (var grp in groupsNode)
                 {
                     if (grp == null) continue;
-                    var name = (grp["displayName"]?.ToString() 
-                        ?? grp["name"]?.ToString() 
-                        ?? grp["description"]?.ToString() 
-                        ?? grp["groupId"]?.ToString() 
-                        ?? grp["id"]?.ToString() ?? "").ToLowerInvariant();
-                    bool isClaudeGpt = name.Contains("claude") || name.Contains("gpt") || name.Contains("3p") || name.Contains("sonnet");
-                    bool isGemini = name.Contains("gemini") || (!isClaudeGpt && (name.Contains("model") || name.Contains("pro")));
+                    var rawName = grp["displayName"]?.ToString()
+                        ?? grp["name"]?.ToString()
+                        ?? grp["groupId"]?.ToString()
+                        ?? grp["id"]?.ToString()
+                        ?? string.Empty;
+                    var rawDesc = grp["description"]?.ToString() ?? string.Empty;
 
                     var buckets = grp["buckets"] as JsonArray;
+                    var bucketHint = buckets == null
+                        ? string.Empty
+                        : string.Join(" ", buckets
+                            .OfType<JsonNode>()
+                            .Select(b => b["bucketId"]?.ToString() ?? b["modelId"]?.ToString() ?? b["id"]?.ToString() ?? string.Empty));
+
+                    var (poolKey, canonicalName) = ClassifyPool(rawName, rawDesc, bucketHint);
+                    var group = GetOrCreateGroup(result, poolKey, canonicalName, rawDesc, sourceEndpoint);
+
                     if (buckets != null)
                     {
                         foreach (var b in buckets)
                         {
                             if (b == null) continue;
-                            var (fraction, resetDt, is5h) = ExtractBucket(b);
-                            if (isClaudeGpt)
-                            {
-                                if (is5h)
-                                {
-                                    result.Claude5hFraction = fraction ?? result.Claude5hFraction;
-                                    result.Claude5hReset = resetDt ?? result.Claude5hReset;
-                                }
-                                else
-                                {
-                                    result.Claude7dFraction = fraction ?? result.Claude7dFraction;
-                                    result.Claude7dReset = resetDt ?? result.Claude7dReset;
-                                }
-                            }
-                            else if (isGemini)
-                            {
-                                if (is5h)
-                                {
-                                    result.Gemini5hFraction = fraction ?? result.Gemini5hFraction;
-                                    result.Gemini5hReset = resetDt ?? result.Gemini5hReset;
-                                }
-                                else
-                                {
-                                    result.Gemini7dFraction = fraction ?? result.Gemini7dFraction;
-                                    result.Gemini7dReset = resetDt ?? result.Gemini7dReset;
-                                }
-                            }
+                            var (bucketInfo, windowKind) = ExtractBucketInfo(b, utcNow);
+                            AddBucketToGroup(group, bucketInfo, windowKind);
                         }
                     }
                 }
-
-                return result;
             }
 
-            // Path B: flat buckets[] mode.
-            var bucketsNode = root["buckets"] as JsonArray 
+            // Optional flat top-level buckets[] inside summary or retrieveUserQuota response.
+            var bucketsNode = root["buckets"] as JsonArray
                 ?? root["userQuota"]?["buckets"] as JsonArray;
 
-            if (bucketsNode != null)
+            if (bucketsNode != null && bucketsNode.Count > 0)
             {
                 foreach (var item in bucketsNode)
                 {
                     if (item == null) continue;
-                    var modelId = (item["modelId"]?.ToString() ?? item["model_id"]?.ToString() ?? "").ToLowerInvariant();
+                    var modelId = (item["modelId"]?.ToString()
+                        ?? item["model_id"]?.ToString()
+                        ?? item["bucketId"]?.ToString()
+                        ?? item["id"]?.ToString()
+                        ?? string.Empty).Trim();
 
                     // Skip internal completion (tab_*) and probe (chat_*) buckets.
-                    if (modelId.StartsWith("tab_") || modelId.StartsWith("chat_"))
-                    {
-                        continue;
-                    }
+                    if (ShouldSkipInternalModel(modelId)) continue;
 
-                    bool isClaudeGpt = modelId.Contains("claude") || modelId.Contains("gpt") || modelId.Contains("sonnet") || modelId.Contains("opus");
-                    bool isGemini = modelId.StartsWith("gemini") || modelId.Contains("gemini");
+                    var itemDisplayName = item["displayName"]?.ToString() ?? string.Empty;
+                    var (poolKey, canonicalName) = ClassifyPool(modelId, itemDisplayName, modelId);
+                    var group = GetOrCreateGroup(result, poolKey, canonicalName, string.Empty, sourceEndpoint);
 
-                    if (!isClaudeGpt && !isGemini)
-                    {
-                        continue;
-                    }
-
-                    var (fraction, resetDt, is5h) = ExtractBucket(item);
-
-                    if (isClaudeGpt)
-                    {
-                        if (is5h)
-                        {
-                            result.Claude5hFraction = fraction ?? result.Claude5hFraction;
-                            result.Claude5hReset = resetDt ?? result.Claude5hReset;
-                        }
-                        else
-                        {
-                            result.Claude7dFraction = fraction ?? result.Claude7dFraction;
-                            result.Claude7dReset = resetDt ?? result.Claude7dReset;
-                        }
-                    }
-                    else if (isGemini)
-                    {
-                        if (is5h)
-                        {
-                            result.Gemini5hFraction = fraction ?? result.Gemini5hFraction;
-                            result.Gemini5hReset = resetDt ?? result.Gemini5hReset;
-                        }
-                        else
-                        {
-                            result.Gemini7dFraction = fraction ?? result.Gemini7dFraction;
-                            result.Gemini7dReset = resetDt ?? result.Gemini7dReset;
-                            // Weekly reset fired: mirror the value onto the 5h fields if not set.
-                            if (!result.Gemini5hFraction.HasValue)
-                            {
-                                result.Gemini5hFraction = fraction;
-                                result.Gemini5hReset = resetDt;
-                            }
-                        }
-                    }
+                    var (bucketInfo, windowKind) = ExtractBucketInfo(item, utcNow);
+                    AddBucketToGroup(group, bucketInfo, windowKind);
                 }
+            }
+
+            // Path C: fetchAvailableModels response (models map -> per-model quotaInfo).
+            if (root["models"] is JsonObject modelsObj)
+            {
+                ParseModelsObjectIntoResult(result, modelsObj, utcNow, argonOnly: false, sourceEndpoint: sourceEndpoint);
             }
         }
         catch { }
 
+        result.SyncLegacyScalarProperties();
         return result;
     }
 
-    private static (double? fraction, DateTime? resetDt, bool is5h) ExtractBucket(JsonNode b)
+    /// <summary>
+    /// Extracts only experimental Argon entries from a fallback <c>fetchAvailableModels</c> or
+    /// <c>retrieveUserQuota</c> payload without disturbing existing summary groups.
+    /// </summary>
+    public static void MergeArgonQuotaFromPayload(
+        AccountQuotaParsedResult result,
+        string payloadJson,
+        string sourceEndpoint)
+    {
+        if (string.IsNullOrWhiteSpace(payloadJson)) return;
+        try
+        {
+            var root = JsonNode.Parse(payloadJson);
+            if (root == null) return;
+
+            var utcNow = DateTime.UtcNow;
+
+            if (root["groups"] is JsonArray groupsNode)
+            {
+                foreach (var grp in groupsNode)
+                {
+                    if (grp == null) continue;
+                    var rawName = grp["displayName"]?.ToString() ?? grp["name"]?.ToString() ?? string.Empty;
+                    var rawDesc = grp["description"]?.ToString() ?? string.Empty;
+                    var buckets = grp["buckets"] as JsonArray;
+                    var hint = buckets == null
+                        ? string.Empty
+                        : string.Join(" ", buckets.OfType<JsonNode>().Select(b => b["bucketId"]?.ToString() ?? b["modelId"]?.ToString() ?? string.Empty));
+
+                    var (poolKey, canonicalName) = ClassifyPool(rawName, rawDesc, hint);
+                    if (poolKey != "argon") continue;
+
+                    var group = GetOrCreateGroup(result, poolKey, canonicalName, rawDesc, sourceEndpoint);
+                    if (buckets != null)
+                    {
+                        foreach (var b in buckets)
+                        {
+                            if (b == null) continue;
+                            var (bucketInfo, windowKind) = ExtractBucketInfo(b, utcNow);
+                            AddBucketToGroup(group, bucketInfo, windowKind);
+                        }
+                    }
+                }
+            }
+
+            if (root["buckets"] is JsonArray bucketsNode)
+            {
+                foreach (var item in bucketsNode)
+                {
+                    if (item == null) continue;
+                    var id = item["modelId"]?.ToString() ?? item["model_id"]?.ToString() ?? item["bucketId"]?.ToString() ?? string.Empty;
+                    var dn = item["displayName"]?.ToString() ?? string.Empty;
+                    if (ShouldSkipInternalModel(id)) continue;
+
+                    var (poolKey, canonicalName) = ClassifyPool(id, dn, id);
+                    if (poolKey != "argon") continue;
+
+                    var group = GetOrCreateGroup(result, poolKey, canonicalName, string.Empty, sourceEndpoint);
+                    var (bucketInfo, windowKind) = ExtractBucketInfo(item, utcNow);
+                    AddBucketToGroup(group, bucketInfo, windowKind);
+                }
+            }
+
+            if (root["models"] is JsonObject modelsObj)
+            {
+                ParseModelsObjectIntoResult(result, modelsObj, utcNow, argonOnly: true, sourceEndpoint: sourceEndpoint);
+            }
+
+            // Discard synthesized empty Argon group if no numeric quota values existed.
+            result.Groups.RemoveAll(g => g.PoolKey == "argon" && !g.HasAnyQuota);
+            result.SyncLegacyScalarProperties();
+        }
+        catch { }
+    }
+
+    private static void ParseModelsObjectIntoResult(
+        AccountQuotaParsedResult result,
+        JsonObject modelsObj,
+        DateTime utcNow,
+        bool argonOnly,
+        string sourceEndpoint)
+    {
+        foreach (var kv in modelsObj)
+        {
+            if (kv.Value is not JsonObject modelNode) continue;
+            var modelId = kv.Key;
+            if (ShouldSkipInternalModel(modelId)) continue;
+
+            var displayName = modelNode["displayName"]?.ToString() ?? string.Empty;
+            var (poolKey, canonicalName) = ClassifyPool(modelId, displayName, modelId);
+            if (argonOnly && poolKey != "argon") continue;
+
+            var quotaNode = modelNode["quotaInfo"] ?? modelNode;
+            if (quotaNode == null) continue;
+
+            var (bucketInfo, windowKind) = ExtractBucketInfo(quotaNode, utcNow, overrideBucketId: modelId, overrideDisplayName: displayName);
+            if (!bucketInfo.RemainingFraction.HasValue && !bucketInfo.RemainingAmount.HasValue) continue;
+
+            var group = GetOrCreateGroup(result, poolKey, canonicalName, string.Empty, sourceEndpoint);
+            AddBucketToGroup(group, bucketInfo, windowKind);
+        }
+    }
+
+    private static bool ShouldSkipInternalModel(string modelId)
+    {
+        var lower = modelId.ToLowerInvariant();
+        return lower.StartsWith("tab_", StringComparison.Ordinal)
+            || lower.StartsWith("chat_", StringComparison.Ordinal);
+    }
+
+    private static (string poolKey, string canonicalName) ClassifyPool(string primaryName, string description, string bucketHint)
+    {
+        var combined = $"{primaryName} {description} {bucketHint}".ToLowerInvariant();
+
+        // Check Argon BEFORE Gemini so "Gemini 4 Argon" / "gemini-4-argon" never overwrites Gemini Flash/Pro.
+        if (combined.Contains("argon", StringComparison.Ordinal))
+        {
+            var displayName = !string.IsNullOrWhiteSpace(primaryName) &&
+                              primaryName.Contains("argon", StringComparison.OrdinalIgnoreCase)
+                ? primaryName.Trim()
+                : "Gemini 4 Argon";
+            return ("argon", displayName);
+        }
+
+        if (combined.Contains("claude", StringComparison.Ordinal)
+            || combined.Contains("gpt", StringComparison.Ordinal)
+            || combined.Contains("3p", StringComparison.Ordinal)
+            || combined.Contains("sonnet", StringComparison.Ordinal)
+            || combined.Contains("opus", StringComparison.Ordinal))
+        {
+            var displayName = string.IsNullOrWhiteSpace(primaryName) || primaryName.StartsWith("claude", StringComparison.OrdinalIgnoreCase) || primaryName.StartsWith("gpt", StringComparison.OrdinalIgnoreCase)
+                ? "Claude and GPT models"
+                : primaryName.Trim();
+            return ("claude_gpt", displayName);
+        }
+
+        if (combined.Contains("gemini", StringComparison.Ordinal)
+            || combined.Contains("flash", StringComparison.Ordinal)
+            || combined.Contains("model", StringComparison.Ordinal)
+            || combined.Contains("pro", StringComparison.Ordinal))
+        {
+            var displayName = string.IsNullOrWhiteSpace(primaryName) || primaryName.StartsWith("gemini-", StringComparison.OrdinalIgnoreCase)
+                ? "Gemini Models"
+                : primaryName.Trim();
+            return ("gemini", displayName);
+        }
+
+        // Preserve any unrecognized/new quota pool cleanly using its name.
+        var cleanName = string.IsNullOrWhiteSpace(primaryName) ? "Unknown Pool" : primaryName.Trim();
+        var slug = System.Text.RegularExpressions.Regex.Replace(cleanName.ToLowerInvariant(), @"[^a-z0-9]+", "_").Trim('_');
+        if (string.IsNullOrEmpty(slug)) slug = "other";
+        return (slug, cleanName);
+    }
+
+    private static QuotaGroupInfo GetOrCreateGroup(
+        AccountQuotaParsedResult result,
+        string poolKey,
+        string canonicalName,
+        string description,
+        string sourceEndpoint)
+    {
+        var existing = result.Groups.FirstOrDefault(g => string.Equals(g.PoolKey, poolKey, StringComparison.OrdinalIgnoreCase));
+        if (existing != null)
+        {
+            if (string.IsNullOrWhiteSpace(existing.Description) && !string.IsNullOrWhiteSpace(description))
+            {
+                existing.Description = description;
+            }
+            return existing;
+        }
+
+        var group = new QuotaGroupInfo
+        {
+            PoolKey = poolKey,
+            Name = canonicalName,
+            Description = description,
+            Source = sourceEndpoint
+        };
+        result.Groups.Add(group);
+        return group;
+    }
+
+    private static (QuotaBucketInfo bucket, string windowKind) ExtractBucketInfo(
+        JsonNode b,
+        DateTime utcNow,
+        string? overrideBucketId = null,
+        string? overrideDisplayName = null)
     {
         double? fraction = null;
         if (b["remainingFraction"] != null && double.TryParse(b["remainingFraction"]!.ToString(), System.Globalization.CultureInfo.InvariantCulture, out var f1))
@@ -1037,6 +1386,16 @@ public class AccountPoolService
             fraction = Math.Max(0.0, 1.0 - (u1 > 1.0 ? u1 / 100.0 : u1));
         }
 
+        long? amount = null;
+        if (b["remainingAmount"] != null && long.TryParse(b["remainingAmount"]!.ToString(), System.Globalization.CultureInfo.InvariantCulture, out var a1))
+        {
+            amount = a1;
+        }
+        else if (b["remaining_amount"] != null && long.TryParse(b["remaining_amount"]!.ToString(), System.Globalization.CultureInfo.InvariantCulture, out var a2))
+        {
+            amount = a2;
+        }
+
         DateTime? resetDt = null;
         var resetStr = b["resetTime"]?.ToString() ?? b["reset_time"]?.ToString();
         if (!string.IsNullOrEmpty(resetStr) && DateTime.TryParse(resetStr, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind, out var dt))
@@ -1044,29 +1403,130 @@ public class AccountPoolService
             resetDt = dt.ToUniversalTime();
         }
 
-        // Classify 5h vs 7d window.
-        var bucketId = (b["bucketId"]?.ToString() ?? b["id"]?.ToString() ?? "").ToLowerInvariant();
-        var winStr = (b["window"]?.ToString() ?? b["windowDuration"]?.ToString() ?? b["duration"]?.ToString() ?? b["displayName"]?.ToString() ?? "").ToLowerInvariant();
-        bool is5h = false;
-        if (winStr.Contains("5") || winStr.Contains("five") || winStr == "18000s" || winStr == "300" || bucketId.Contains("5h"))
+        bool disabled = false;
+        if (b["disabled"] != null && bool.TryParse(b["disabled"]!.ToString(), out var dis))
         {
-            is5h = true;
-        }
-        else if (winStr.Contains("7") || winStr.Contains("seven") || winStr.Contains("week") || winStr == "604800s" || winStr == "10080" || bucketId.Contains("weekly") || bucketId.Contains("7d"))
-        {
-            is5h = false;
-        }
-        else if (resetDt.HasValue)
-        {
-            var diff = resetDt.Value - DateTime.UtcNow;
-            is5h = diff.TotalHours <= 6.0;
+            disabled = dis;
         }
 
-        return (fraction, resetDt, is5h);
+        var bucketId = overrideBucketId
+            ?? b["bucketId"]?.ToString()
+            ?? b["modelId"]?.ToString()
+            ?? b["model_id"]?.ToString()
+            ?? b["id"]?.ToString()
+            ?? string.Empty;
+
+        var displayName = overrideDisplayName ?? b["displayName"]?.ToString() ?? string.Empty;
+        var rawWindow = b["window"]?.ToString() ?? b["windowDuration"]?.ToString() ?? b["duration"]?.ToString() ?? string.Empty;
+
+        var windowKind = NormalizeWindow(rawWindow, bucketId, displayName, resetDt, utcNow);
+
+        var info = new QuotaBucketInfo
+        {
+            BucketId = bucketId,
+            DisplayName = displayName,
+            Window = string.IsNullOrWhiteSpace(rawWindow) ? windowKind : rawWindow.Trim(),
+            RemainingFraction = fraction,
+            RemainingAmount = amount,
+            ResetTime = resetDt,
+            Disabled = disabled
+        };
+        return (info, windowKind);
+    }
+
+    private static string NormalizeWindow(
+        string rawWindow,
+        string bucketId,
+        string displayName,
+        DateTime? resetDt,
+        DateTime utcNow)
+    {
+        var w = rawWindow.Trim().ToLowerInvariant();
+        var id = bucketId.Trim().ToLowerInvariant();
+        var dn = displayName.Trim().ToLowerInvariant();
+
+        // Explicit duration tokens first so "5d" is never misclassified as "5h".
+        if (w is "5h" or "5hr" or "5hrs" or "18000s" or "300m" ||
+            w.Contains("five hour", StringComparison.Ordinal) ||
+            w.Contains("5-hour", StringComparison.Ordinal) ||
+            w.Contains("5 hour", StringComparison.Ordinal) ||
+            id.Contains("-5h", StringComparison.Ordinal) ||
+            id.EndsWith("5h", StringComparison.Ordinal) ||
+            dn.Contains("five hour", StringComparison.Ordinal))
+        {
+            return "5h";
+        }
+
+        if (w is "daily" or "1d" or "24h" or "86400s" ||
+            w.Contains("daily", StringComparison.Ordinal) ||
+            id.Contains("-daily", StringComparison.Ordinal) ||
+            id.EndsWith("daily", StringComparison.Ordinal) ||
+            dn.Contains("daily", StringComparison.Ordinal))
+        {
+            return "daily";
+        }
+
+        if (w is "weekly" or "7d" or "604800s" or "1w" ||
+            w.Contains("weekly", StringComparison.Ordinal) ||
+            w.Contains("seven day", StringComparison.Ordinal) ||
+            id.Contains("weekly", StringComparison.Ordinal) ||
+            id.EndsWith("-7d", StringComparison.Ordinal) ||
+            dn.Contains("weekly", StringComparison.Ordinal))
+        {
+            return "weekly";
+        }
+
+        // Preserve valid compact duration tokens like "5d", "12h", "30d" (matches official cra()).
+        if (!string.IsNullOrEmpty(w) && System.Text.RegularExpressions.Regex.IsMatch(w, @"^\d+[smhd]$"))
+        {
+            return w;
+        }
+
+        // Unannotated model buckets (retrieveUserQuota / fetchAvailableModels): infer from reset horizon.
+        if (resetDt.HasValue)
+        {
+            var diff = resetDt.Value - utcNow;
+            if (diff.TotalHours <= 6.5) return "5h";
+            if (diff.TotalHours <= 30.0) return "daily";
+            return "weekly";
+        }
+
+        return string.Empty;
+    }
+
+    private static void AddBucketToGroup(QuotaGroupInfo group, QuotaBucketInfo bucket, string windowKind)
+    {
+        group.Buckets.Add(bucket);
+        if (!bucket.RemainingFraction.HasValue) return;
+
+        static double? MinFraction(double? current, double incoming) =>
+            current.HasValue ? Math.Min(current.Value, incoming) : incoming;
+
+        switch (windowKind)
+        {
+            case "5h":
+                group.FiveHourFraction = MinFraction(group.FiveHourFraction, bucket.RemainingFraction.Value);
+                group.FiveHourResetTime ??= bucket.ResetTime;
+                break;
+            case "daily":
+                group.DailyFraction = MinFraction(group.DailyFraction, bucket.RemainingFraction.Value);
+                group.DailyResetTime ??= bucket.ResetTime;
+                break;
+            case "weekly":
+                group.WeeklyFraction = MinFraction(group.WeeklyFraction, bucket.RemainingFraction.Value);
+                group.WeeklyResetTime ??= bucket.ResetTime;
+                break;
+        }
     }
 
     public class AccountQuotaParsedResult
     {
+        public string? Description { get; set; }
+        public List<QuotaGroupInfo> Groups { get; set; } = new();
+
+        public QuotaGroupInfo? ArgonGroup =>
+            Groups.FirstOrDefault(g => string.Equals(g.PoolKey, "argon", StringComparison.OrdinalIgnoreCase));
+
         public double? Gemini5hFraction { get; set; }
         public DateTime? Gemini5hReset { get; set; }
         public double? Gemini7dFraction { get; set; }
@@ -1076,6 +1536,62 @@ public class AccountPoolService
         public DateTime? Claude5hReset { get; set; }
         public double? Claude7dFraction { get; set; }
         public DateTime? Claude7dReset { get; set; }
+
+        public double? Argon5hFraction { get; set; }
+        public DateTime? Argon5hReset { get; set; }
+        public double? Argon7dFraction { get; set; }
+        public DateTime? Argon7dReset { get; set; }
+
+        public void SyncLegacyScalarProperties()
+        {
+            var gemini = Groups.FirstOrDefault(g => string.Equals(g.PoolKey, "gemini", StringComparison.OrdinalIgnoreCase));
+            if (gemini != null)
+            {
+                Gemini5hFraction = gemini.FiveHourFraction;
+                Gemini5hReset = gemini.FiveHourResetTime;
+                Gemini7dFraction = gemini.WeeklyFraction;
+                Gemini7dReset = gemini.WeeklyResetTime;
+            }
+            else
+            {
+                Gemini5hFraction = null;
+                Gemini5hReset = null;
+                Gemini7dFraction = null;
+                Gemini7dReset = null;
+            }
+
+            var claude = Groups.FirstOrDefault(g => string.Equals(g.PoolKey, "claude_gpt", StringComparison.OrdinalIgnoreCase));
+            if (claude != null)
+            {
+                Claude5hFraction = claude.FiveHourFraction;
+                Claude5hReset = claude.FiveHourResetTime;
+                Claude7dFraction = claude.WeeklyFraction;
+                Claude7dReset = claude.WeeklyResetTime;
+            }
+            else
+            {
+                Claude5hFraction = null;
+                Claude5hReset = null;
+                Claude7dFraction = null;
+                Claude7dReset = null;
+            }
+
+            var argon = ArgonGroup;
+            if (argon != null)
+            {
+                Argon5hFraction = argon.FiveHourFraction;
+                Argon5hReset = argon.FiveHourResetTime;
+                Argon7dFraction = argon.WeeklyFraction;
+                Argon7dReset = argon.WeeklyResetTime;
+            }
+            else
+            {
+                Argon5hFraction = null;
+                Argon5hReset = null;
+                Argon7dFraction = null;
+                Argon7dReset = null;
+            }
+        }
     }
     /// <summary>Captures a new account by running the engine in an isolated sandbox with the protocol handler redirected.</summary>
     public async Task<AccountProfile?> CaptureNewAccountAsync(

@@ -116,11 +116,19 @@
     <sys:String x:Key="AccountDetails_RefreshBtn">Refresh Token &amp; Quota</sys:String>
     <sys:String x:Key="AccountDetails_CopiedFingerprint">Fingerprint copied</sys:String>
     <sys:String x:Key="AccountDetails_CopiedInstanceId">Instance ID copied</sys:String>
-    <sys:String x:Key="AccountDetails_QuotaHeader">Model Quotas &amp; Reset Windows (5h / 7d)</sys:String>
-    <sys:String x:Key="AccountDetails_5hWindow">5-Hour Rolling Window</sys:String>
-    <sys:String x:Key="AccountDetails_7dWindow">7-Day Total Cap</sys:String>
+    <sys:String x:Key="AccountDetails_QuotaHeader">Model Quotas &amp; Reset Windows (Dynamic)</sys:String>
+    <sys:String x:Key="AccountDetails_5hWindow">5-Hour Rolling Window (5h)</sys:String>
+    <sys:String x:Key="AccountDetails_7dWindow">Weekly Total Cap (Weekly)</sys:String>
+    <sys:String x:Key="AccountDetails_DailyWindow">Daily Limit Window (Daily)</sys:String>
+    <sys:String x:Key="AccountDetails_WindowFormat">{0} Window</sys:String>
     <sys:String x:Key="AccountDetails_GeminiPool">Gemini Pool (Pro &amp; Flash)</sys:String>
     <sys:String x:Key="AccountDetails_ClaudeGptPool">Claude &amp; GPT Pool (Sonnet / GPT)</sys:String>
+    <sys:String x:Key="AccountDetails_ArgonPool">Gemini 4 Argon (Experimental)</sys:String>
+    <sys:String x:Key="AccountDetails_NoWindowData">Not returned by API (null)</sys:String>
+    <sys:String x:Key="AccountDetails_ArgonNoEntitlement">No Argon entitlement on this account (API returned null)</sys:String>
+    <sys:String x:Key="AccountDetails_ExperimentalBadge">Experimental</sys:String>
+    <sys:String x:Key="AccountDetails_QuotaSyncWarningPrefix">Quota sync issue: {0}</sys:String>
+    <sys:String x:Key="AccountDetails_TierFormat">Account tier: {0}</sys:String>
 
     <!-- Appearance View -->
     <sys:String x:Key="Appearance_MicaCardTitle">Material &amp; Transparency</sys:String>

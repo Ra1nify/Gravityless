@@ -73,26 +73,105 @@ public class AccountProfile
     public double? Claude7dFraction { get; set; }
     public DateTime? Claude7dResetTime { get; set; }
 
+    /// <summary>Experimental Gemini 4 Argon quota windows; stay null when the account lacks Argon entitlement.</summary>
+    public double? Argon5hFraction { get; set; }
+    public DateTime? Argon5hResetTime { get; set; }
+    public double? Argon7dFraction { get; set; }
+    public DateTime? Argon7dResetTime { get; set; }
+
+    /// <summary>Structured field-matched quota pools returned by Google CloudCode.</summary>
+    public List<QuotaGroupInfo> QuotaGroups { get; set; } = new();
+
+    public string? AccountTierId { get; set; }
+    public string? AccountTierName { get; set; }
+    public string? QuotaSummaryDescription { get; set; }
+    public string? QuotaLastError { get; set; }
+
     public DateTime? QuotaLastFetchedAt { get; set; }
     public string? QuotaRawText { get; set; }
 
     [System.Text.Json.Serialization.JsonIgnore]
     public double? GeminiRemainingFraction =>
-        (Gemini5hFraction.HasValue && Gemini7dFraction.HasValue)
-            ? Math.Min(Gemini5hFraction.Value, Gemini7dFraction.Value)
-            : Gemini5hFraction ?? Gemini7dFraction;
+        CombineMinFraction(Gemini5hFraction, Gemini7dFraction);
 
     [System.Text.Json.Serialization.JsonIgnore]
     public DateTime? GeminiResetTime => Gemini5hResetTime ?? Gemini7dResetTime;
 
     [System.Text.Json.Serialization.JsonIgnore]
     public double? ClaudeGptRemainingFraction =>
-        (Claude5hFraction.HasValue && Claude7dFraction.HasValue)
-            ? Math.Min(Claude5hFraction.Value, Claude7dFraction.Value)
-            : Claude5hFraction ?? Claude7dFraction;
+        CombineMinFraction(Claude5hFraction, Claude7dFraction);
 
     [System.Text.Json.Serialization.JsonIgnore]
     public DateTime? ClaudeGptResetTime => Claude5hResetTime ?? Claude7dResetTime;
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public double? ArgonRemainingFraction =>
+        CombineMinFraction(Argon5hFraction, Argon7dFraction);
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public DateTime? ArgonResetTime => Argon5hResetTime ?? Argon7dResetTime;
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool HasArgonEntitlement =>
+        Argon5hFraction.HasValue
+        || Argon7dFraction.HasValue
+        || QuotaGroups.Any(g => string.Equals(g.PoolKey, "argon", StringComparison.OrdinalIgnoreCase) && g.HasAnyQuota);
+
+    /// <summary>
+    /// Returns the field-matched quota pools, or reconstructs them from legacy scalar fields when
+    /// viewing accounts persisted before structured quota storage existed.
+    /// </summary>
+    public IReadOnlyList<QuotaGroupInfo> GetDisplayQuotaGroups()
+    {
+        if (QuotaGroups.Count > 0)
+        {
+            return QuotaGroups;
+        }
+
+        var fallback = new List<QuotaGroupInfo>();
+        if (Gemini5hFraction.HasValue || Gemini7dFraction.HasValue)
+        {
+            fallback.Add(new QuotaGroupInfo
+            {
+                PoolKey = "gemini",
+                Name = "Gemini Models",
+                FiveHourFraction = Gemini5hFraction,
+                FiveHourResetTime = Gemini5hResetTime,
+                WeeklyFraction = Gemini7dFraction,
+                WeeklyResetTime = Gemini7dResetTime
+            });
+        }
+        if (Claude5hFraction.HasValue || Claude7dFraction.HasValue)
+        {
+            fallback.Add(new QuotaGroupInfo
+            {
+                PoolKey = "claude_gpt",
+                Name = "Claude and GPT models",
+                FiveHourFraction = Claude5hFraction,
+                FiveHourResetTime = Claude5hResetTime,
+                WeeklyFraction = Claude7dFraction,
+                WeeklyResetTime = Claude7dResetTime
+            });
+        }
+        if (Argon5hFraction.HasValue || Argon7dFraction.HasValue)
+        {
+            fallback.Add(new QuotaGroupInfo
+            {
+                PoolKey = "argon",
+                Name = "Gemini 4 Argon",
+                FiveHourFraction = Argon5hFraction,
+                FiveHourResetTime = Argon5hResetTime,
+                WeeklyFraction = Argon7dFraction,
+                WeeklyResetTime = Argon7dResetTime
+            });
+        }
+        return fallback;
+    }
+
+    private static double? CombineMinFraction(double? fiveHour, double? weekly) =>
+        (fiveHour.HasValue && weekly.HasValue)
+            ? Math.Min(fiveHour.Value, weekly.Value)
+            : fiveHour ?? weekly;
 
     /// <summary>Card label, e.g. "Gemini: 68%(5h)/36%(7d)  Claude: 100%(5h)/50%(7d)".</summary>
     [System.Text.Json.Serialization.JsonIgnore]
@@ -101,31 +180,18 @@ public class AccountProfile
         get
         {
             var parts = new List<string>();
-
-            if (Gemini5hFraction.HasValue && Gemini7dFraction.HasValue)
+            foreach (var group in GetDisplayQuotaGroups())
             {
-                parts.Add($"Gemini: {(int)Math.Round(Gemini5hFraction.Value * 100)}%(5h)/{(int)Math.Round(Gemini7dFraction.Value * 100)}%(7d)");
-            }
-            else if (Gemini5hFraction.HasValue)
-            {
-                parts.Add($"Gemini: {(int)Math.Round(Gemini5hFraction.Value * 100)}%(5h)");
-            }
-            else if (Gemini7dFraction.HasValue)
-            {
-                parts.Add($"Gemini: {(int)Math.Round(Gemini7dFraction.Value * 100)}%(7d)");
-            }
-
-            if (Claude5hFraction.HasValue && Claude7dFraction.HasValue)
-            {
-                parts.Add($"Claude: {(int)Math.Round(Claude5hFraction.Value * 100)}%(5h)/{(int)Math.Round(Claude7dFraction.Value * 100)}%(7d)");
-            }
-            else if (Claude7dFraction.HasValue)
-            {
-                parts.Add($"Claude: {(int)Math.Round(Claude7dFraction.Value * 100)}%(7d)");
-            }
-            else if (Claude5hFraction.HasValue)
-            {
-                parts.Add($"Claude: {(int)Math.Round(Claude5hFraction.Value * 100)}%(5h)");
+                var summary = group.FormatWindowsSummary();
+                if (string.IsNullOrEmpty(summary)) continue;
+                var shortLabel = group.PoolKey switch
+                {
+                    "gemini" => "Gemini",
+                    "claude_gpt" => "Claude",
+                    "argon" => "Argon",
+                    _ => group.Name
+                };
+                parts.Add($"{shortLabel}: {summary}");
             }
 
             return parts.Count > 0 ? string.Join("  ", parts) : string.Empty;

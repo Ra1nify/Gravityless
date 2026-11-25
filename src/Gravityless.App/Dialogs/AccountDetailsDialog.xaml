@@ -97,71 +97,22 @@
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
-                    <TextBlock Grid.Column="0" Text="{DynamicResource AccountDetails_QuotaHeader}" FontWeight="Bold" FontSize="13" VerticalAlignment="Center"/>
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock Text="{DynamicResource AccountDetails_QuotaHeader}" FontWeight="Bold" FontSize="13" VerticalAlignment="Center"/>
+                        <Border x:Name="AccountTierBadge"
+                                Visibility="Collapsed"
+                                CornerRadius="4"
+                                Padding="6,2"
+                                Margin="8,0,0,0"
+                                VerticalAlignment="Center"
+                                Background="{DynamicResource BrandAccentFillStrongerBrush}">
+                            <TextBlock x:Name="AccountTierText" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource BrandAccentBrush}"/>
+                        </Border>
+                    </StackPanel>
                     <TextBlock Grid.Column="1" x:Name="QuotaLastFetchedText" FontSize="11" Opacity="0.5" VerticalAlignment="Center"/>
                 </Grid>
                 <ui:Card Margin="0,0,0,10" Padding="14,12">
-                    <StackPanel>
-                        <Grid Margin="0,0,0,4">
-                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                <ui:SymbolIcon Symbol="Sparkle24" FontSize="15" Foreground="{DynamicResource BrandAccentBrush}" Margin="0,0,6,0" VerticalAlignment="Center"/>
-                                <TextBlock Text="{DynamicResource AccountDetails_GeminiPool}" FontWeight="Bold" FontSize="13" VerticalAlignment="Center"/>
-                            </StackPanel>
-                        </Grid>
-
-                        <Grid Margin="4,4,0,2">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="Auto"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Text="{DynamicResource AccountDetails_5hWindow}" FontSize="11" Opacity="0.75" VerticalAlignment="Center"/>
-                            <TextBlock Grid.Column="1" x:Name="Gemini5hPercentText" FontWeight="Bold" FontSize="11" Foreground="{DynamicResource BrandAccentBrush}" VerticalAlignment="Center"/>
-                        </Grid>
-                        <ProgressBar x:Name="Gemini5hProgressBar" Height="5" Value="0" Maximum="100" Margin="4,0,0,2" Foreground="{DynamicResource BrandAccentBrush}"/>
-                        <TextBlock x:Name="Gemini5hResetText" FontSize="11" Opacity="0.55" Margin="6,0,0,8"/>
-
-                        <Grid Margin="4,2,0,2">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="Auto"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Text="{DynamicResource AccountDetails_7dWindow}" FontSize="11" Opacity="0.75" VerticalAlignment="Center"/>
-                            <TextBlock Grid.Column="1" x:Name="Gemini7dPercentText" FontWeight="Bold" FontSize="11" Foreground="{DynamicResource StatusSuccessBrush}" VerticalAlignment="Center"/>
-                        </Grid>
-                        <ProgressBar x:Name="Gemini7dProgressBar" Height="5" Value="0" Maximum="100" Margin="4,0,0,2" Foreground="{DynamicResource StatusSuccessBrush}"/>
-                        <TextBlock x:Name="Gemini7dResetText" FontSize="11" Opacity="0.55" Margin="6,0,0,12"/>
-
-                        <Separator Margin="0,0,0,10" Opacity="0.15"/>
-
-                        <Grid Margin="0,0,0,4">
-                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                <ui:SymbolIcon Symbol="Brain24" FontSize="15" Foreground="{DynamicResource BrandAccentTextBrush}" Margin="0,0,6,0" VerticalAlignment="Center"/>
-                                <TextBlock Text="{DynamicResource AccountDetails_ClaudeGptPool}" FontWeight="Bold" FontSize="13" VerticalAlignment="Center"/>
-                            </StackPanel>
-                        </Grid>
-
-                        <Grid Margin="4,4,0,2">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="Auto"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Text="{DynamicResource AccountDetails_5hWindow}" FontSize="11" Opacity="0.75" VerticalAlignment="Center"/>
-                            <TextBlock Grid.Column="1" x:Name="Claude5hPercentText" FontWeight="Bold" FontSize="11" Foreground="{DynamicResource BrandAccentTextBrush}" VerticalAlignment="Center"/>
-                        </Grid>
-                        <ProgressBar x:Name="Claude5hProgressBar" Height="5" Value="0" Maximum="100" Margin="4,0,0,2" Foreground="{DynamicResource BrandAccentTextBrush}"/>
-                        <TextBlock x:Name="Claude5hResetText" FontSize="11" Opacity="0.55" Margin="6,0,0,8"/>
-
-                        <Grid Margin="4,2,0,2">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="Auto"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Text="{DynamicResource AccountDetails_7dWindow}" FontSize="11" Opacity="0.75" VerticalAlignment="Center"/>
-                            <TextBlock Grid.Column="1" x:Name="Claude7dPercentText" FontWeight="Bold" FontSize="11" Foreground="{DynamicResource StatusCautionBrush}" VerticalAlignment="Center"/>
-                        </Grid>
-                        <ProgressBar x:Name="Claude7dProgressBar" Height="5" Value="0" Maximum="100" Margin="4,0,0,2" Foreground="{DynamicResource StatusCautionBrush}"/>
-                        <TextBlock x:Name="Claude7dResetText" FontSize="11" Opacity="0.55" Margin="6,0,0,2"/>
-                    </StackPanel>
+                    <StackPanel x:Name="QuotaGroupsPanel"/>
                 </ui:Card>
 
                 <!-- Refresh outcome. Sits inside the last card so it does not float between
