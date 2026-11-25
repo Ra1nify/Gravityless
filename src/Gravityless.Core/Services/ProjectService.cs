@@ -357,7 +357,7 @@ public class ProjectService
         }
     }
 
-    /// <summary>Creates a clean Antigravity 2.29+ conversation_summaries.db schema with WAL and FTS5 search index.</summary>
+    /// <summary>Creates a clean Antigravity 2.35+ conversation_summaries.db schema with WAL, parent links, and FTS5 search index.</summary>
     public static void CreateBlankSummaryDb(string dbPath)
     {
         var dir = Path.GetDirectoryName(dbPath);
@@ -409,6 +409,11 @@ public class ProjectService
             CREATE INDEX IF NOT EXISTS `idx_conversation_summaries_last_modified_time` ON `conversation_summaries`(`last_modified_time`);
             CREATE INDEX IF NOT EXISTS `idx_conversation_summaries_last_user_input_time` ON `conversation_summaries`(`last_user_input_time`);
 
+            CREATE TABLE IF NOT EXISTS `conversation_parents` (
+                `conversation_id` TEXT PRIMARY KEY,
+                `parent_id` TEXT NOT NULL
+            ) WITHOUT ROWID;
+
             CREATE VIRTUAL TABLE IF NOT EXISTS conversations_fts USING fts5(
                 conversation_id UNINDEXED,
                 chunk_index UNINDEXED,
@@ -430,6 +435,79 @@ public class ProjectService
             );
         ";
         cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>Clears seeded conversation rows when creating an empty instance/project DB from a host stock snapshot.</summary>
+    public static void ClearSummaryTables(SqliteConnection conn, SqliteTransaction? tx = null)
+    {
+        foreach (var table in new[] { "conversation_summaries", "conversations_fts", "conversation_parents" })
+        {
+            try
+            {
+                using var cmd = conn.CreateCommand();
+                cmd.Transaction = tx;
+                cmd.CommandText = $"DELETE FROM `{table}`;";
+                cmd.ExecuteNonQuery();
+            }
+            catch
+            {
+                // Older stock databases may omit optional FTS or conversation_parents tables.
+            }
+        }
+    }
+
+    /// <summary>Ensures an existing summary DB has all 21 summary columns and the conversation_parents table.</summary>
+    public static void EnsureSummarySchema(SqliteConnection conn, SqliteTransaction? tx = null)
+    {
+        var existingCols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        using (var pragma = conn.CreateCommand())
+        {
+            pragma.Transaction = tx;
+            pragma.CommandText = "PRAGMA table_info(`conversation_summaries`);";
+            using var reader = pragma.ExecuteReader();
+            while (reader.Read())
+            {
+                if (!reader.IsDBNull(1))
+                {
+                    existingCols.Add(reader.GetString(1));
+                }
+            }
+        }
+
+        if (existingCols.Count > 0)
+        {
+            (string Name, string Definition)[] optionalCols =
+            [
+                ("parent_conversation_id", "text NOT NULL DEFAULT ''"),
+                ("nesting_depth", "integer NOT NULL DEFAULT 0"),
+                ("battle_id", "text NOT NULL DEFAULT ''"),
+                ("winning_conversation_id", "text NOT NULL DEFAULT ''"),
+                ("not_fully_idle", "numeric NOT NULL DEFAULT false"),
+                ("killed", "numeric NOT NULL DEFAULT false"),
+                ("last_user_input_step_index", "integer NOT NULL DEFAULT -1"),
+                ("app_data_dir", "text NOT NULL DEFAULT ''"),
+                ("raw_summary", "blob"),
+                ("group_id", "text NOT NULL DEFAULT ''")
+            ];
+
+            foreach (var (name, definition) in optionalCols)
+            {
+                if (existingCols.Contains(name)) continue;
+                using var alter = conn.CreateCommand();
+                alter.Transaction = tx;
+                alter.CommandText = $"ALTER TABLE `conversation_summaries` ADD COLUMN `{name}` {definition};";
+                alter.ExecuteNonQuery();
+            }
+        }
+
+        using var parentsCmd = conn.CreateCommand();
+        parentsCmd.Transaction = tx;
+        parentsCmd.CommandText = @"
+            CREATE TABLE IF NOT EXISTS `conversation_parents` (
+                `conversation_id` TEXT PRIMARY KEY,
+                `parent_id` TEXT NOT NULL
+            ) WITHOUT ROWID;";
+        parentsCmd.ExecuteNonQuery();
     }
 
     /// <summary>Consistent snapshot copy through the SQLite online backup API (never a raw File.Copy of a live DB).</summary>
@@ -590,10 +668,7 @@ public class ProjectService
                     conn.Open();
                     using (var tx = conn.BeginTransaction())
                     {
-                        using var cmd = conn.CreateCommand();
-                        cmd.Transaction = tx;
-                        cmd.CommandText = "DELETE FROM conversation_summaries; DELETE FROM conversations_fts;";
-                        cmd.ExecuteNonQuery();
+                        ClearSummaryTables(conn, tx);
                         tx.Commit();
                     }
 
@@ -1198,8 +1273,9 @@ public class ProjectService
                     using (var tx = conn.BeginTransaction())
                     {
                         DeleteRowsNotIn(conn, tx, "conversation_summaries", convoIds);
-                        // The FTS table may not exist in some stock databases.
+                        // Optional tables may not exist in older stock databases.
                         try { DeleteRowsNotIn(conn, tx, "conversations_fts", convoIds); } catch (Exception ex) { DiagLog.Swallowed("project.fts", ex); }
+                        try { DeleteRowsNotIn(conn, tx, "conversation_parents", convoIds); } catch (Exception ex) { DiagLog.Swallowed("project.parents", ex); }
                         tx.Commit();
                     }
 
@@ -1288,6 +1364,15 @@ public class ProjectService
                     ftsCmd.CommandText = "DELETE FROM conversations_fts WHERE conversation_id = @id";
                     ftsCmd.Parameters.AddWithValue("@id", conversationId);
                     ftsCmd.ExecuteNonQuery();
+                }
+                catch { }
+
+                try
+                {
+                    using var parentCmd = conn.CreateCommand();
+                    parentCmd.CommandText = "DELETE FROM conversation_parents WHERE conversation_id = @id OR parent_id = @id";
+                    parentCmd.Parameters.AddWithValue("@id", conversationId);
+                    parentCmd.ExecuteNonQuery();
                 }
                 catch { }
             }
@@ -1516,6 +1601,17 @@ public class ProjectService
                     ftsCmd.Parameters.AddWithValue("@title", newTitle);
                     ftsCmd.Parameters.AddWithValue("@preview", lastPreview);
                     ftsCmd.ExecuteNonQuery();
+                }
+                catch { }
+
+                try
+                {
+                    using var parentCmd = conn.CreateCommand();
+                    parentCmd.Transaction = tx;
+                    parentCmd.CommandText = "INSERT OR REPLACE INTO conversation_parents (conversation_id, parent_id) VALUES (@id, @pid)";
+                    parentCmd.Parameters.AddWithValue("@id", newConversationId);
+                    parentCmd.Parameters.AddWithValue("@pid", sourceConversationId);
+                    parentCmd.ExecuteNonQuery();
                 }
                 catch { }
 

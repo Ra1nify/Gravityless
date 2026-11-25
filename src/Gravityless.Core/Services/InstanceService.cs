@@ -774,6 +774,8 @@ public class InstanceService
                 ? (JsonNode.Parse(File.ReadAllText(storagePath)) as JsonObject ?? new JsonObject())
                 : new JsonObject();
 
+            root["agy.onboarding.lastLoginUsername"] = email;
+            root["agy.onboarding.lastLoginIsGcpTos"] = "false";
             root["jetski.onboarding.lastLoginUsername"] = email;
             root["jetski.onboarding.lastLoginIsGcpTos"] = "false";
             root["ide-install-wizard-shown"] = "true";
@@ -1026,10 +1028,7 @@ public class InstanceService
                     conn.Open();
                     using (var tx = conn.BeginTransaction())
                     {
-                        using var cmd = conn.CreateCommand();
-                        cmd.Transaction = tx;
-                        cmd.CommandText = "DELETE FROM conversation_summaries; DELETE FROM conversations_fts;";
-                        cmd.ExecuteNonQuery();
+                        ProjectService.ClearSummaryTables(conn, tx);
                         tx.Commit();
                     }
 
@@ -1084,7 +1083,57 @@ public class InstanceService
         return reader.IsDBNull(index) ? DBNull.Value : reader.GetValue(index);
     }
 
-    private static void MergeSummariesDb(string srcDb, string destDb)
+    private static readonly string[] SummaryColumns =
+    [
+        "conversation_id",
+        "title",
+        "preview",
+        "step_count",
+        "last_modified_time",
+        "workspace_uris",
+        "status",
+        "source",
+        "project_id",
+        "agent_name",
+        "parent_conversation_id",
+        "nesting_depth",
+        "battle_id",
+        "winning_conversation_id",
+        "not_fully_idle",
+        "killed",
+        "last_user_input_time",
+        "last_user_input_step_index",
+        "app_data_dir",
+        "raw_summary",
+        "group_id"
+    ];
+
+    private static HashSet<string> ReadTableColumns(SqliteConnection conn, string tableName)
+    {
+        var cols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"PRAGMA table_info(`{tableName}`);";
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            if (!reader.IsDBNull(1))
+            {
+                cols.Add(reader.GetString(1));
+            }
+        }
+        return cols;
+    }
+
+    private static bool TableExists(SqliteConnection conn, string tableName)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = @name LIMIT 1;";
+        cmd.Parameters.AddWithValue("@name", tableName);
+        return cmd.ExecuteScalar() != null;
+    }
+
+    /// <summary>Merges summary rows (all available schema columns) and conversation_parents links into destDb.</summary>
+    private static void MergeSummaryRows(string srcDb, string destDb, string? filterConversationId = null)
     {
         try
         {
@@ -1092,37 +1141,75 @@ public class InstanceService
             srcConn.Open();
             using var destConn = new SqliteConnection($"Data Source={destDb}");
             destConn.Open();
+
             using var tx = destConn.BeginTransaction();
+            ProjectService.EnsureSummarySchema(destConn, tx);
 
-            using var cmd = srcConn.CreateCommand();
-            cmd.CommandText = "SELECT conversation_id, title, preview, step_count, last_modified_time, workspace_uris, status, source, project_id, agent_name, last_user_input_time FROM conversation_summaries";
-            using var reader = cmd.ExecuteReader();
-
-            while (reader.Read())
+            var srcCols = ReadTableColumns(srcConn, "conversation_summaries");
+            var colsToCopy = SummaryColumns.Where(c => srcCols.Contains(c)).ToArray();
+            if (colsToCopy.Length == 0)
             {
-                using var insertCmd = destConn.CreateCommand();
-                insertCmd.Transaction = tx;
-                insertCmd.CommandText = @"INSERT OR REPLACE INTO conversation_summaries 
-                    (conversation_id, title, preview, step_count, last_modified_time, workspace_uris, status, source, project_id, agent_name, last_user_input_time)
-                    VALUES (@cid, @title, @prev, @step, @time, @uris, @status, @source, @proj, @agent, @inputTime)";
-                insertCmd.Parameters.AddWithValue("@cid", GetDbValue(reader, 0));
-                insertCmd.Parameters.AddWithValue("@title", GetDbValue(reader, 1));
-                insertCmd.Parameters.AddWithValue("@prev", GetDbValue(reader, 2));
-                insertCmd.Parameters.AddWithValue("@step", GetDbValue(reader, 3));
-                insertCmd.Parameters.AddWithValue("@time", GetDbValue(reader, 4));
-                insertCmd.Parameters.AddWithValue("@uris", GetDbValue(reader, 5));
-                insertCmd.Parameters.AddWithValue("@status", GetDbValue(reader, 6));
-                insertCmd.Parameters.AddWithValue("@source", GetDbValue(reader, 7));
-                insertCmd.Parameters.AddWithValue("@proj", GetDbValue(reader, 8));
-                insertCmd.Parameters.AddWithValue("@agent", GetDbValue(reader, 9));
-                insertCmd.Parameters.AddWithValue("@inputTime", GetDbValue(reader, 10));
-                insertCmd.ExecuteNonQuery();
+                tx.Commit();
+                return;
+            }
+
+            var colListSql = string.Join(", ", colsToCopy.Select(c => $"`{c}`"));
+            var paramListSql = string.Join(", ", colsToCopy.Select((_, i) => $"@p{i}"));
+
+            using (var selectCmd = srcConn.CreateCommand())
+            {
+                selectCmd.CommandText = filterConversationId == null
+                    ? $"SELECT {colListSql} FROM `conversation_summaries`;"
+                    : $"SELECT {colListSql} FROM `conversation_summaries` WHERE `conversation_id` = @cid;";
+                if (filterConversationId != null)
+                {
+                    selectCmd.Parameters.AddWithValue("@cid", filterConversationId);
+                }
+
+                using var reader = selectCmd.ExecuteReader();
+                while (reader.Read())
+                {
+                    using var insertCmd = destConn.CreateCommand();
+                    insertCmd.Transaction = tx;
+                    insertCmd.CommandText = $"INSERT OR REPLACE INTO `conversation_summaries` ({colListSql}) VALUES ({paramListSql});";
+                    for (var i = 0; i < colsToCopy.Length; i++)
+                    {
+                        insertCmd.Parameters.AddWithValue($"@p{i}", GetDbValue(reader, i));
+                    }
+                    insertCmd.ExecuteNonQuery();
+                }
+            }
+
+            if (TableExists(srcConn, "conversation_parents"))
+            {
+                using var pSelect = srcConn.CreateCommand();
+                pSelect.CommandText = filterConversationId == null
+                    ? "SELECT `conversation_id`, `parent_id` FROM `conversation_parents`;"
+                    : "SELECT `conversation_id`, `parent_id` FROM `conversation_parents` WHERE `conversation_id` = @cid OR `parent_id` = @cid;";
+                if (filterConversationId != null)
+                {
+                    pSelect.Parameters.AddWithValue("@cid", filterConversationId);
+                }
+
+                using var pReader = pSelect.ExecuteReader();
+                while (pReader.Read())
+                {
+                    using var pInsert = destConn.CreateCommand();
+                    pInsert.Transaction = tx;
+                    pInsert.CommandText = "INSERT OR REPLACE INTO `conversation_parents` (`conversation_id`, `parent_id`) VALUES (@cid, @pid);";
+                    pInsert.Parameters.AddWithValue("@cid", GetDbValue(pReader, 0));
+                    pInsert.Parameters.AddWithValue("@pid", GetDbValue(pReader, 1));
+                    pInsert.ExecuteNonQuery();
+                }
             }
 
             tx.Commit();
         }
         catch (Exception ex) { DiagLog.Swallowed("instance.merge-summaries", ex); }
     }
+
+    private static void MergeSummariesDb(string srcDb, string destDb) =>
+        MergeSummaryRows(srcDb, destDb);
 
     private void SyncSingleProjectOutput(InstanceProfile inst, ProjectProfile proj, string instGeminiDir)
     {
@@ -1224,41 +1311,8 @@ public class InstanceService
         catch { }
     }
 
-    private static void MergeSingleSummary(string srcDb, string destDb, string convoId)
-    {
-        try
-        {
-            using var srcConn = new SqliteConnection($"Data Source={srcDb};Mode=ReadOnly");
-            srcConn.Open();
-            using var destConn = new SqliteConnection($"Data Source={destDb}");
-            destConn.Open();
-
-            using var cmd = srcConn.CreateCommand();
-            cmd.CommandText = "SELECT conversation_id, title, preview, step_count, last_modified_time, workspace_uris, status, source, project_id, agent_name, last_user_input_time FROM conversation_summaries WHERE conversation_id = @cid";
-            cmd.Parameters.AddWithValue("@cid", convoId);
-            using var reader = cmd.ExecuteReader();
-            if (reader.Read())
-            {
-                using var insertCmd = destConn.CreateCommand();
-                insertCmd.CommandText = @"INSERT OR REPLACE INTO conversation_summaries 
-                    (conversation_id, title, preview, step_count, last_modified_time, workspace_uris, status, source, project_id, agent_name, last_user_input_time)
-                    VALUES (@cid, @title, @prev, @step, @time, @uris, @status, @source, @proj, @agent, @inputTime)";
-                insertCmd.Parameters.AddWithValue("@cid", GetDbValue(reader, 0));
-                insertCmd.Parameters.AddWithValue("@title", GetDbValue(reader, 1));
-                insertCmd.Parameters.AddWithValue("@prev", GetDbValue(reader, 2));
-                insertCmd.Parameters.AddWithValue("@step", GetDbValue(reader, 3));
-                insertCmd.Parameters.AddWithValue("@time", GetDbValue(reader, 4));
-                insertCmd.Parameters.AddWithValue("@uris", GetDbValue(reader, 5));
-                insertCmd.Parameters.AddWithValue("@status", GetDbValue(reader, 6));
-                insertCmd.Parameters.AddWithValue("@source", GetDbValue(reader, 7));
-                insertCmd.Parameters.AddWithValue("@proj", GetDbValue(reader, 8));
-                insertCmd.Parameters.AddWithValue("@agent", GetDbValue(reader, 9));
-                insertCmd.Parameters.AddWithValue("@inputTime", GetDbValue(reader, 10));
-                insertCmd.ExecuteNonQuery();
-            }
-        }
-        catch { }
-    }
+    private static void MergeSingleSummary(string srcDb, string destDb, string convoId) =>
+        MergeSummaryRows(srcDb, destDb, convoId);
 
     /// <summary>
     /// SQLite keeps committed-but-unmerged pages in companion files next to the database.

@@ -72,7 +72,7 @@ if (-not $officialVersion) {
         }
     }
     if (-not $officialVersion) {
-        $officialVersion = "2.33.0"
+        $officialVersion = "2.35.1"
     }
     Write-Host "Using fallback official version: $officialVersion" -ForegroundColor Yellow
 }

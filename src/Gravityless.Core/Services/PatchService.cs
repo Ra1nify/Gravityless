@@ -15,7 +15,7 @@ public class PatchService
     /// Version stamp for the runtime bootstrap script. Bump whenever template semantics change
     /// to trigger re-generation of gravityless-bootstrap.js.
     /// </summary>
-    private const int PatchVersion = 57;
+    private const int PatchVersion = 58;
     private static readonly string PatchStamp = $"/* GRAVITYLESS_BOOTSTRAP_VERSION: {PatchVersion} */";
 
     /// <summary>Unpacks an Electron ASAR archive into outputDir using only managed code.</summary>
@@ -506,12 +506,36 @@ __PATCH_VERSION_STAMP__
         }
     }
 
-    // ── 4. Hook dialog.showMessageBox for Confirm Quit i18n ──
+    // ── 4. Hook dialog.showMessageBox / showErrorBox for desktop prompt i18n ──
+    function isZhLocale() {
+        return (global.__gravitylessLocale || process.env.GRAVITYLESS_LOCALE || 'zh-CN').startsWith('zh');
+    }
+
+    function getAppDisplayName() {
+        return (electron.app && typeof electron.app.getName === 'function') ? electron.app.getName() : 'Antigravity';
+    }
+
+    function translateDesktopLabel(label, appName) {
+        if (typeof label !== 'string' || !label) return label;
+        if (label === 'No agents running') return '无正在运行的 Agent';
+        const countMatch = label.match(/^(\d+)\s+agents?\s+running$/i);
+        if (countMatch) return countMatch[1] + ' 个 Agent 正在运行';
+        if (label === 'Quit') return '退出';
+        if (label.startsWith('Open ') || label.startsWith(`Open ${appName}`)) {
+            return `打开 ${label.slice(5)}`;
+        }
+        if (label === 'Connect to WSL') return '连接到 WSL';
+        if (label === 'Reopen Locally') return '在本地重新打开';
+        if (label === 'New Window') return '新建窗口';
+        if (label === 'Docs') return '文档';
+        if (label === 'Check for Updates') return '检查更新';
+        return label;
+    }
+
     if (electron.dialog) {
-        function localizeQuitOptions(opts) {
-            if (!opts || typeof opts !== 'object') return opts;
-            const isZh = (process.env.GRAVITYLESS_LOCALE || 'zh-CN').startsWith('zh');
-            if (isZh && (opts.title === 'Confirm Quit' || (opts.message && String(opts.message).includes('Are you sure you want to quit')))) {
+        function localizeDialogOptions(opts) {
+            if (!opts || typeof opts !== 'object' || !isZhLocale()) return opts;
+            if (opts.title === 'Confirm Quit' || (opts.message && String(opts.message).includes('Are you sure you want to quit'))) {
                 return Object.assign({}, opts, {
                     type: opts.type || 'question',
                     buttons: ['取消', '退出'],
@@ -522,15 +546,26 @@ __PATCH_VERSION_STAMP__
                     detail: '可能仍有 Agent 或后台任务正在运行。'
                 });
             }
+            if (opts.title === 'WSL distro not found') {
+                const detail = (opts.detail && String(opts.detail).includes('opened on Windows instead'))
+                    ? '已改为在 Windows 本地打开 Antigravity。'
+                    : opts.detail;
+                const msgMatch = typeof opts.message === 'string' && opts.message.match(/^The WSL distro "(.+)" is no longer installed\.$/);
+                return Object.assign({}, opts, {
+                    title: '未找到 WSL 发行版',
+                    message: msgMatch ? `WSL 发行版 "${msgMatch[1]}" 已不再安装。` : opts.message,
+                    detail
+                });
+            }
             return opts;
         }
 
         const origShowBox = electron.dialog.showMessageBox;
         electron.dialog.showMessageBox = function() {
             if (arguments.length === 1) {
-                arguments[0] = localizeQuitOptions(arguments[0]);
+                arguments[0] = localizeDialogOptions(arguments[0]);
             } else if (arguments.length >= 2) {
-                arguments[1] = localizeQuitOptions(arguments[1]);
+                arguments[1] = localizeDialogOptions(arguments[1]);
             }
             return origShowBox.apply(this, arguments);
         };
@@ -539,34 +574,78 @@ __PATCH_VERSION_STAMP__
         if (typeof origShowBoxSync === 'function') {
             electron.dialog.showMessageBoxSync = function() {
                 if (arguments.length === 1) {
-                    arguments[0] = localizeQuitOptions(arguments[0]);
+                    arguments[0] = localizeDialogOptions(arguments[0]);
                 } else if (arguments.length >= 2) {
-                    arguments[1] = localizeQuitOptions(arguments[1]);
+                    arguments[1] = localizeDialogOptions(arguments[1]);
                 }
                 return origShowBoxSync.apply(this, arguments);
             };
         }
+
+        const origShowErrorBox = electron.dialog.showErrorBox;
+        if (typeof origShowErrorBox === 'function') {
+            electron.dialog.showErrorBox = function(title, content) {
+                if (isZhLocale() && title === 'WSL setup failed') {
+                    title = 'WSL 环境配置失败';
+                    if (typeof content === 'string' && content.startsWith('Failed to install the server into WSL distro ')) {
+                        content = content.replace('Failed to install the server into WSL distro ', '向 WSL 发行版安装服务端失败 ');
+                    }
+                }
+                return origShowErrorBox.call(this, title, content);
+            };
+        }
     }
 
-    // ── 5. Hook Menu.buildFromTemplate for tray menu i18n ──
+    // ── 5. Hook Menu / MenuItem / Tray for tray and submenu i18n ──
+    function localizeTrayItems(items) {
+        if (!isZhLocale() || !Array.isArray(items)) return;
+        const appName = getAppDisplayName();
+        for (const item of items) {
+            if (!item || typeof item.label !== 'string') continue;
+            const next = translateDesktopLabel(item.label, appName);
+            if (next !== item.label) {
+                try { item.label = next; } catch (_) {}
+            }
+        }
+    }
+
     if (electron.Menu && typeof electron.Menu.buildFromTemplate === 'function') {
         const origBuild = electron.Menu.buildFromTemplate;
         electron.Menu.buildFromTemplate = function(template) {
-            const isZh = (process.env.GRAVITYLESS_LOCALE || 'zh-CN').startsWith('zh');
-            if (isZh && Array.isArray(template)) {
-                const appName = (electron.app && typeof electron.app.getName === 'function') ? electron.app.getName() : 'Antigravity';
+            if (isZhLocale() && Array.isArray(template)) {
+                const appName = getAppDisplayName();
                 for (const item of template) {
-                    if (!item) continue;
-                    if (item.id === 'running-agents' || item.label === 'No agents running') {
-                        item.label = '无正在运行的 Agent';
-                    } else if (item.label === 'Quit') {
-                        item.label = '退出';
-                    } else if (typeof item.label === 'string' && (item.label.startsWith('Open ') || item.label.startsWith(`Open ${appName}`))) {
-                        item.label = `打开 ${appName}`;
-                    }
+                    if (!item || typeof item.label !== 'string') continue;
+                    item.label = translateDesktopLabel(item.label, appName);
                 }
             }
             return origBuild.call(this, template);
+        };
+    }
+
+    if (typeof electron.MenuItem === 'function') {
+        const OrigMenuItem = electron.MenuItem;
+        function PatchedMenuItem(opts) {
+            if (!(this instanceof PatchedMenuItem)) {
+                return new PatchedMenuItem(opts);
+            }
+            if (isZhLocale() && opts && typeof opts === 'object' && typeof opts.label === 'string') {
+                opts = Object.assign({}, opts, { label: translateDesktopLabel(opts.label, getAppDisplayName()) });
+            }
+            return new OrigMenuItem(opts);
+        }
+        Object.setPrototypeOf(PatchedMenuItem, OrigMenuItem);
+        PatchedMenuItem.prototype = OrigMenuItem.prototype;
+        electron.MenuItem = PatchedMenuItem;
+    }
+
+    if (electron.Tray && electron.Tray.prototype && typeof electron.Tray.prototype.setContextMenu === 'function') {
+        const origSetContextMenu = electron.Tray.prototype.setContextMenu;
+        electron.Tray.prototype.setContextMenu = function(menu) {
+            if (menu && Array.isArray(menu.items)) {
+                localizeTrayItems(menu.items);
+            }
+            return origSetContextMenu.call(this, menu);
         };
     }
 
@@ -576,7 +655,16 @@ __PATCH_VERSION_STAMP__
         ? initialMaterial : 'mica';
     let currentAlpha = Number(process.env.GRAVITYLESS_MICA_OPACITY ?? loadedConfig?.Opacity ?? '__SAFE_OPACITY__');
     if (isNaN(currentAlpha)) currentAlpha = 0.72;
-    let currentLight = false;
+    let currentLight = (function() {
+        const mode = String(loadedConfig?.ThemeMode || 'auto').trim().toLowerCase();
+        if (mode === 'light') return true;
+        if (mode === 'dark') return false;
+        try {
+            return Boolean(electron.nativeTheme && !electron.nativeTheme.shouldUseDarkColors);
+        } catch (_) {
+            return false;
+        }
+    })();
     let currentPopupAlpha = Number(loadedConfig?.PopupOpacity) || 0.60;
     let currentAccent = loadedConfig?.AccentColor || '#4285f4';
     let currentAccentInteraction = loadedConfig?.AccentInteraction !== false;
@@ -760,25 +848,17 @@ __PATCH_VERSION_STAMP__
                 applyWindowEffects(win);
             }
 
-            // Antigravity 2.29/2.30/2.33 WCV architecture: curtainView underlay blocks Mica
+            // Antigravity WCV architecture:
+            // - 2-layer mode: children[0] is opaque curtainView (WebContentsView, has .webContents) -> suppress to unblock Mica.
+            // - 3-layer mode: children[0] is clipView (pure View, no .webContents) -> keep visible/bounds intact for browser tabs, only clear bg.
             if (win.contentView && typeof win.contentView.addChildView === 'function') {
                 const origAddChild = win.contentView.addChildView;
                 win.contentView.addChildView = function(view, index) {
                     try {
                         const kids = win.contentView.children || [];
-                        // First child view added before hubWcv is the curtain / clip view (underlay)
-                        if (kids.length === 0) {
-                            if (typeof view.setVisible === 'function' && !view.__origSetVisible) {
-                                const origSetVisible = view.setVisible;
-                                view.__origSetVisible = origSetVisible;
-                                view.setVisible = function(visible) {
-                                    if (currentMaterial !== 'none') return origSetVisible.call(this, false);
-                                    return origSetVisible.call(this, visible);
-                                };
-                                if (currentMaterial !== 'none') {
-                                    try { origSetVisible.call(view, false); } catch (_) {}
-                                }
-                            }
+                        if (kids.length === 0 && view) {
+                            const isCurtainUnderlay = Boolean(view.webContents);
+                            view.__gravitylessIsCurtain = isCurtainUnderlay;
                             if (typeof view.setBackgroundColor === 'function' && !view.__origSetBg) {
                                 const origViewBg = view.setBackgroundColor;
                                 view.__origSetBg = origViewBg;
@@ -790,20 +870,33 @@ __PATCH_VERSION_STAMP__
                                     try { origViewBg.call(view, '#00000000'); } catch (_) {}
                                 }
                             }
-                            if (typeof view.setBounds === 'function' && !view.__origSetBounds) {
-                                const origSetBounds = view.setBounds;
-                                view.__origSetBounds = origSetBounds;
-                                view.setBounds = function(bounds) {
+                            if (isCurtainUnderlay) {
+                                if (typeof view.setVisible === 'function' && !view.__origSetVisible) {
+                                    const origSetVisible = view.setVisible;
+                                    view.__origSetVisible = origSetVisible;
+                                    view.setVisible = function(visible) {
+                                        if (currentMaterial !== 'none') return origSetVisible.call(this, false);
+                                        return origSetVisible.call(this, visible);
+                                    };
                                     if (currentMaterial !== 'none') {
-                                        return origSetBounds.call(this, { x: 0, y: 0, width: 0, height: 0 });
+                                        try { origSetVisible.call(view, false); } catch (_) {}
                                     }
-                                    return origSetBounds.call(this, bounds);
-                                };
-                                if (currentMaterial !== 'none') {
-                                    try { origSetBounds.call(view, { x: 0, y: 0, width: 0, height: 0 }); } catch (_) {}
+                                }
+                                if (typeof view.setBounds === 'function' && !view.__origSetBounds) {
+                                    const origSetBounds = view.setBounds;
+                                    view.__origSetBounds = origSetBounds;
+                                    view.setBounds = function(bounds) {
+                                        if (currentMaterial !== 'none') {
+                                            return origSetBounds.call(this, { x: 0, y: 0, width: 0, height: 0 });
+                                        }
+                                        return origSetBounds.call(this, bounds);
+                                    };
+                                    if (currentMaterial !== 'none') {
+                                        try { origSetBounds.call(view, { x: 0, y: 0, width: 0, height: 0 }); } catch (_) {}
+                                    }
                                 }
                             }
-                        } else {
+                        } else if (view) {
                             if (currentMaterial !== 'none' && typeof view.setBackgroundColor === 'function') {
                                 try { view.setBackgroundColor('#00000000'); } catch (_) {}
                             }
@@ -916,7 +1009,11 @@ __PATCH_VERSION_STAMP__
 [data-radix-popper-content-wrapper] > div,
 [data-radix-dropdown-menu-content],
 [data-radix-menu-content],
-[data-radix-context-menu-content] {
+[data-radix-context-menu-content],
+.surface-glass,
+body[data-agy-theme] .surface-glass,
+body[data-agy-theme] .agy-fastpick.surface-glass,
+body[data-agy-theme] .quick-input-widget.surface-glass {
     background-color: rgba(${mixCh(cr)}, ${mixCh(cg)}, ${mixCh(cb)}, ${nB.toFixed(3)}) !important;
     background-image: ${noiseSvg(coarseFreq, coarseA)}, ${noiseSvg(fineFreq, fineA)} !important;
     background-blend-mode: normal, overlay;
@@ -940,38 +1037,61 @@ __PATCH_VERSION_STAMP__
         const cardAlpha = isLight ? (0.28 + a * 0.45).toFixed(2) : (0.12 + a * 0.35).toFixed(2);
 
         const composerCss = `
-.surface-composer {
+.surface-composer,
+body[data-agy-theme] .surface-composer,
+body[data-agy-theme].dark .surface-composer {
     background-color: rgba(${composerRing}, ${ringA}) !important;
 }
 
-.surface-composer > .surface-composer-card {
+.surface-composer > .surface-composer-card,
+body[data-agy-theme] .surface-composer > .surface-composer-card,
+body[data-agy-theme].dark .surface-composer > .surface-composer-card {
     background-color: rgba(${composerFill}, ${fillA}) !important;
 }
 `;
 
         return `
-/* Gravityless: Mica baseline */
+/* Gravityless: Mica baseline (Antigravity 2.35+) */
 html,
 body,
 #root,
-.antigravity-layout,
-.antigravity-shell,
-.app-container,
-.main-container,
-.content-area,
-.split-view-container {
+.agy-shell,
+body[data-agy-theme] .agy-shell,
+.agy-inset-shell,
+.dark .agy-inset-shell,
+body[data-agy-theme] .agy-inset-shell,
+.agy-sheet[data-sheet-inset],
+body[data-agy-theme] .agy-sheet[data-sheet-inset],
+body[data-agy-home-glow] .agy-sheet:has(.agy-home) {
     background: transparent !important;
     background-color: transparent !important;
+    background-image: none !important;
 }
 
-:root {
+.agy-sheet:not([data-sheet-inset]),
+body[data-agy-theme] .agy-sheet:not([data-sheet-inset]) {
+    background-color: var(--background) !important;
+    background-image: none !important;
+}
+
+:root,
+body[data-agy-theme] {
     /* Shell / Canvas transparency: driven by the Mica opacity slider (alpha) */
     --background: rgba(${surface}, ${a.toFixed(2)}) !important;
+    --color-background: rgba(${surface}, ${a.toFixed(2)}) !important;
+    --body-background: transparent !important;
+    --shell: transparent !important;
+    --shell-canvas: transparent !important;
+    --home-glow: transparent !important;
+    --scrim: transparent !important;
 
     /* Sidebar transparency: slightly higher opacity for subtle contrast */
     --sidebar: rgba(${surface}, ${Math.min(1, a + 0.08).toFixed(2)}) !important;
+    --color-sidebar: rgba(${surface}, ${Math.min(1, a + 0.08).toFixed(2)}) !important;
     --sidebar-secondary: ${isLight ? 'rgba(0, 0, 0, 0.04)' : 'rgba(255, 255, 255, 0.06)'} !important;
+    --color-sidebar-secondary: ${isLight ? 'rgba(0, 0, 0, 0.04)' : 'rgba(255, 255, 255, 0.06)'} !important;
     --sidebar-muted: transparent !important;
+    --color-sidebar-muted: transparent !important;
     --gl-popup-bg: transparent;
     --gl-dialog-bg: transparent;
     --gl-row-hover: ${rowHover};
@@ -979,6 +1099,18 @@ body,
     --gl-row-active-stroke: ${rowActiveStroke};
     --gl-surface-mask: rgba(${cardRgb}, ${cardAlpha});
     --gl-surface-mask-hover: rgba(${cardRgb}, ${Math.min(1, Number(cardAlpha) + 0.10).toFixed(2)});
+    --card: rgba(${cardRgb}, ${cardAlpha}) !important;
+    --color-card: rgba(${cardRgb}, ${cardAlpha}) !important;
+    --card-border: ${strokeStatic} !important;
+    --color-card-border: ${strokeStatic} !important;
+    --glass: rgba(${cardRgb}, ${cardAlpha}) !important;
+    --glass-border: ${strokeStatic} !important;
+    --glass-highlight: transparent !important;
+    --onyx-frame: rgba(${composerRing}, ${ringA}) !important;
+    --onyx-well: ${isLight ? 'rgba(0, 0, 0, 0.03)' : 'rgba(255, 255, 255, 0.04)'} !important;
+    --onyx-raised: rgba(${composerFill}, ${fillA}) !important;
+    --onyx-selected: ${rowActive} !important;
+    --onyx-key: ${isLight ? 'rgba(0, 0, 0, 0.05)' : 'rgba(255, 255, 255, 0.06)'} !important;
     --gl-stroke-static: ${strokeStatic};
     --gl-stroke-flyout: ${strokeFlyout};
     --gl-shadow-flyout: ${shadowFlyout};
@@ -995,6 +1127,7 @@ ${blurCss}
     box-shadow: none !important;
 }
 
+#root .agy-card,
 #root .bg-card,
 #root .bg-card-border,
 #root [data-testid="user-message-bubble"] {
@@ -1003,7 +1136,8 @@ ${blurCss}
 }
 
 #root .surface-composer,
-#root .surface-composer-card {
+#root .surface-composer-card,
+body[data-agy-theme] .surface-composer > .surface-composer-card {
     box-shadow: inset 0 0 0 1px var(--gl-stroke-static) !important;
 }
 
@@ -1015,7 +1149,12 @@ ${blurCss}
     --row-bg: var(--gl-row-hover) !important;
     background-color: var(--gl-row-hover) !important;
 }
-#root .agy-sidebar-row[data-selected="true"] {
+#root .agy-sidebar-row[data-selected="true"],
+body[data-agy-theme] .agy-sidebar-row[data-selected="true"],
+body[data-agy-theme].dark .agy-sidebar-row[data-selected="true"],
+#root .agy-sidebar-raised,
+body[data-agy-theme] .agy-sidebar-raised,
+body[data-agy-theme].dark .agy-sidebar-raised {
     --row-bg: var(--gl-row-active) !important;
     background-color: var(--gl-row-active) !important;
     box-shadow: inset 0 0 0 1px var(--gl-row-active-stroke) !important;
@@ -1027,6 +1166,8 @@ ${blurCss}
 [data-select-popup],
 [data-hover-card-popup],
 [data-slot$="-content"],
+.surface-glass,
+.agy-fastpick.surface-glass,
 .absolute.bg-sidebar,
 .absolute.bg-background,
 .absolute.bg-card {
@@ -1123,6 +1264,40 @@ ${blurCss}
         return {};
     }
 
+    function translateDynamicZh(text) {
+        const lang = window.__gravityless_lang || '';
+        if (!lang.startsWith('zh')) return null;
+
+        let m = text.match(/^Available AI credits:\s*(.+)$/);
+        if (m) return '可用 AI 积分: ' + m[1];
+
+        m = text.match(/^Resets in\s+(.+)$/);
+        if (m) {
+            const dur = m[1]
+                .replace(/<\s*1m/gi, '不到 1 分钟')
+                .replace(/(\d+)\s*d\b/gi, '$1 天 ')
+                .replace(/(\d+)\s*h\b/gi, '$1 小时 ')
+                .replace(/(\d+)\s*m\b/gi, '$1 分钟')
+                .replace(/\s+/g, ' ')
+                .trim();
+            return '重置倒计时: ' + dur;
+        }
+
+        m = text.match(/^(\d+[smhd])\s+limit$/i);
+        if (m) return m[1] + ' 配额限制';
+
+        m = text.match(/^(\d+)\s+days?$/i);
+        if (m) return m[1] + ' 天';
+
+        m = text.match(/^(\d+)\s+comments?$/i);
+        if (m) return m[1] + ' 条批注';
+
+        m = text.match(/^(\d+)\s+agents?\s+running$/i);
+        if (m) return m[1] + ' 个 Agent 正在运行';
+
+        return null;
+    }
+
     function injectI18n(wc) {
         if (!wc || typeof wc.executeJavaScript !== 'function') return;
         const loc = global.__gravitylessLocale || process.env.GRAVITYLESS_LOCALE || 'zh-CN';
@@ -1154,6 +1329,15 @@ ${blurCss}
                 return true;
             }
 
+            ${translateDynamicZh.toString()}
+
+            function resolveTranslation(trimmed) {
+                const d = window.__gravityless_i18n_dict;
+                if (d && d[trimmed]) return d[trimmed];
+                if (window.__gravityless_lang === 'en-US') return trimmed;
+                return translateDynamicZh(trimmed);
+            }
+
             function procText(node) {
                 if (!node || node.nodeType !== Node.TEXT_NODE) return;
                 if (!node.parentElement || !isAllowed(node.parentElement)) return;
@@ -1167,9 +1351,7 @@ ${blurCss}
                 const orig = node.__gravityless_orig;
                 const trimmed = orig.trim();
                 if (!trimmed) return;
-                const d = window.__gravityless_i18n_dict;
-                const isEn = window.__gravityless_lang === 'en-US';
-                const target = (d && d[trimmed]) ? d[trimmed] : (isEn ? trimmed : null);
+                const target = resolveTranslation(trimmed);
                 if (target) {
                     const trans = orig.replace(trimmed, target);
                     if (node.nodeValue !== trans) {
@@ -1202,7 +1384,7 @@ ${blurCss}
                     const orig = el[origKey];
                     const trimmed = (orig || '').trim();
                     if (!trimmed) continue;
-                    const target = (d && d[trimmed]) ? d[trimmed] : (isEn ? trimmed : null);
+                    const target = resolveTranslation(trimmed);
                     if (target) {
                         const trans = orig.replace(trimmed, target);
                         if (el.getAttribute(attr) !== trans) {
@@ -1329,6 +1511,10 @@ ${blurCss}
                     for (let k = 0; k < kids.length; k++) {
                         const child = kids[k];
                         const isHubWcv = (hubContents && child.webContents === hubContents) || (k === 1);
+                        const isCurtain = child && (child.__gravitylessIsCurtain !== undefined
+                            ? child.__gravitylessIsCurtain
+                            : (k === 0 && Boolean(child.webContents)));
+                        const isClipView = (k === 0 && child && !child.webContents && !isCurtain);
 
                         if (isHubWcv) {
                             if (typeof child.__origSetVisible === 'function') {
@@ -1346,8 +1532,8 @@ ${blurCss}
                             } else if (typeof child.setBounds === 'function') {
                                 child.setBounds({ x: 0, y: 0, width: w, height: h });
                             }
-                        } else if (k === 0) {
-                            // Underlay: clipView or curtainView
+                        } else if (isCurtain) {
+                            // 2-layer curtainView underlay: hide/0x0 under material mode, restore on none
                             if (typeof child.__origSetVisible === 'function') {
                                 child.__origSetVisible.call(child, revertAll ? true : false);
                             } else if (typeof child.setVisible === 'function') {
@@ -1363,10 +1549,15 @@ ${blurCss}
                             } else if (typeof child.setBounds === 'function') {
                                 child.setBounds(revertAll ? { x: 0, y: 0, width: w, height: h } : { x: 0, y: 0, width: 0, height: 0 });
                             }
-                        } else {
-                            if (typeof child.setBackgroundColor === 'function') {
+                        } else if (isClipView) {
+                            // 3-layer clipView: never alter visibility or bounds; only sync background color
+                            if (typeof child.__origSetBg === 'function') {
+                                child.__origSetBg.call(child, revertAll ? solidBg : '#00000000');
+                            } else if (typeof child.setBackgroundColor === 'function') {
                                 child.setBackgroundColor(revertAll ? solidBg : '#00000000');
                             }
+                        } else if (!revertAll && typeof child.setBackgroundColor === 'function') {
+                            child.setBackgroundColor('#00000000');
                         }
                     }
                 }
