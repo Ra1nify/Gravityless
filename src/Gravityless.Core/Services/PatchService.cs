@@ -15,7 +15,7 @@ public class PatchService
     /// Version stamp for the runtime bootstrap script. Bump whenever template semantics change
     /// to trigger re-generation of gravityless-bootstrap.js.
     /// </summary>
-    private const int PatchVersion = 60;
+    private const int PatchVersion = 61;
     private static readonly string PatchStamp = $"/* GRAVITYLESS_BOOTSTRAP_VERSION: {PatchVersion} */";
 
     /// <summary>Unpacks an Electron ASAR archive into outputDir using only managed code.</summary>
@@ -1415,10 +1415,13 @@ body[data-agy-theme].dark .agy-sidebar-raised {
 .gl-ctx-flyout {
     position: fixed;
     z-index: 6500;
-    width: 280px;
-    max-width: calc(100vw - 24px);
+    width: 288px;
+    max-width: calc(100vw - 32px);
+    max-height: calc(100vh - 32px);
+    overflow-y: auto;
     box-sizing: border-box;
-    padding: 13px 15px;
+    margin: 0;
+    padding: 16px 18px;
     border-radius: 8px;
     border: 1px solid var(--gl-ctx-stroke-flyout);
     background-color: var(--gl-ctx-flyout-bg);
@@ -1455,8 +1458,8 @@ body[data-agy-theme].dark .agy-sidebar-raised {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 8px;
-    margin-bottom: 8px;
+    gap: 10px;
+    margin-bottom: 10px;
 }
 .gl-ctx-title-wrap {
     min-width: 0;
@@ -1547,14 +1550,14 @@ body[data-agy-theme].dark .agy-sidebar-raised {
     color: var(--gl-ctx-fg-muted);
 }
 .gl-ctx-exact {
-    margin-top: 2px;
+    margin-top: 4px;
     font-size: 11px;
     color: var(--gl-ctx-fg-muted);
     font-variant-numeric: tabular-nums;
 }
 
 .gl-ctx-bar {
-    margin-top: 9px;
+    margin-top: 10px;
     height: 4px;
     width: 100%;
     border-radius: 9999px;
@@ -1570,7 +1573,7 @@ body[data-agy-theme].dark .agy-sidebar-raised {
 
 .gl-ctx-divider {
     height: 1px;
-    margin: 10px 0;
+    margin: 12px 0;
     background-color: var(--gl-ctx-divider);
 }
 
@@ -1604,12 +1607,12 @@ body[data-agy-theme].dark .agy-sidebar-raised {
 }
 
 .gl-ctx-groups {
-    margin-top: 8px;
-    padding-top: 8px;
+    margin-top: 10px;
+    padding-top: 10px;
     border-top: 1px solid var(--gl-ctx-divider);
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 5px;
 }
 .gl-ctx-group-title {
     font-size: 10.5px;
@@ -2502,18 +2505,18 @@ body[data-agy-theme].dark .agy-sidebar-raised {
                 return;
             }
             const br = rec.btn.getBoundingClientRect();
-            const fw = flyout.offsetWidth || 280;
-            const fh = flyout.offsetHeight || 200;
+            const fw = flyout.offsetWidth || 288;
+            const fh = flyout.offsetHeight || 220;
             const vw = window.innerWidth || document.documentElement.clientWidth;
             const vh = window.innerHeight || document.documentElement.clientHeight;
-            const gap = 8;
-            let left = Math.min(Math.max(12, br.left), Math.max(12, vw - fw - 12));
+            const edge = 16;
+            const gap = 10;
+            const left = Math.min(Math.max(edge, br.left), Math.max(edge, vw - fw - edge));
             let top = br.top - fh - gap;
-            if (top < 12 && (br.bottom + gap + fh) <= vh - 12) {
+            if (top < edge && (br.bottom + gap + fh) <= vh - edge) {
                 top = br.bottom + gap;
-            } else {
-                top = Math.max(12, top);
             }
+            top = Math.min(Math.max(edge, top), Math.max(edge, vh - fh - edge));
             flyout.style.left = Math.round(left) + 'px';
             flyout.style.top = Math.round(top) + 'px';
         }
