@@ -15,7 +15,7 @@
         ResizeMode="NoResize"
         Background="Transparent">
 
-    <Grid Margin="0,0,0,16" ClipToBounds="True">
+    <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
@@ -24,15 +24,14 @@
 
         <ui:TitleBar x:Name="DialogTitleBar" Grid.Row="0" Title="{DynamicResource Instances_ConfigDialogTitle}" ShowMaximize="False" ShowMinimize="False"/>
 
-        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Margin="24,10,24,16">
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="24,14,24,16">
             <StackPanel>
-                
                 <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
-                      <ui:SymbolIcon Symbol="Info24" FontSize="16" Foreground="{DynamicResource BrandAccentBrush}" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                      <TextBlock Text="{DynamicResource Instances_ConfigBasicHeader}" FontWeight="Bold" FontSize="15" VerticalAlignment="Center"/>
-                  </StackPanel>
-                
-                <ui:Card Margin="0,0,0,12" Padding="12,8">
+                    <ui:SymbolIcon Symbol="Info24" FontSize="15" Foreground="{DynamicResource BrandAccentBrush}" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                    <TextBlock Text="{DynamicResource Instances_ConfigBasicHeader}" FontWeight="SemiBold" FontSize="14" VerticalAlignment="Center"/>
+                </StackPanel>
+
+                <Border Style="{StaticResource FluentSubSurfaceStyle}" Padding="12,8" Margin="0,0,0,14">
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
@@ -42,115 +41,140 @@
                             <TextBlock Text="{DynamicResource Instances_IdLabel}" FontSize="11" Opacity="0.6"/>
                             <TextBlock x:Name="InstanceIdText" FontFamily="Consolas" FontSize="12" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,2,0,0"/>
                         </StackPanel>
-                        <ui:Button x:Name="CopyInstanceIdBtn" Grid.Column="1" Click="OnCopyInstanceIdClicked" Appearance="Secondary" Padding="7,4" Icon="{ui:SymbolIcon Symbol=Copy24}" ToolTip="{DynamicResource Common_Copy}"/>
+                        <Button AutomationProperties.AutomationId="CopyInstanceIdBtn"
+                                AutomationProperties.Name="{DynamicResource Common_Copy}"
+                                x:Name="CopyInstanceIdBtn"
+                                Grid.Column="1"
+                                Style="{StaticResource FluentBorderlessButtonStyle}"
+                                Click="OnCopyInstanceIdClicked"
+                                Padding="7,5"
+                                ToolTip="{DynamicResource Common_Copy}"
+                                VerticalAlignment="Center">
+                            <ui:SymbolIcon Symbol="Copy24" FontSize="15" Opacity="0.78"/>
+                        </Button>
                     </Grid>
-                </ui:Card>
+                </Border>
 
-                <TextBlock Text="{DynamicResource Instances_ConfigNameLabel}" FontSize="12" Opacity="0.75" Margin="0,0,0,4"/>
-                <ui:TextBox x:Name="InstanceNameBox" Margin="0,0,0,12"/>
+                <TextBlock Text="{DynamicResource Instances_ConfigNameLabel}" FontSize="12" Opacity="0.75" Margin="0,0,0,5"/>
+                <ui:TextBox AutomationProperties.AutomationId="InstanceNameBox" x:Name="InstanceNameBox" Margin="0,0,0,12"/>
 
-                <TextBlock Text="{DynamicResource Instances_ConfigAccountLabel}" FontSize="12" Opacity="0.75" Margin="0,0,0,4"/>
-                <ComboBox x:Name="AccountCombo" DisplayMemberPath="Email" SelectedValuePath="Id" Margin="0,0,0,14"/>
+                <TextBlock Text="{DynamicResource Instances_ConfigAccountLabel}" FontSize="12" Opacity="0.75" Margin="0,0,0,5"/>
+                <ComboBox AutomationProperties.AutomationId="InstanceAccountCombo" x:Name="AccountCombo" DisplayMemberPath="Email" SelectedValuePath="Id" Margin="0,0,0,14"/>
 
                 <Grid Margin="0,0,0,6">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
-                    <TextBlock Grid.Column="0" Text="授权挂载的项目与记忆库 (可多选):" FontSize="12" Opacity="0.75" VerticalAlignment="Center"/>
-                    <TextBlock Grid.Column="1" x:Name="SelectedProjectsCountText" Text="已选 0 项 (共 0 项)" FontSize="11" Opacity="0.6" VerticalAlignment="Center"/>
+                    <TextBlock Grid.Column="0" Text="{DynamicResource Instances_ConfigProjectsLabel}" FontSize="12" Opacity="0.75" VerticalAlignment="Center"/>
+                    <TextBlock Grid.Column="1" x:Name="SelectedProjectsCountText" FontSize="11" Opacity="0.6" VerticalAlignment="Center"/>
                 </Grid>
 
-                <ui:TextBox x:Name="ProjectSearchBox" 
-                            PlaceholderText="搜索项目名称、本地路径或 ID..." 
-                            Icon="{ui:SymbolIcon Symbol=Search24}" 
-                            ClearButtonEnabled="True" 
-                            TextChanged="OnProjectSearchTextChanged" 
+                <ui:TextBox AutomationProperties.AutomationId="InstanceProjectSearchBox"
+                            x:Name="ProjectSearchBox"
+                            PlaceholderText="{DynamicResource Instances_ConfigProjectSearchPlaceholder}"
+                            Icon="{ui:SymbolIcon Symbol=Search24}"
+                            ClearButtonEnabled="True"
+                            TextChanged="OnProjectSearchTextChanged"
                             Margin="0,0,0,8"/>
 
-                <Border Background="{DynamicResource ControlFillColorDefaultBrush}" BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="6" MaxHeight="160" Margin="0,0,0,16">
-                    <ScrollViewer VerticalScrollBarVisibility="Auto">
-                        <ItemsControl x:Name="ProjectsCheckList" Margin="8,4">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <CheckBox Content="{Binding DisplayText}" 
-                                              IsChecked="{Binding IsSelected, Mode=TwoWay}" 
-                                              Checked="OnProjectCheckChanged" 
-                                              Unchecked="OnProjectCheckChanged" 
-                                              Margin="4,4"/>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                    </ScrollViewer>
+                <Border x:Name="ProjectsListBorder"
+                        Background="{DynamicResource ControlFillColorDefaultBrush}"
+                        BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                        BorderThickness="1"
+                        CornerRadius="{StaticResource FluentControlCornerRadius}"
+                        MaxHeight="160"
+                        Margin="0,0,0,16">
+                    <Grid>
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <ItemsControl x:Name="ProjectsCheckList" Margin="8,4">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <CheckBox Content="{Binding DisplayText}"
+                                                  IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                                  Checked="OnProjectCheckChanged"
+                                                  Unchecked="OnProjectCheckChanged"
+                                                  Margin="4,4"/>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                        <TextBlock x:Name="ProjectsEmptyHint"
+                                   Text="{DynamicResource Instances_ConfigNoProjectsHint}"
+                                   FontSize="12" Opacity="0.55"
+                                   Padding="12,10"
+                                   Visibility="Collapsed"/>
+                    </Grid>
                 </Border>
 
-                <Separator Margin="0,4,0,16" Opacity="0.2"/>
+                <StackPanel Orientation="Horizontal" Margin="0,2,0,10">
+                    <ui:SymbolIcon Symbol="Share24" FontSize="15" Foreground="{DynamicResource BrandAccentBrush}" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                    <TextBlock Text="{DynamicResource Instances_ConfigSharedHeader}" FontWeight="SemiBold" FontSize="14" VerticalAlignment="Center"/>
+                </StackPanel>
 
-                <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
-                      <ui:SymbolIcon Symbol="Share24" FontSize="16" Foreground="{DynamicResource BrandAccentBrush}" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                      <TextBlock Text="{DynamicResource Instances_ConfigSharedHeader}" FontWeight="Bold" FontSize="15" VerticalAlignment="Center"/>
-                  </StackPanel>
-                <TextBlock Text="{DynamicResource Instances_ConfigSharedDesc}" FontSize="12" Opacity="0.65" Margin="0,0,0,12"/>
+                <Border CornerRadius="{StaticResource FluentCardCornerRadius}"
+                        Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                        BorderThickness="1"
+                        Margin="0,0,0,14">
+                    <StackPanel>
+                        <Grid Margin="14,10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" Margin="0,0,12,0">
+                                <TextBlock Text="{DynamicResource Instances_ShareSkillsTip}" FontWeight="SemiBold" FontSize="13"/>
+                                <TextBlock Text="{DynamicResource Instances_ConfigSkillsDesc}" FontSize="11.5" Opacity="0.65" TextWrapping="Wrap" Margin="0,2,0,0"/>
+                            </StackPanel>
+                            <ui:ToggleSwitch Grid.Column="1" x:Name="ShareSkillsSwitch" VerticalAlignment="Center"/>
+                        </Grid>
 
-                <ui:Card Margin="0,0,0,8" Padding="12,10">
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="0">
-                            <TextBlock Text="{DynamicResource Instances_ShareSkillsTip}" FontWeight="SemiBold" FontSize="13"/>
-                            <TextBlock Text="{DynamicResource Instances_ConfigSkillsDesc}" FontSize="11" Opacity="0.65" TextWrapping="Wrap" Margin="0,2,0,0"/>
-                        </StackPanel>
-                        <ui:ToggleSwitch Grid.Column="1" x:Name="ShareSkillsSwitch" VerticalAlignment="Center"/>
-                    </Grid>
-                </ui:Card>
+                        <Border Height="1" Background="{DynamicResource ControlStrokeColorDefaultBrush}" Opacity="0.35"/>
 
-                <ui:Card Margin="0,0,0,8" Padding="12,10">
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="0">
-                            <TextBlock Text="{DynamicResource Instances_SharePluginsTip}" FontWeight="SemiBold" FontSize="13"/>
-                            <TextBlock Text="{DynamicResource Instances_ConfigPluginsDesc}" FontSize="11" Opacity="0.65" TextWrapping="Wrap" Margin="0,2,0,0"/>
-                        </StackPanel>
-                        <ui:ToggleSwitch Grid.Column="1" x:Name="SharePluginsSwitch" VerticalAlignment="Center"/>
-                    </Grid>
-                </ui:Card>
+                        <Grid Margin="14,10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" Margin="0,0,12,0">
+                                <TextBlock Text="{DynamicResource Instances_SharePluginsTip}" FontWeight="SemiBold" FontSize="13"/>
+                                <TextBlock Text="{DynamicResource Instances_ConfigPluginsDesc}" FontSize="11.5" Opacity="0.65" TextWrapping="Wrap" Margin="0,2,0,0"/>
+                            </StackPanel>
+                            <ui:ToggleSwitch Grid.Column="1" x:Name="SharePluginsSwitch" VerticalAlignment="Center"/>
+                        </Grid>
 
-                <ui:Card Margin="0,0,0,12" Padding="12,10">
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="0">
-                            <TextBlock Text="{DynamicResource Instances_ShareMcpTip}" FontWeight="SemiBold" FontSize="13"/>
-                            <TextBlock Text="{DynamicResource Instances_ConfigMcpDesc}" FontSize="11" Opacity="0.65" TextWrapping="Wrap" Margin="0,2,0,0"/>
-                        </StackPanel>
-                        <ui:ToggleSwitch Grid.Column="1" x:Name="ShareMcpSwitch" VerticalAlignment="Center"/>
-                    </Grid>
-                </ui:Card>
+                        <Border Height="1" Background="{DynamicResource ControlStrokeColorDefaultBrush}" Opacity="0.35"/>
 
-                <Separator x:Name="SandboxSeparator" Margin="0,4,0,16" Opacity="0.2"/>
+                        <Grid Margin="14,10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" Margin="0,0,12,0">
+                                <TextBlock Text="{DynamicResource Instances_ShareMcpTip}" FontWeight="SemiBold" FontSize="13"/>
+                                <TextBlock Text="{DynamicResource Instances_ConfigMcpDesc}" FontSize="11.5" Opacity="0.65" TextWrapping="Wrap" Margin="0,2,0,0"/>
+                            </StackPanel>
+                            <ui:ToggleSwitch Grid.Column="1" x:Name="ShareMcpSwitch" VerticalAlignment="Center"/>
+                        </Grid>
+                    </StackPanel>
+                </Border>
 
-                <ui:Button x:Name="OpenSandboxButton" 
-                           Content="{DynamicResource Instances_OpenSandboxFolderBtn}" 
-                           Click="OnOpenSandboxClicked" 
-                           Appearance="Secondary" 
-                           Icon="{ui:SymbolIcon Symbol=FolderOpen24}" 
-                           HorizontalAlignment="Stretch" 
+                <ui:Button AutomationProperties.AutomationId="OpenSandboxButton"
+                           x:Name="OpenSandboxButton"
+                           Content="{DynamicResource Instances_OpenSandboxFolderBtn}"
+                           Click="OnOpenSandboxClicked"
+                           Appearance="Secondary"
+                           Icon="{ui:SymbolIcon Symbol=FolderOpen24}"
+                           HorizontalAlignment="Stretch"
                            Padding="12,8"/>
-
             </StackPanel>
         </ScrollViewer>
 
         <Border Grid.Row="2" Background="{DynamicResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{DynamicResource DividerStrokeColorDefaultBrush}" BorderThickness="0,1,0,0" Padding="24,12">
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                <ui:Button Content="{DynamicResource Common_Cancel}" Click="OnCancelClicked" Appearance="Secondary" Margin="0,0,10,0" Width="80"/>
-                <ui:Button x:Name="SaveButton" Content="{DynamicResource Common_Save}" Click="OnSaveClicked" Appearance="Primary" Width="90"/>
+                <ui:Button AutomationProperties.AutomationId="InstanceConfigCancelBtn" Content="{DynamicResource Common_Cancel}" Click="OnCancelClicked" Appearance="Secondary" Margin="0,0,8,0" Width="80"/>
+                <ui:Button AutomationProperties.AutomationId="InstanceConfigSaveBtn" x:Name="SaveButton" Content="{DynamicResource Common_Save}" Click="OnSaveClicked" Appearance="Primary" Width="90"/>
             </StackPanel>
         </Border>
     </Grid>

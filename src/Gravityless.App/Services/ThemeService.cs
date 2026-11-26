@@ -8,7 +8,7 @@ namespace Gravityless.App.Services;
 /// <summary>Applies native window backdrop and surface opacity across all FluentWindow instances.</summary>
 public static class ThemeService
 {
-    private static string _currentMaterial = "mica";
+    private static string _currentMaterial = "none";
     private static double _currentOpacity = 0.72;
     private static double _currentPopupOpacity = 0.60;
 

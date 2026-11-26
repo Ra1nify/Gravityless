@@ -43,6 +43,8 @@ public partial class MainWindow
     private readonly ObservableCollection<SkillItem> _skillsDisplayList = [];
     private readonly ObservableCollection<PluginItem> _pluginsDisplayList = [];
     private readonly ObservableCollection<McpServerItem> _mcpDisplayList = [];
+    /// <summary>Cached direct installer download URL from the latest Cloud Run manifest.</summary>
+    private string? _currentDownloadUrl;
     private UpdateManifest? _currentManifest;
 
     /// <summary>
@@ -124,50 +126,42 @@ public partial class MainWindow
             {
                 var mat = _daemon.MicaMaterial;
                 var opacity = _daemon.MicaOpacity;
-                switch (_daemon.ThemeMode)
+                if (ThemeModeCombo != null)
                 {
-                    case "light" when ThemeLightRadio != null:
-                        ThemeLightRadio.IsChecked = true;
-                        break;
-                    case "dark" when ThemeDarkRadio != null:
-                        ThemeDarkRadio.IsChecked = true;
-                        break;
-                    default:
-                        if (ThemeAutoRadio != null) ThemeAutoRadio.IsChecked = true;
-                        break;
+                    ThemeModeCombo.SelectedItem = _daemon.ThemeMode switch
+                    {
+                        "light" => ThemeLightItem,
+                        "dark" => ThemeDarkItem,
+                        _ => ThemeAutoItem
+                    };
                 }
-                // Tabbed backdrop needs Win11 22H2; disable the option where unsupported.
-                if (TabbedRadioBtn != null && !ThemeService.SupportsTabbed)
+
+                // Tabbed/Acrylic backdrops need Win11 22H2; disable unsupported options.
+                if (MaterialTabbedItem != null && !ThemeService.SupportsTabbed)
                 {
-                    TabbedRadioBtn.IsEnabled = false;
-                    TabbedRadioBtn.ToolTip = LocalizationService.GetString(
+                    MaterialTabbedItem.IsEnabled = false;
+                    MaterialTabbedItem.ToolTip = LocalizationService.GetString(
                         "Appearance_MaterialTabbedUnsupported", "需要 Windows 11 22H2 及以上版本");
-                    if (mat == "tabbed") mat = "mica";
+                    if (mat == "tabbed") mat = "none";
                 }
 
-                if (AcrylicRadioBtn != null && !ThemeService.SupportsAcrylic)
+                if (MaterialAcrylicItem != null && !ThemeService.SupportsAcrylic)
                 {
-                    AcrylicRadioBtn.IsEnabled = false;
-                    AcrylicRadioBtn.ToolTip = LocalizationService.GetString(
+                    MaterialAcrylicItem.IsEnabled = false;
+                    MaterialAcrylicItem.ToolTip = LocalizationService.GetString(
                         "Appearance_MaterialAcrylicUnsupported", "需要 Windows 11 22H2 及以上版本");
-                    if (mat == "acrylic") mat = "mica";
+                    if (mat == "acrylic") mat = "none";
                 }
 
-                if (mat == "none" && NoneRadioBtn != null)
+                if (BackdropMaterialCombo != null)
                 {
-                    NoneRadioBtn.IsChecked = true;
-                }
-                else if (mat == "acrylic" && AcrylicRadioBtn != null)
-                {
-                    AcrylicRadioBtn.IsChecked = true;
-                }
-                else if (mat == "tabbed" && TabbedRadioBtn != null)
-                {
-                    TabbedRadioBtn.IsChecked = true;
-                }
-                else if (MicaRadioBtn != null)
-                {
-                    MicaRadioBtn.IsChecked = true;
+                    BackdropMaterialCombo.SelectedItem = mat switch
+                    {
+                        "mica" => MaterialMicaItem,
+                        "tabbed" => MaterialTabbedItem,
+                        "acrylic" => MaterialAcrylicItem,
+                        _ => MaterialNoneItem
+                    };
                 }
 
                 // Slider shows transparency: 0% = opaque, 100% = fully transparent.
@@ -306,7 +300,7 @@ public partial class MainWindow
         try
         {
             MainTitleBar.Title = string.Format(
-                LocalizationService.GetString("App_TitleBarFormat", "Gravityless v{0} - Yet Another Spicy Companion Of Antigravity"),
+                LocalizationService.GetString("App_TitleBarFormat", "Gravityless · v{0}"),
                 version);
         }
         catch { }
@@ -365,48 +359,116 @@ public partial class MainWindow
         var managed = _engineService.DetectManagedEngine();
         var hasRunning = _instanceService.Instances.Any(i => i.IsRunning) || _projectService.Projects.Any(p => p.IsRunning);
         var hasUpdate = _currentManifest != null && managed.IsAvailable && !string.IsNullOrEmpty(_currentManifest.Version) && _currentManifest.Version != managed.Version;
-        // Core badge has four states: not ready / running / update available / idle.
+
+        // Clean dot conveys state while sidebar label keeps neutral theme foreground.
         if (!managed.IsAvailable)
         {
-            CoreStatusDot.Foreground = Palette.Critical;
+            CoreStatusDot.Fill = Palette.Critical;
             SidebarCoreVersionText.Text = LocalizationService.GetString("Sidebar_CoreNotReady", "Core: 未就绪");
-            SidebarCoreVersionText.Foreground = CoreStatusDot.Foreground;
             CoreStatusBadgeContainer.ToolTip = LocalizationService.GetString("Sidebar_CoreTooltipNotReady", "托管核心未就绪，请前往【概览】下载安装便携核心");
         }
         else if (hasRunning)
         {
-            CoreStatusDot.Foreground = Palette.Accent;
+            CoreStatusDot.Fill = Palette.Accent;
             SidebarCoreVersionText.Text = string.Format(LocalizationService.GetString("Sidebar_CoreRunningFormat", "Core: v{0} (运行中)"), managed.Version);
-            SidebarCoreVersionText.Foreground = CoreStatusDot.Foreground;
             CoreStatusBadgeContainer.ToolTip = string.Format(LocalizationService.GetString("Sidebar_CoreTooltipRunningFormat", "当前有活动实例或项目正在运行中 (Core v{0})"), managed.Version);
         }
         else if (hasUpdate)
         {
-            CoreStatusDot.Foreground = Palette.Caution;
+            CoreStatusDot.Fill = Palette.Caution;
             SidebarCoreVersionText.Text = string.Format(LocalizationService.GetString("Sidebar_CoreUpdateFormat", "Core: v{0} (有新版)"), managed.Version);
-            SidebarCoreVersionText.Foreground = CoreStatusDot.Foreground;
             CoreStatusBadgeContainer.ToolTip = string.Format(LocalizationService.GetString("Sidebar_CoreTooltipUpdateFormat", "官方检测到新版: v{0}，可前往【概览】升级"), _currentManifest?.Version);
         }
         else
         {
-            CoreStatusDot.Foreground = Palette.Success;
+            CoreStatusDot.Fill = Palette.Success;
             SidebarCoreVersionText.Text = string.Format(LocalizationService.GetString("Sidebar_CoreIdleFormat", "Core: v{0} (空闲)"), managed.Version);
-            SidebarCoreVersionText.Foreground = CoreStatusDot.Foreground;
             CoreStatusBadgeContainer.ToolTip = string.Format(LocalizationService.GetString("Sidebar_CoreTooltipReadyFormat", "Antigravity 托管核心就绪 (Core v{0})，当前处于空闲状态"), managed.Version);
         }
-        // Daemon badge has two states: active / offline.
+
         if (_daemon.IsRunning)
         {
-            DaemonStatusDot.Foreground = Palette.Success;
+            DaemonStatusDot.Fill = Palette.Success;
             SidebarDaemonPortText.Text = string.Format(LocalizationService.GetString("Sidebar_DaemonActiveFormat", "Daemon: :{0} (活跃)"), _daemon.Port);
             DaemonStatusBadgeContainer.ToolTip = string.Format(LocalizationService.GetString("Sidebar_DaemonTooltipActiveFormat", "Gravityless 内嵌守护服务正常工作中 (127.0.0.1:{0})"), _daemon.Port);
         }
         else
         {
-            DaemonStatusDot.Foreground = Palette.Critical;
+            DaemonStatusDot.Fill = Palette.Critical;
             SidebarDaemonPortText.Text = LocalizationService.GetString("Sidebar_DaemonOffline", "Daemon: 离线");
             DaemonStatusBadgeContainer.ToolTip = LocalizationService.GetString("Sidebar_DaemonTooltipOffline", "守护服务未能正常监听，外联样式与热重载可能不可用");
         }
+
+        UpdateOverviewSummaryCards(managed, hasRunning, hasUpdate);
+    }
+
+    private void UpdateOverviewSummaryCards(AntigravityEngine managed, bool hasRunning, bool hasUpdate)
+    {
+        if (OverviewCoreSummaryDot != null && OverviewCoreSummaryText != null)
+        {
+            if (!managed.IsAvailable)
+            {
+                OverviewCoreSummaryDot.Fill = Palette.Critical;
+                OverviewCoreSummaryText.Text = LocalizationService.GetString("Overview_CoreNotReady", "未就绪");
+            }
+            else if (hasRunning)
+            {
+                OverviewCoreSummaryDot.Fill = Palette.Accent;
+                OverviewCoreSummaryText.Text = $"v{managed.Version} · " + LocalizationService.GetString("Common_Running", "运行中");
+            }
+            else if (hasUpdate)
+            {
+                OverviewCoreSummaryDot.Fill = Palette.Caution;
+                OverviewCoreSummaryText.Text = $"v{managed.Version} · " + LocalizationService.GetString("Overview_CoreUpdateTag", "可升级");
+            }
+            else
+            {
+                OverviewCoreSummaryDot.Fill = Palette.Success;
+                OverviewCoreSummaryText.Text = $"v{managed.Version} · " + LocalizationService.GetString("Overview_CoreReady", "就绪");
+            }
+        }
+
+        if (OverviewDaemonSummaryDot != null && OverviewDaemonSummaryText != null)
+        {
+            if (_daemon.IsRunning)
+            {
+                OverviewDaemonSummaryDot.Fill = Palette.Success;
+                OverviewDaemonSummaryText.Text = $":{_daemon.Port}";
+            }
+            else
+            {
+                OverviewDaemonSummaryDot.Fill = Palette.Critical;
+                OverviewDaemonSummaryText.Text = LocalizationService.GetString("Sidebar_DaemonOffline", "Daemon: 离线");
+            }
+        }
+
+        UpdateOverviewWorkspaceSummary();
+    }
+
+    private void UpdateOverviewWorkspaceSummary()
+    {
+        if (OverviewWorkspaceSummaryText == null) return;
+        OverviewWorkspaceSummaryText.Text = string.Format(
+            LocalizationService.GetString("Overview_WorkspaceSummaryFormat", "{0} 实例 · {1} 账号 · {2} 项目"),
+            _instanceService.Instances.Count,
+            _accountPool.Accounts.Count,
+            _projectService.Projects.Count);
+    }
+
+    private void OnSidebarCoreClicked(object sender, RoutedEventArgs e)
+    {
+        SwitchView("overview");
+    }
+
+    private void OnSidebarDaemonClicked(object sender, RoutedEventArgs e)
+    {
+        if (!_daemon.IsRunning) return;
+        try
+        {
+            Clipboard.SetText($"http://127.0.0.1:{_daemon.Port}");
+            DaemonStatusBadgeContainer.ToolTip = LocalizationService.GetString("Sidebar_DaemonCopiedTip", "守护端口地址已复制");
+        }
+        catch { }
     }
 
     private void OnNavItemClicked(object sender, RoutedEventArgs e)
@@ -434,6 +496,20 @@ public partial class MainWindow
         ProxyView.Visibility = tag == "proxy" ? Visibility.Visible : Visibility.Collapsed;
         AccountsView.Visibility = tag == "accounts" ? Visibility.Visible : Visibility.Collapsed;
         AppearanceView.Visibility = tag == "appearance" ? Visibility.Visible : Visibility.Collapsed;
+
+        var (titleKey, subtitleKey) = tag switch
+        {
+            "instances" => ("PageHeader_InstancesTitle", "PageHeader_InstancesSubtitle"),
+            "projects" => ("PageHeader_ProjectsTitle", "PageHeader_ProjectsSubtitle"),
+            "tools" => ("PageHeader_ToolsTitle", "PageHeader_ToolsSubtitle"),
+            "proxy" => ("PageHeader_ProxyTitle", "PageHeader_ProxySubtitle"),
+            "accounts" => ("PageHeader_AccountsTitle", "PageHeader_AccountsSubtitle"),
+            "appearance" => ("PageHeader_AppearanceTitle", "PageHeader_AppearanceSubtitle"),
+            _ => ("PageHeader_OverviewTitle", "PageHeader_OverviewSubtitle")
+        };
+        PageHeaderTitle?.SetResourceReference(System.Windows.Controls.TextBlock.TextProperty, titleKey);
+        PageHeaderSubtitle?.SetResourceReference(System.Windows.Controls.TextBlock.TextProperty, subtitleKey);
+
         if (tag == "tools")
         {
             RefreshToolsUi();
@@ -536,26 +612,78 @@ public partial class MainWindow
     private void RefreshEngineStatus()
     {
         var managed = _engineService.DetectManagedEngine();
+        var hasUpdate = _currentManifest != null && managed.IsAvailable &&
+                        !string.IsNullOrEmpty(_currentManifest.Version) &&
+                        !string.Equals(_currentManifest.Version, managed.Version, StringComparison.OrdinalIgnoreCase);
+
         UpdateSidebarStatus();
+
         if (managed.IsAvailable)
         {
-            // Badge background is the status color at ~9% alpha.
-            CoreStatusBadgeBorder.Background = Palette.WithAlpha(Palette.Success, 0x18);
-            CoreStatusBadgeText.Text = LocalizationService.GetString("Overview_CoreReady", "就绪");
-            CoreStatusBadgeText.Foreground = Palette.Success;
+            if (hasUpdate)
+            {
+                CoreStatusBadgeBorder.Background = Palette.WithAlpha(Palette.Caution, 0x18);
+                CoreStatusBadgeText.Text = LocalizationService.GetString("Overview_CoreUpdateTag", "可升级");
+                CoreStatusBadgeText.Foreground = Palette.Caution;
+            }
+            else
+            {
+                CoreStatusBadgeBorder.Background = Palette.WithAlpha(Palette.Success, 0x18);
+                CoreStatusBadgeText.Text = LocalizationService.GetString("Overview_CoreReady", "就绪");
+                CoreStatusBadgeText.Foreground = Palette.Success;
+            }
             ManagedCoreVersionText.Text = $"v{managed.Version}";
             ManagedCorePathText.Text = managed.ExecutablePath;
+            CorePathButton.Visibility = Visibility.Visible;
         }
         else
         {
             CoreStatusBadgeBorder.Background = Palette.WithAlpha(Palette.Critical, 0x18);
             CoreStatusBadgeText.Text = LocalizationService.GetString("Overview_CoreNotReady", "未就绪");
             CoreStatusBadgeText.Foreground = Palette.Critical;
-            ManagedCoreVersionText.Text = LocalizationService.GetString("Overview_CoreNotInstalled", "未安装托管便携核心");
+            ManagedCoreVersionText.Text = LocalizationService.GetString("Overview_CoreNotInstalled", "未安装托管核心");
             ManagedCorePathText.Text = "-";
+            CorePathButton.Visibility = Visibility.Collapsed;
         }
+
+        if (_currentManifest != null && CoreUpdateProgressRing?.Visibility != Visibility.Visible)
+        {
+            var sizeMb = _currentManifest.Size / (1024.0 * 1024.0);
+            var tip = $"v{_currentManifest.Version} · {sizeMb:F1} MB";
+            if (managed.IsAvailable && !hasUpdate)
+            {
+                SetInlineUpdateTag(
+                    CoreUpdateProgressRing,
+                    CoreUpdateStatusTag,
+                    CoreUpdateStatusTagText,
+                    InlineUpdateTagState.Latest,
+                    tooltip: tip);
+            }
+            else
+            {
+                SetInlineUpdateTag(
+                    CoreUpdateProgressRing,
+                    CoreUpdateStatusTag,
+                    CoreUpdateStatusTagText,
+                    InlineUpdateTagState.Update,
+                    string.Format(LocalizationService.GetString("UpdateTag_UpdateFormat", "新版 {0}"), $"v{_currentManifest.Version}"),
+                    tip);
+            }
+        }
+
+        if (DownloadInstallButton != null)
+        {
+            DownloadInstallButton.Content = managed.IsAvailable && hasUpdate
+                ? LocalizationService.GetString("CloudUpdate_UpgradeBtn", "升级核心")
+                : LocalizationService.GetString("CloudUpdate_InstallBtn", "安装核心");
+            DownloadInstallButton.Appearance = (!managed.IsAvailable || hasUpdate)
+                ? ControlAppearance.Primary
+                : ControlAppearance.Secondary;
+        }
+
         if (UninstallCoreButton != null)
         {
+            UninstallCoreButton.Visibility = managed.IsAvailable ? Visibility.Visible : Visibility.Collapsed;
             UninstallCoreButton.IsEnabled = managed.IsAvailable;
         }
     }
@@ -606,6 +734,7 @@ public partial class MainWindow
                 ShowQuotaSummary = !string.IsNullOrEmpty(quotaText)
             });
         }
+        UpdateOverviewWorkspaceSummary();
     }
 
     private void RefreshProjectsUi()
@@ -626,6 +755,11 @@ public partial class MainWindow
         {
             _projectDisplayList.Add(new ProjectDisplayItem(proj, allInstances));
         }
+        if (ProjectsEmptyState != null)
+        {
+            ProjectsEmptyState.Visibility = _projectDisplayList.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        }
+        UpdateOverviewWorkspaceSummary();
     }
 
     private void RefreshInstancesUi()
@@ -637,6 +771,11 @@ public partial class MainWindow
         {
             _instanceDisplayList.Add(new InstanceDisplayItem(inst, accountsList, projectsList));
         }
+        if (InstancesEmptyState != null)
+        {
+            InstancesEmptyState.Visibility = _instanceDisplayList.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        }
+        UpdateOverviewWorkspaceSummary();
     }
 
     private async void OnImportFromGeminiClicked(object sender, RoutedEventArgs e)
@@ -2033,45 +2172,74 @@ public partial class MainWindow
         UpdateInfoBar.Message = message;
     }
 
-    /// <summary>Shows or hides the progress row in the details panel below the InfoBar.</summary>
+    /// <summary>Shows or hides the progress panel below the Core InfoBar.</summary>
     private void SetUpdateProgressVisible(bool visible)
     {
         if (InstallProgressPanel != null)
         {
             InstallProgressPanel.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
         }
-        SyncUpdateDetailsPanel();
-    }
-
-    /// <summary>
-    /// The details panel is visible when either the download link or the progress row is.
-    /// The InfoBar itself only renders Title and Message, so these extras need their own surface.
-    /// </summary>
-    private void SyncUpdateDetailsPanel()
-    {
-        if (UpdateDetailsPanel == null) return;
-
-        var hasLink = DownloadLinkPanel?.Visibility == Visibility.Visible;
-        var hasProgress = InstallProgressPanel?.Visibility == Visibility.Visible;
-        UpdateDetailsPanel.Visibility = hasLink || hasProgress
-            ? Visibility.Visible
-            : Visibility.Collapsed;
     }
 
     // ---------------------------------------------------------------- app self-update
 
-    /// <summary>
-    /// Checks the info branch for a newer build. Mirrors are not configured yet, so the
-    /// default endpoint is the only entry.
-    /// </summary>
+    private enum InlineUpdateTagState
+    {
+        None,
+        Checking,
+        Latest,
+        Update,
+        Fail
+    }
+
+    private static void SetInlineUpdateTag(
+        Wpf.Ui.Controls.ProgressRing? ring,
+        Border? tag,
+        System.Windows.Controls.TextBlock? tagText,
+        InlineUpdateTagState state,
+        string? label = null,
+        string? tooltip = null)
+    {
+        if (ring != null)
+        {
+            ring.Visibility = state == InlineUpdateTagState.Checking ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        if (tag == null || tagText == null) return;
+
+        if (state is InlineUpdateTagState.None or InlineUpdateTagState.Checking)
+        {
+            tag.Visibility = Visibility.Collapsed;
+            tag.ToolTip = null;
+            return;
+        }
+
+        var (accent, defaultText) = state switch
+        {
+            InlineUpdateTagState.Latest => (Palette.Success, LocalizationService.GetString("UpdateTag_Latest", "最新")),
+            InlineUpdateTagState.Update => (Palette.Caution, LocalizationService.GetString("Overview_CoreUpdateTag", "可升级")),
+            _ => (Palette.Critical, LocalizationService.GetString("UpdateTag_Fail", "失败"))
+        };
+
+        tag.Background = Palette.WithAlpha(accent, 0x18);
+        tagText.Foreground = accent;
+        tagText.Text = string.IsNullOrWhiteSpace(label) ? defaultText : label;
+        tag.ToolTip = string.IsNullOrWhiteSpace(tooltip) ? null : tooltip;
+        tag.Visibility = Visibility.Visible;
+    }
+
+    /// <summary>Checks for a newer app build and updates the inline status tag.</summary>
     private async void OnCheckAppUpdateClicked(object sender, RoutedEventArgs e)
     {
         if (AppUpdateButton != null) AppUpdateButton.IsEnabled = false;
-        if (AppUpdateInstallButton != null) AppUpdateInstallButton.IsEnabled = false;
+        if (AppUpdateInstallButton != null)
+        {
+            AppUpdateInstallButton.IsEnabled = false;
+            AppUpdateInstallButton.Visibility = Visibility.Collapsed;
+        }
 
-        SetAppUpdateStatus(
-            LocalizationService.GetString("Overview_AppUpdateChecking", "正在检查更新…"),
-            InfoBarSeverity.Informational);
+        SetInlineUpdateTag(AppUpdateProgressRing, AppUpdateStatusTag, AppUpdateStatusTagText, InlineUpdateTagState.Checking);
+        if (AppUpdateInfoBar != null) AppUpdateInfoBar.IsOpen = false;
 
         try
         {
@@ -2081,7 +2249,9 @@ public partial class MainWindow
             if (!result.IsSuccess || result.Info == null)
             {
                 _pendingAppUpdate = null;
-                SetAppUpdateStatus(DescribeUpdateFailure(result), InfoBarSeverity.Error);
+                var err = DescribeUpdateFailure(result);
+                SetInlineUpdateTag(AppUpdateProgressRing, AppUpdateStatusTag, AppUpdateStatusTagText, InlineUpdateTagState.Fail, tooltip: err);
+                SetAppUpdateStatus(err, InfoBarSeverity.Error);
                 return;
             }
 
@@ -2090,22 +2260,24 @@ public partial class MainWindow
 
             if (local <= 0)
             {
-                // A Debug build carries no version code, so no comparison is meaningful.
                 _pendingAppUpdate = null;
-                SetAppUpdateStatus(
-                    LocalizationService.GetString("Overview_AppUpdateNoLocalCode", "当前构建无版本码，跳过比较。"),
-                    InfoBarSeverity.Warning);
+                var noCode = LocalizationService.GetString("Overview_AppUpdateNoLocalCode", "当前构建无版本码，跳过比较。");
+                SetInlineUpdateTag(AppUpdateProgressRing, AppUpdateStatusTag, AppUpdateStatusTagText, InlineUpdateTagState.Fail, tooltip: noCode);
+                SetAppUpdateStatus(noCode, InfoBarSeverity.Warning);
                 return;
             }
 
             if (!AppVersion.IsNewer(info.VersionCode, local))
             {
                 _pendingAppUpdate = null;
-                SetAppUpdateStatus(
-                    string.Format(
-                        LocalizationService.GetString("Overview_AppUpdateLatestFormat", "已是最新版本 {0}。"),
-                        AppVersion.ReadLocalVersionName()),
-                    InfoBarSeverity.Success);
+                var latestText = string.Format(
+                    LocalizationService.GetString("Overview_AppUpdateLatestFormat", "已是最新版本 {0}。"),
+                    AppVersion.ReadLocalVersionName());
+                SetInlineUpdateTag(AppUpdateProgressRing, AppUpdateStatusTag, AppUpdateStatusTagText, InlineUpdateTagState.Latest, tooltip: latestText);
+                if (AppUpdateInfoBar != null)
+                {
+                    AppUpdateInfoBar.IsOpen = false;
+                }
                 return;
             }
 
@@ -2113,11 +2285,11 @@ public partial class MainWindow
             if (asset == null)
             {
                 _pendingAppUpdate = null;
-                SetAppUpdateStatus(
-                    string.Format(
-                        LocalizationService.GetString("Overview_AppUpdateNoAssetFormat", "版本 {0} 没有适用于本机架构的安装包。"),
-                        info.Version),
-                    InfoBarSeverity.Warning);
+                var noAsset = string.Format(
+                    LocalizationService.GetString("Overview_AppUpdateNoAssetFormat", "版本 {0} 没有适用于本机架构的安装包。"),
+                    info.Version);
+                SetInlineUpdateTag(AppUpdateProgressRing, AppUpdateStatusTag, AppUpdateStatusTagText, InlineUpdateTagState.Fail, tooltip: noAsset);
+                SetAppUpdateStatus(noAsset, InfoBarSeverity.Warning);
                 return;
             }
 
@@ -2127,17 +2299,29 @@ public partial class MainWindow
                 ? string.Format(LocalizationService.GetString("Overview_AppUpdateSizeFormat", " · {0} MB"), (asset.Size / 1024.0 / 1024.0).ToString("F1"))
                 : string.Empty;
 
-            SetAppUpdateStatus(
-                string.Format(
-                    LocalizationService.GetString("Overview_AppUpdateFoundFormat", "发现新版本 {0}{1}"),
-                    info.Version, sizeText),
-                InfoBarSeverity.Success);
+            var foundMsg = string.Format(
+                LocalizationService.GetString("Overview_AppUpdateFoundFormat", "发现新版本 {0}{1}"),
+                info.Version, sizeText);
+            var foundTag = string.Format(
+                LocalizationService.GetString("UpdateTag_UpdateFormat", "新版 {0}"),
+                info.Version);
 
-            if (AppUpdateInstallButton != null) AppUpdateInstallButton.IsEnabled = true;
+            SetInlineUpdateTag(AppUpdateProgressRing, AppUpdateStatusTag, AppUpdateStatusTagText, InlineUpdateTagState.Update, foundTag, foundMsg);
+            if (AppUpdateInfoBar != null)
+            {
+                AppUpdateInfoBar.IsOpen = false;
+            }
+
+            if (AppUpdateInstallButton != null)
+            {
+                AppUpdateInstallButton.Visibility = Visibility.Visible;
+                AppUpdateInstallButton.IsEnabled = true;
+            }
         }
         catch (Exception ex)
         {
             _pendingAppUpdate = null;
+            SetInlineUpdateTag(AppUpdateProgressRing, AppUpdateStatusTag, AppUpdateStatusTagText, InlineUpdateTagState.Fail, tooltip: ex.Message);
             SetAppUpdateStatus(ex.Message, InfoBarSeverity.Error);
         }
         finally
@@ -2288,6 +2472,7 @@ public partial class MainWindow
         switch (kind)
         {
             case UpdateOpKind.CoreCheck:
+                SetInlineUpdateTag(CoreUpdateProgressRing, CoreUpdateStatusTag, CoreUpdateStatusTagText, InlineUpdateTagState.Fail, tooltip: aborted);
                 SetUpdateStatus(aborted, InfoBarSeverity.Warning);
                 CheckUpdateButton.IsEnabled = true;
                 break;
@@ -2343,33 +2528,27 @@ public partial class MainWindow
 
     private async Task RunCoreCheckAsync(CancellationToken cancellationToken)
     {
-        SetUpdateStatus(
-            LocalizationService.GetString("CloudUpdate_Fetching", "正在请求官方 Cloud Run Manifest…"),
-            InfoBarSeverity.Informational);
+        SetInlineUpdateTag(CoreUpdateProgressRing, CoreUpdateStatusTag, CoreUpdateStatusTagText, InlineUpdateTagState.Checking);
+        if (UpdateInfoBar != null) UpdateInfoBar.IsOpen = false;
         SetDownloadLink(null);
         try
         {
             _currentManifest = await _engineService.FetchLatestManifestAsync(cancellationToken);
             if (_currentManifest != null)
             {
-                var sizeMb = _currentManifest.Size / (1024.0 * 1024.0);
-                SetUpdateStatus(
-                    string.Format(
-                        LocalizationService.GetString("CloudUpdate_FoundFormat", "最新版本 v{0} · {1} MB"),
-                        _currentManifest.Version,
-                        sizeMb.ToString("F1")),
-                    InfoBarSeverity.Success);
-                // The manifest URL is worth showing: it lets the user fetch the installer with
-                // their own tool when the in-app download is blocked or too slow.
+                if (UpdateInfoBar != null)
+                {
+                    UpdateInfoBar.IsOpen = false;
+                }
                 SetDownloadLink(_currentManifest.DownloadUrl);
                 DownloadInstallButton.IsEnabled = true;
-                UpdateSidebarStatus();
+                RefreshEngineStatus();
             }
             else
             {
-                SetUpdateStatus(
-                    LocalizationService.GetString("CloudUpdate_ParseFailed", "未能解析版本清单。"),
-                    InfoBarSeverity.Warning);
+                var parseFailed = LocalizationService.GetString("CloudUpdate_ParseFailed", "未能解析版本清单。");
+                SetInlineUpdateTag(CoreUpdateProgressRing, CoreUpdateStatusTag, CoreUpdateStatusTagText, InlineUpdateTagState.Fail, tooltip: parseFailed);
+                SetUpdateStatus(parseFailed, InfoBarSeverity.Warning);
             }
         }
         catch (OperationCanceledException)
@@ -2378,43 +2557,49 @@ public partial class MainWindow
         }
         catch (Exception ex)
         {
-            SetUpdateStatus(
-                string.Format(LocalizationService.GetString("CloudUpdate_CheckFailedFormat", "检查更新失败: {0}"), ex.Message),
-                InfoBarSeverity.Error);
+            var checkFailed = string.Format(LocalizationService.GetString("CloudUpdate_CheckFailedFormat", "检查更新失败: {0}"), ex.Message);
+            SetInlineUpdateTag(CoreUpdateProgressRing, CoreUpdateStatusTag, CoreUpdateStatusTagText, InlineUpdateTagState.Fail, tooltip: checkFailed);
+            SetUpdateStatus(checkFailed, InfoBarSeverity.Error);
         }
     }
 
-    /// <summary>
-    /// Shows or hides the direct download link in the update bar. Passing null hides it, which
-    /// is what every non-success path wants; a stale link next to an error message would offer
-    /// a file the manifest no longer describes.
-    /// </summary>
+    /// <summary>Updates direct-download icon actions without rendering a raw long URL block.</summary>
     private void SetDownloadLink(string? url)
     {
-        if (DownloadLinkPanel == null || DownloadLinkText == null) return;
-
-        if (string.IsNullOrWhiteSpace(url))
+        _currentDownloadUrl = string.IsNullOrWhiteSpace(url) ? null : url.Trim();
+        if (CoreRemoteLinkActions != null)
         {
-            DownloadLinkPanel.Visibility = Visibility.Collapsed;
-            DownloadLinkText.Text = string.Empty;
-            SyncUpdateDetailsPanel();
-            return;
+            CoreRemoteLinkActions.Visibility = _currentDownloadUrl != null
+                ? Visibility.Visible
+                : Visibility.Collapsed;
         }
+    }
 
-        DownloadLinkText.Text = url;
-        DownloadLinkPanel.Visibility = Visibility.Visible;
-        SyncUpdateDetailsPanel();
+    private void OnCopyDownloadLinkClicked(object sender, RoutedEventArgs e)
+    {
+        if (string.IsNullOrWhiteSpace(_currentDownloadUrl)) return;
+        try
+        {
+            Clipboard.SetText(_currentDownloadUrl);
+            if (CopyDownloadLinkBtn != null)
+            {
+                CopyDownloadLinkBtn.ToolTip = LocalizationService.GetString("CloudUpdate_LinkCopied", "下载链接已复制到剪贴板");
+            }
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Swallowed("overview.copy-download-link", ex);
+        }
     }
 
     /// <summary>Opens the download URL in the default browser.</summary>
     private void OnDownloadLinkClicked(object sender, RoutedEventArgs e)
     {
-        var url = DownloadLinkText?.Text;
-        if (string.IsNullOrWhiteSpace(url)) return;
+        if (string.IsNullOrWhiteSpace(_currentDownloadUrl)) return;
 
         try
         {
-            Process.Start(new ProcessStartInfo { FileName = url, UseShellExecute = true });
+            Process.Start(new ProcessStartInfo { FileName = _currentDownloadUrl, UseShellExecute = true });
         }
         catch (Exception ex)
         {
@@ -2676,14 +2861,12 @@ public partial class MainWindow
     /// <summary>Repaints the surface overlay after a theme color change.</summary>
     internal void RefreshWindowSurface() => ApplyHostWindowOpacity(ThemeService.CurrentOpacity);
 
-    private void OnThemeModeChanged(object sender, RoutedEventArgs e)
+    private void OnThemeModeChanged(object sender, SelectionChangedEventArgs e)
     {
-        // Skip the Checked that XAML raises during InitializeComponent; App already applied the saved mode.
+        // Skip the SelectionChanged that XAML raises during InitializeComponent; App already applied the saved mode.
         if (_isInitializingTheme || _daemon is null) return;
 
-        var mode = ThemeDarkRadio?.IsChecked == true ? "dark"
-                 : ThemeLightRadio?.IsChecked == true ? "light"
-                 : "auto";
+        var mode = (ThemeModeCombo?.SelectedItem as ComboBoxItem)?.Tag as string ?? "auto";
 
         App.SetThemeMode(mode);
         _daemon.UpdateThemeMode(mode);
@@ -2691,17 +2874,12 @@ public partial class MainWindow
 
     private string GetSelectedMaterial()
     {
-        if (NoneRadioBtn?.IsChecked == true) return "none";
-        if (AcrylicRadioBtn?.IsChecked == true) return "acrylic";
-        if (TabbedRadioBtn?.IsChecked == true) return "tabbed";
-        return "mica";
+        return (BackdropMaterialCombo?.SelectedItem as ComboBoxItem)?.Tag as string ?? "none";
     }
 
-
-    private void OnBackdropMaterialChanged(object sender, RoutedEventArgs e)
+    private void OnBackdropMaterialChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (_isInitializingTheme) return;
-        if (MicaRadioBtn == null || TabbedRadioBtn == null) return;
+        if (_isInitializingTheme || BackdropMaterialCombo == null) return;
         var mat = GetSelectedMaterial();
         // Sliders carry transparency; alpha is its complement.
         var micaTransparency = MicaOpacitySlider?.Value ?? (1.0 - (_daemon?.MicaOpacity ?? 0.72));
@@ -2723,7 +2901,7 @@ public partial class MainWindow
         }
         var opacity = Math.Clamp(1.0 - transparency, 0.00, 1.00);
         ApplyHostWindowOpacity(opacity);
-        if (!_isInitializingTheme && _daemon != null && TabbedRadioBtn != null)
+        if (!_isInitializingTheme && _daemon != null && BackdropMaterialCombo != null)
         {
             var mat = GetSelectedMaterial();
             var popupOpacity = FixedPopupOpacity;
@@ -3110,6 +3288,9 @@ public class ProjectDisplayItem
 {
     private readonly ProjectProfile _project;
     public string Id => _project.Id;
+    public string ShortId => ProjectService.IsLooseChats(_project.Id)
+        ? "_loose_"
+        : (_project.Id.Length >= 8 ? _project.Id[..8] : _project.Id);
     public string Name => _project.Name;
     public string DisplayNameWithShortId => _project.DisplayNameWithShortId;
     public string Path => _project.Path;
@@ -3188,6 +3369,7 @@ public class InstanceDisplayItem
 
     public List<AccountProfile> AvailableAccounts { get; }
     public string Id => _profile.Id;
+    public string ShortId => _profile.Id.Length >= 8 ? _profile.Id[..8] : _profile.Id;
     public string Name => _profile.Name;
     public string DisplayNameWithShortId => _profile.DisplayNameWithShortId;
 
@@ -3197,6 +3379,7 @@ public class InstanceDisplayItem
         set => _profile.BoundAccountId = value;
     }
 
+    public string BoundAccountText { get; }
     public string BoundProjectText { get; }
 
     public bool ShareSkills
@@ -3254,6 +3437,15 @@ public class InstanceDisplayItem
     {
         _profile = profile;
         AvailableAccounts = availableAccounts;
+
+        var boundAccount = string.IsNullOrEmpty(_profile.BoundAccountId)
+            ? null
+            : availableAccounts.FirstOrDefault(a => string.Equals(a.Id, _profile.BoundAccountId, StringComparison.OrdinalIgnoreCase));
+        var accountValue = boundAccount?.Email ?? LocalizationService.GetString("Instances_AccountGuestTag", "游客沙盒");
+        BoundAccountText = string.Format(
+            LocalizationService.GetString("Instances_AccountLabelFormat", "账号: {0}"),
+            accountValue);
+
         // Bound projects resolve to names; unresolved ids fall back to a count.
         if (allProjects != null && _profile.BoundProjectIds.Count > 0)
         {

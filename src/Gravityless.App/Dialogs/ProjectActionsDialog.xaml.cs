@@ -43,11 +43,11 @@ public partial class ProjectActionsDialog : FluentWindow
         ProjectShortIdText.Text = _project.Id.Length >= 8 ? _project.Id[..8] : _project.Id;
         ProjectPathText.Text = _project.Path;
 
-        StatusDot.Fill = _project.IsRunning ? Brushes.Orange : Brushes.LightGreen;
+        StatusDot.Fill = _project.IsRunning ? Palette.Caution : Palette.Success;
         StatusText.Text = _project.IsRunning
             ? string.Format(LocalizationService.GetString("ProjectActions_StatusRunning", "运行中 (PID: {0})"), _project.ProcessId)
             : LocalizationService.GetString("ProjectActions_StatusIdle", "闲置可用");
-        StatusText.Foreground = _project.IsRunning ? Brushes.Orange : Brushes.LightGreen;
+        StatusText.Foreground = _project.IsRunning ? Palette.Caution : Palette.Success;
 
         var inst = _instanceService.Instances.FirstOrDefault(i => i.Id == _project.RunningInstanceId);
         BoundInstanceText.Text = inst != null

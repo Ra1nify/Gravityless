@@ -38,7 +38,6 @@ public partial class InstanceConfigDialog : FluentWindow
             Title = title;
             DialogTitleBar.Title = title;
             SaveButton.Content = LocalizationService.GetString("Instances_CreateConfirmBtn", "创建实例");
-            SandboxSeparator.Visibility = Visibility.Collapsed;
             OpenSandboxButton.Visibility = Visibility.Collapsed;
         }
 
@@ -68,6 +67,7 @@ public partial class InstanceConfigDialog : FluentWindow
         _projectsView.Filter = FilterProjectItem;
         ProjectsCheckList.ItemsSource = _projectsView;
         UpdateSelectedCountText();
+        UpdateProjectsEmptyState();
 
         ShareSkillsSwitch.IsChecked = profile.ShareSkills;
         SharePluginsSwitch.IsChecked = profile.SharePlugins;
@@ -89,6 +89,14 @@ public partial class InstanceConfigDialog : FluentWindow
     private void OnProjectSearchTextChanged(object sender, TextChangedEventArgs e)
     {
         _projectsView?.Refresh();
+        UpdateProjectsEmptyState();
+    }
+
+    private void UpdateProjectsEmptyState()
+    {
+        var isEmpty = _selectableProjects.Count == 0 || (_projectsView?.IsEmpty ?? true);
+        if (ProjectsCheckList != null) ProjectsCheckList.Visibility = isEmpty ? Visibility.Collapsed : Visibility.Visible;
+        if (ProjectsEmptyHint != null) ProjectsEmptyHint.Visibility = isEmpty ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void OnProjectCheckChanged(object sender, RoutedEventArgs e)

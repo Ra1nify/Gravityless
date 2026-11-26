@@ -11,7 +11,7 @@
     <Border Background="{DynamicResource SubtleFillColorSecondaryBrush}"
             BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
             BorderThickness="1"
-            CornerRadius="6"
+            CornerRadius="{StaticResource FluentSubPanelCornerRadius}"
             Padding="10,6">
         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
             <ui:ProgressRing x:Name="Ring" Width="16" Height="16" IsIndeterminate="True" Margin="0,0,8,0"/>

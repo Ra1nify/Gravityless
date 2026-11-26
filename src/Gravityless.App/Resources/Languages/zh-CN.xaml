@@ -5,6 +5,7 @@
     <!-- Common & App -->
     <sys:String x:Key="App_Title">Gravityless - Antigravity 增强伴侣</sys:String>
     <sys:String x:Key="Common_Ready">就绪</sys:String>
+    <sys:String x:Key="Common_Running">运行中</sys:String>
     <sys:String x:Key="Common_Confirm">确定</sys:String>
     <sys:String x:Key="Common_Cancel">取消</sys:String>
     <sys:String x:Key="Common_Delete">删除</sys:String>
@@ -23,17 +24,49 @@
     <sys:String x:Key="Nav_Proxy">代理</sys:String>
     <sys:String x:Key="Nav_Accounts">号池</sys:String>
     <sys:String x:Key="Nav_Appearance">外观</sys:String>
+    <sys:String x:Key="PageHeader_OverviewTitle">概览</sys:String>
+    <sys:String x:Key="PageHeader_OverviewSubtitle">核心托管状态、版本更新与守护进程健康度</sys:String>
+    <sys:String x:Key="PageHeader_InstancesTitle">实例管理</sys:String>
+    <sys:String x:Key="PageHeader_InstancesSubtitle">独立隔离沙盒实例的创建、启动与账号挂载</sys:String>
+    <sys:String x:Key="PageHeader_ProjectsTitle">项目管理</sys:String>
+    <sys:String x:Key="PageHeader_ProjectsSubtitle">本地工程索引、会话历史与记忆库修复</sys:String>
+    <sys:String x:Key="PageHeader_ToolsTitle">共享工具</sys:String>
+    <sys:String x:Key="PageHeader_ToolsSubtitle">全局 Skills、插件与 MCP 服务器配置</sys:String>
+    <sys:String x:Key="PageHeader_ProxyTitle">网络代理</sys:String>
+    <sys:String x:Key="PageHeader_ProxySubtitle">出站代理模式、认证凭据与连通性测试</sys:String>
+    <sys:String x:Key="PageHeader_AccountsTitle">账号池</sys:String>
+    <sys:String x:Key="PageHeader_AccountsSubtitle">OAuth 凭据生命周期、算力配额与上下文阈值</sys:String>
+    <sys:String x:Key="PageHeader_AppearanceTitle">外观与语言</sys:String>
+    <sys:String x:Key="PageHeader_AppearanceSubtitle">主题、背景材质与界面语言</sys:String>
+    <sys:String x:Key="Instances_ConfigProjectsLabel">挂载项目 (可多选):</sys:String>
+    <sys:String x:Key="Instances_ConfigProjectSearchPlaceholder">搜索项目名称、本地路径或 ID…</sys:String>
+    <sys:String x:Key="Instances_ConfigNoProjectsHint">暂无可挂载项目</sys:String>
+    <sys:String x:Key="Tools_DetailTitle">工具详情</sys:String>
     <sys:String x:Key="Sidebar_CoreTooltip">Antigravity 托管核心状态</sys:String>
     <sys:String x:Key="Sidebar_DaemonTooltip">Gravityless 守护进程状态</sys:String>
 
     <!-- Overview (OverviewView) -->
-    <sys:String x:Key="CoreStatus_VersionLabel">版本:</sys:String>
-    <sys:String x:Key="CoreStatus_PathLabel">路径:</sys:String>
+    <sys:String x:Key="CoreStatus_VersionLabel">当前版本</sys:String>
+    <sys:String x:Key="CoreStatus_PathLabel">安装目录</sys:String>
     <sys:String x:Key="CoreStatus_PathTooltip">在文件资源管理器中打开核心目录</sys:String>
     <sys:String x:Key="CoreStatus_UninstallBtn">卸载核心</sys:String>
     <sys:String x:Key="CloudUpdate_CheckBtn">检查更新</sys:String>
-    <sys:String x:Key="CloudUpdate_InstallBtn">安装</sys:String>
-    <sys:String x:Key="CloudUpdate_InitialHint">点击「检查更新」查看最新版本</sys:String>
+    <sys:String x:Key="CloudUpdate_InstallBtn">安装核心</sys:String>
+    <sys:String x:Key="CloudUpdate_UpgradeBtn">升级核心</sys:String>
+    <sys:String x:Key="CloudUpdate_InitialHint">点击「检查更新」获取最新版本</sys:String>
+    <sys:String x:Key="CloudUpdate_CopyLinkTip">复制官方直链</sys:String>
+    <sys:String x:Key="CloudUpdate_LinkCopied">下载链接已复制到剪贴板</sys:String>
+    <sys:String x:Key="Overview_SummaryCoreLabel">托管核心</sys:String>
+    <sys:String x:Key="Overview_SummaryDaemonLabel">守护服务</sys:String>
+    <sys:String x:Key="Overview_SummaryWorkspaceLabel">工作区池</sys:String>
+    <sys:String x:Key="Overview_WorkspaceSummaryFormat">{0} 实例 · {1} 账号 · {2} 项目</sys:String>
+    <sys:String x:Key="Overview_CoreSectionDesc">管理便携版 Antigravity 核心</sys:String>
+    <sys:String x:Key="Overview_CoreAvailableLabel">可用版本</sys:String>
+    <sys:String x:Key="Overview_CoreUpdateTag">可升级</sys:String>
+    <sys:String x:Key="UpdateTag_Latest">最新</sys:String>
+    <sys:String x:Key="UpdateTag_UpdateFormat">新版 {0}</sys:String>
+    <sys:String x:Key="UpdateTag_Fail">失败</sys:String>
+    <sys:String x:Key="Sidebar_DaemonCopiedTip">守护端口地址已复制</sys:String>
 
     <!-- Instances View -->
     <sys:String x:Key="Instances_NewBtn">新建实例</sys:String>
@@ -138,7 +171,7 @@
     <sys:String x:Key="AccountDetails_ModelDisabledBadge">未解锁</sys:String>
 
     <!-- Appearance View -->
-    <sys:String x:Key="Appearance_MicaCardTitle">材质与透明度</sys:String>
+    <sys:String x:Key="Appearance_MicaCardTitle">视觉设计</sys:String>
     <sys:String x:Key="Appearance_MicaDesc">立即应用到所有窗口。</sys:String>
     <sys:String x:Key="Appearance_MaterialLabel">材质:</sys:String>
     <sys:String x:Key="Appearance_MaterialMica">Mica</sys:String>
@@ -312,7 +345,7 @@
     <sys:String x:Key="Common_Error">错误</sys:String>
 
     <!-- Overview page -->
-    <sys:String x:Key="App_TitleBarFormat">Gravityless v{0} - Yet Another Spicy Companion Of Antigravity</sys:String>
+    <sys:String x:Key="App_TitleBarFormat">Gravityless · v{0}</sys:String>
     <sys:String x:Key="Overview_AppVersionLabel">软件版本</sys:String>
     <sys:String x:Key="Overview_ProjectLabel">项目地址</sys:String>
     <sys:String x:Key="Overview_OpenRepoBtn">打开 GitHub</sys:String>
@@ -502,6 +535,12 @@
     <sys:String x:Key="Instances_BoundProjectFormat">项目: {0}</sys:String>
     <sys:String x:Key="Instances_BoundProjectCountFormat">项目: {0} 个</sys:String>
     <sys:String x:Key="Instances_NoBoundProject">项目: 无</sys:String>
+    <sys:String x:Key="Instances_AccountLabelFormat">账号: {0}</sys:String>
+    <sys:String x:Key="Instances_AccountGuestTag">游客沙盒</sys:String>
+    <sys:String x:Key="Instances_EmptyTitle">暂无沙盒实例</sys:String>
+    <sys:String x:Key="Instances_EmptyDesc">点击上方「新建实例」创建独立的 Antigravity 运行环境</sys:String>
+    <sys:String x:Key="Projects_EmptyTitle">暂无项目或记忆库</sys:String>
+    <sys:String x:Key="Projects_EmptyDesc">点击上方「从 .gemini 导入」关联本地工作区与会话记录</sys:String>
     <sys:String x:Key="Proxy_TestingStatus">测试连接…</sys:String>
     <sys:String x:Key="Proxy_RegionFormat">出口地区: {0}</sys:String>
     <sys:String x:Key="Proxy_RegionRow">地区</sys:String>

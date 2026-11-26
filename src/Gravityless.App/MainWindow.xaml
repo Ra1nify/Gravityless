@@ -14,25 +14,12 @@
     <ui:FluentWindow.Resources>
         <!-- View models expose bool; visibility is converted here -->
         <BooleanToVisibilityConverter x:Key="BoolToVisibility"/>
-        <!-- 9px + 1px divider = 54px, matching nav label offset (4 pane + 40 icon + 10 template margin) -->
         <Style x:Key="PaneFooterTextStyle" TargetType="TextBlock">
             <Setter Property="VerticalAlignment" Value="Center"/>
-            <Setter Property="FontSize" Value="11"/>
-            <Setter Property="Margin" Value="9,0,0,0"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Opacity" Value="0.78"/>
+            <Setter Property="Margin" Value="1,0,8,0"/>
             <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
-            <Style.Triggers>
-                <DataTrigger Binding="{Binding IsPaneOpen, RelativeSource={RelativeSource AncestorType={x:Type ui:NavigationView}}}" Value="False">
-                    <Setter Property="Visibility" Value="Collapsed"/>
-                </DataTrigger>
-            </Style.Triggers>
-        </Style>
-
-        <Style x:Key="PaneFooterDividerStyle" TargetType="Rectangle">
-            <Setter Property="Width" Value="1"/>
-            <Setter Property="Height" Value="10"/>
-            <Setter Property="Margin" Value="0"/>
-            <Setter Property="Fill" Value="{DynamicResource OverlaySeparatorBrush}"/>
-            <Setter Property="VerticalAlignment" Value="Center"/>
             <Style.Triggers>
                 <DataTrigger Binding="{Binding IsPaneOpen, RelativeSource={RelativeSource AncestorType={x:Type ui:NavigationView}}}" Value="False">
                     <Setter Property="Visibility" Value="Collapsed"/>
@@ -44,6 +31,7 @@
         <Style x:Key="StretchRowItemStyle" TargetType="{x:Type ListViewItem}">
             <Setter Property="Focusable" Value="False"/>
             <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
             <Setter Property="BorderThickness" Value="0"/>
             <Setter Property="Padding" Value="0"/>
             <Setter Property="Margin" Value="0"/>
@@ -82,21 +70,19 @@
                                OpenPaneLength="220"
                                CompactPaneLength="56">
 
-                <!-- Custom toggle: 40x40 aligns with nav icon column; built-in button margin is fixed -->
+                <!-- Sidebar collapse toggle -->
                 <ui:NavigationView.PaneHeader>
-                    <ui:Button AutomationProperties.AutomationId="PaneToggleButton" x:Name="PaneToggleButton" Width="40" Height="40" Padding="0" Margin="0,0,0,6"
-                               HorizontalAlignment="Left" VerticalAlignment="Center"
-                               Appearance="Transparent" Click="OnPaneToggleClicked"
-                               ToolTip="{DynamicResource Nav_ToggleTip}">
-                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
-                            <Rectangle Width="14" Height="1.5" Margin="0,0,0,3.5"
-                                       Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type ui:Button}}}"/>
-                            <Rectangle Width="14" Height="1.5" Margin="0,0,0,3.5"
-                                       Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type ui:Button}}}"/>
-                            <Rectangle Width="14" Height="1.5"
-                                       Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type ui:Button}}}"/>
-                        </StackPanel>
-                    </ui:Button>
+                    <Button AutomationProperties.AutomationId="PaneToggleButton"
+                            AutomationProperties.Name="{DynamicResource Nav_ToggleTip}"
+                            x:Name="PaneToggleButton"
+                            Style="{StaticResource FluentBorderlessButtonStyle}"
+                            Width="40" Height="40" Margin="0,0,0,6"
+                            HorizontalAlignment="Left" VerticalAlignment="Center"
+                            HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                            Click="OnPaneToggleClicked"
+                            ToolTip="{DynamicResource Nav_ToggleTip}">
+                        <ui:SymbolIcon Symbol="Navigation24" FontSize="16"/>
+                    </Button>
                 </ui:NavigationView.PaneHeader>
 
                 <ui:NavigationView.MenuItems>
@@ -124,213 +110,328 @@
 
                 </ui:NavigationView.MenuItems>
 
-                <!-- 40px icon column shares the nav icon axis; collapse hides only text, dots never move -->
+                <!-- Sidebar runtime status rows -->
                 <ui:NavigationView.PaneFooter>
-                    <StackPanel Margin="0,2,0,6">
-                        <!-- MinHeight 40 = nav row height, so the dot keeps its position when text collapses -->
-                        <Border x:Name="CoreStatusBadgeContainer" Background="Transparent" MinHeight="40" Margin="0,3,0,3"
+                    <StackPanel Margin="0,0,0,8">
+                        <Button x:Name="CoreStatusBadgeContainer"
+                                Style="{StaticResource FluentBorderlessButtonStyle}"
+                                Height="36" Margin="0,1,0,1"
+                                HorizontalAlignment="Stretch"
+                                HorizontalContentAlignment="Stretch"
+                                VerticalContentAlignment="Center"
+                                Click="OnSidebarCoreClicked"
                                 ToolTip="{DynamicResource Sidebar_CoreTooltip}">
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="40"/>
                                     <ColumnDefinition Width="*"/>
                                 </Grid.ColumnDefinitions>
-                                <!-- -1 offset matches nav icon rendering so centers coincide -->
-                                <ui:SymbolIcon x:Name="CoreStatusDot" Grid.Column="0" Symbol="Record16" FontSize="10"
-                                               Foreground="{DynamicResource BrandAccentBrush}" Margin="-1,0,0,0"
-                                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                    <Rectangle Style="{StaticResource PaneFooterDividerStyle}"/>
-                                    <TextBlock x:Name="SidebarCoreVersionText" Style="{StaticResource PaneFooterTextStyle}"
-                                               Text="{DynamicResource Sidebar_CoreChecking}" FontWeight="SemiBold"/>
-                                </StackPanel>
+                                <Ellipse x:Name="CoreStatusDot" Grid.Column="0" Width="6" Height="6"
+                                         Fill="{DynamicResource StatusNeutralBrush}"
+                                         HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                <TextBlock Grid.Column="1" x:Name="SidebarCoreVersionText"
+                                           Style="{StaticResource PaneFooterTextStyle}"
+                                           Text="{DynamicResource Sidebar_CoreChecking}"/>
                             </Grid>
-                        </Border>
+                        </Button>
 
-                        <Border x:Name="DaemonStatusBadgeContainer" Background="Transparent" MinHeight="40" Margin="0,3,0,3"
+                        <Button x:Name="DaemonStatusBadgeContainer"
+                                Style="{StaticResource FluentBorderlessButtonStyle}"
+                                Height="36" Margin="0,1,0,1"
+                                HorizontalAlignment="Stretch"
+                                HorizontalContentAlignment="Stretch"
+                                VerticalContentAlignment="Center"
+                                Click="OnSidebarDaemonClicked"
                                 ToolTip="{DynamicResource Sidebar_DaemonTooltip}">
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="40"/>
                                     <ColumnDefinition Width="*"/>
                                 </Grid.ColumnDefinitions>
-                                <ui:SymbolIcon x:Name="DaemonStatusDot" Grid.Column="0" Symbol="Record16" FontSize="10"
-                                               Foreground="{DynamicResource StatusSuccessBrush}" Margin="-1,0,0,0"
-                                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                    <Rectangle Style="{StaticResource PaneFooterDividerStyle}"/>
-                                    <TextBlock x:Name="SidebarDaemonPortText" Style="{StaticResource PaneFooterTextStyle}"
-                                               Opacity="0.85" Text="{DynamicResource Sidebar_DaemonStarting}"/>
-                                </StackPanel>
+                                <Ellipse x:Name="DaemonStatusDot" Grid.Column="0" Width="6" Height="6"
+                                         Fill="{DynamicResource StatusSuccessBrush}"
+                                         HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                <TextBlock Grid.Column="1" x:Name="SidebarDaemonPortText"
+                                           Style="{StaticResource PaneFooterTextStyle}"
+                                           Text="{DynamicResource Sidebar_DaemonStarting}"/>
                             </Grid>
-                        </Border>
+                        </Button>
                     </StackPanel>
                 </ui:NavigationView.PaneFooter>
             </ui:NavigationView>
 
-            <Grid Grid.Column="1" Margin="24,14,24,14">
+            <Grid Grid.Column="1" Margin="24,14,24,16">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+                <!-- Page header -->
+                <StackPanel Grid.Row="0" Margin="0,0,0,16">
+                    <TextBlock x:Name="PageHeaderTitle" Style="{StaticResource FluentPageTitleStyle}" Text="{DynamicResource PageHeader_OverviewTitle}"/>
+                    <TextBlock x:Name="PageHeaderSubtitle" Style="{StaticResource FluentCaptionStyle}" Text="{DynamicResource PageHeader_OverviewSubtitle}" Margin="0,4,0,0"/>
+                </StackPanel>
+
+                <Grid Grid.Row="1">
                 
                 <Grid x:Name="OverviewView" Visibility="Visible">
                     <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                         <StackPanel>
 
-                            <ui:Card Margin="0,0,0,16" Padding="20,18">
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="Auto"/>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                    </Grid.ColumnDefinitions>
-
-                                    <Image x:Name="AppLogoImage" Height="72" Margin="0,0,20,0" VerticalAlignment="Center"
-                                           RenderOptions.BitmapScalingMode="HighQuality"/>
-
-                                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                                        <TextBlock Text="Gravityless" FontWeight="Bold" FontSize="22"/>
-                                        <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
-                                            <TextBlock Text="{DynamicResource Overview_AppVersionLabel}" Opacity="0.6" FontSize="12" VerticalAlignment="Center"/>
-                                            <TextBlock x:Name="AppVersionText" FontWeight="SemiBold" FontSize="13" Margin="8,0,0,0" VerticalAlignment="Center"/>
-                                        </StackPanel>
-                                        <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
-                                            <TextBlock Text="{DynamicResource Overview_ProjectLabel}" Opacity="0.6" FontSize="12" VerticalAlignment="Center"/>
-                                            <TextBlock x:Name="RepoUrlText" FontSize="12" Margin="8,0,0,0" VerticalAlignment="Center" FontFamily="Consolas" Opacity="0.9"/>
-                                        </StackPanel>
-                                    </StackPanel>
-
-                                    <ui:Button AutomationProperties.AutomationId="OpenRepoButton" Grid.Column="2" x:Name="OpenRepoButton" Content="{DynamicResource Overview_OpenRepoBtn}"
-                                               Click="OnOpenRepoClicked" Appearance="Secondary" VerticalAlignment="Center"
-                                               Icon="{ui:SymbolIcon Symbol=Code24}"/>
-                                </Grid>
-                            </ui:Card>
-
-                            <ui:Card Margin="0,0,0,16" Padding="20">
+                            <!-- App identity, update check, and environment summary -->
+                            <ui:Card Margin="0,0,0,14" Padding="20,16">
                                 <StackPanel>
-                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-                                        <ui:SymbolIcon Symbol="ArrowSync24" FontSize="20" Foreground="{DynamicResource BrandAccentBrush}" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                                        <TextBlock Text="{DynamicResource Overview_AppUpdateTitle}" FontWeight="Bold" FontSize="18"/>
-                                    </StackPanel>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
 
-                                    <TextBlock Text="{DynamicResource Overview_AppUpdateDesc}"
-                                               TextWrapping="Wrap" Opacity="0.75" Margin="0,0,0,14" FontSize="13"/>
+                                        <Image x:Name="AppLogoImage" Width="44" Height="44" Margin="0,0,14,0" VerticalAlignment="Center"
+                                               RenderOptions.BitmapScalingMode="HighQuality"/>
 
-                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
-                                        <ui:Button AutomationProperties.AutomationId="AppUpdateButton" x:Name="AppUpdateButton"
-                                                   Content="{DynamicResource Overview_AppUpdateBtn}"
-                                                   Click="OnCheckAppUpdateClicked"
-                                                   Appearance="Primary" Margin="0,0,12,0"
-                                                   Icon="{ui:SymbolIcon Symbol=ArrowSync24}"/>
-                                        <ui:Button AutomationProperties.AutomationId="AppUpdateInstallButton" x:Name="AppUpdateInstallButton"
-                                                   Content="{DynamicResource Overview_AppUpdateInstallBtn}"
-                                                   Click="OnDownloadAppUpdateClicked"
-                                                   Appearance="Secondary" IsEnabled="False"
-                                                   Icon="{ui:SymbolIcon Symbol=ArrowDownload24}"/>
-                                    </StackPanel>
+                                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="0,0,12,0">
+                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                <TextBlock Text="Gravityless" Style="{StaticResource FluentSubtitleStyle}" VerticalAlignment="Center"/>
+                                                <Border Style="{StaticResource FluentBadgeBorderStyle}"
+                                                        Padding="6,2" Margin="10,0,0,0"
+                                                        Background="{DynamicResource SubtleFillColorSecondaryBrush}">
+                                                    <TextBlock x:Name="AppVersionText" FontSize="11" FontWeight="SemiBold" Opacity="0.85"/>
+                                                </Border>
+                                                <ui:ProgressRing x:Name="AppUpdateProgressRing"
+                                                                 Width="14" Height="14"
+                                                                 IsIndeterminate="True"
+                                                                 Margin="8,0,0,0"
+                                                                 VerticalAlignment="Center"
+                                                                 Visibility="Collapsed"/>
+                                                <Border x:Name="AppUpdateStatusTag"
+                                                        Style="{StaticResource FluentBadgeBorderStyle}"
+                                                        Padding="7,2" Margin="8,0,0,0"
+                                                        VerticalAlignment="Center"
+                                                        Visibility="Collapsed">
+                                                    <TextBlock x:Name="AppUpdateStatusTagText"
+                                                               FontSize="10.5" FontWeight="SemiBold"
+                                                               VerticalAlignment="Center"/>
+                                                </Border>
+                                            </StackPanel>
+                                            <TextBlock x:Name="RepoUrlText" Margin="0,4,0,0" FontSize="12" Opacity="0.55" FontFamily="Consolas" VerticalAlignment="Center"/>
+                                        </StackPanel>
 
-                                    <!-- The InfoBar template renders only Title and Message; it has no
-                                         ContentPresenter, so extras live in a separate surface. -->
+                                        <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                            <ui:Button AutomationProperties.AutomationId="OpenRepoButton" x:Name="OpenRepoButton"
+                                                       Content="{DynamicResource Overview_OpenRepoBtn}"
+                                                       Click="OnOpenRepoClicked"
+                                                       Appearance="Secondary" Margin="0,0,8,0"
+                                                       CornerRadius="{StaticResource FluentControlCornerRadius}"
+                                                       Icon="{ui:SymbolIcon Symbol=Code24}"/>
+                                            <ui:Button AutomationProperties.AutomationId="AppUpdateButton" x:Name="AppUpdateButton"
+                                                       Content="{DynamicResource Overview_AppUpdateBtn}"
+                                                       Click="OnCheckAppUpdateClicked"
+                                                       Appearance="Secondary"
+                                                       CornerRadius="{StaticResource FluentControlCornerRadius}"
+                                                       Icon="{ui:SymbolIcon Symbol=ArrowSync24}"/>
+                                            <ui:Button AutomationProperties.AutomationId="AppUpdateInstallButton" x:Name="AppUpdateInstallButton"
+                                                       Content="{DynamicResource Overview_AppUpdateInstallBtn}"
+                                                       Click="OnDownloadAppUpdateClicked"
+                                                       Appearance="Primary" Margin="8,0,0,0"
+                                                       CornerRadius="{StaticResource FluentControlCornerRadius}"
+                                                       Visibility="Collapsed"
+                                                       Icon="{ui:SymbolIcon Symbol=ArrowDownload24}"/>
+                                        </StackPanel>
+                                    </Grid>
+
+                                    <Border Height="1" Margin="0,14,0,12" Background="{DynamicResource ControlStrokeColorDefaultBrush}" Opacity="0.55"/>
+
+                                    <!-- Environment summary -->
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+
+                                        <StackPanel Grid.Column="0">
+                                            <TextBlock Text="{DynamicResource Overview_SummaryCoreLabel}" Style="{StaticResource FluentCaptionStyle}"/>
+                                            <StackPanel Orientation="Horizontal" Margin="0,4,0,0" VerticalAlignment="Center">
+                                                <Ellipse x:Name="OverviewCoreSummaryDot" Width="6" Height="6" Margin="0,0,7,0" VerticalAlignment="Center"
+                                                         Fill="{DynamicResource StatusNeutralBrush}"/>
+                                                <TextBlock x:Name="OverviewCoreSummaryText" Style="{StaticResource FluentBodyStrongStyle}" VerticalAlignment="Center"
+                                                           Text="{DynamicResource Common_Checking}" TextTrimming="CharacterEllipsis"/>
+                                            </StackPanel>
+                                        </StackPanel>
+
+                                        <Border Grid.Column="1" Width="1" Margin="16,2" Background="{DynamicResource ControlStrokeColorDefaultBrush}" Opacity="0.55"/>
+
+                                        <StackPanel Grid.Column="2">
+                                            <TextBlock Text="{DynamicResource Overview_SummaryDaemonLabel}" Style="{StaticResource FluentCaptionStyle}"/>
+                                            <StackPanel Orientation="Horizontal" Margin="0,4,0,0" VerticalAlignment="Center">
+                                                <Ellipse x:Name="OverviewDaemonSummaryDot" Width="6" Height="6" Margin="0,0,7,0" VerticalAlignment="Center"
+                                                         Fill="{DynamicResource StatusSuccessBrush}"/>
+                                                <TextBlock x:Name="OverviewDaemonSummaryText" Style="{StaticResource FluentBodyStrongStyle}" VerticalAlignment="Center"
+                                                           Text="{DynamicResource Sidebar_DaemonStarting}" TextTrimming="CharacterEllipsis"/>
+                                            </StackPanel>
+                                        </StackPanel>
+
+                                        <Border Grid.Column="3" Width="1" Margin="16,2" Background="{DynamicResource ControlStrokeColorDefaultBrush}" Opacity="0.55"/>
+
+                                        <StackPanel Grid.Column="4">
+                                            <TextBlock Text="{DynamicResource Overview_SummaryWorkspaceLabel}" Style="{StaticResource FluentCaptionStyle}"/>
+                                            <TextBlock x:Name="OverviewWorkspaceSummaryText" Style="{StaticResource FluentBodyStrongStyle}"
+                                                       Margin="0,4,0,0" TextTrimming="CharacterEllipsis"/>
+                                        </StackPanel>
+                                    </Grid>
+
+                                    <!-- App update status and progress -->
                                     <ui:InfoBar x:Name="AppUpdateInfoBar"
                                                 Severity="Informational"
                                                 Title="{DynamicResource Overview_AppUpdateStatusTitle}"
                                                 IsOpen="False"
-                                                IsClosable="True"/>
+                                                IsClosable="True"
+                                                Margin="0,12,0,0"/>
 
                                     <Border x:Name="AppUpdateProgressPanel"
-                                            Background="{DynamicResource SubtleFillColorSecondaryBrush}"
-                                            BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
-                                            BorderThickness="1"
-                                            CornerRadius="6"
-                                            Padding="12,10"
+                                            Style="{StaticResource FluentSubSurfaceStyle}"
                                             Margin="0,8,0,0"
                                             Visibility="Collapsed">
                                         <StackPanel>
-                                            <TextBlock x:Name="AppUpdateProgressLabel" FontSize="12" Opacity="0.85" TextWrapping="Wrap" Margin="0,0,0,6"/>
+                                            <TextBlock x:Name="AppUpdateProgressLabel" Style="{StaticResource FluentCaptionStyle}" Opacity="0.85" Margin="0,0,0,6"/>
                                             <ProgressBar x:Name="AppUpdateProgressBar" Height="4" Minimum="0" Maximum="100"/>
                                         </StackPanel>
                                     </Border>
                                 </StackPanel>
                             </ui:Card>
 
-                            <ui:Card Padding="20">
+                            <!-- Managed Antigravity core lifecycle -->
+                            <ui:Card Padding="20,18">
                                 <StackPanel>
-                                    <Grid Margin="0,0,0,12">
+                                    <Grid>
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>
                                             <ColumnDefinition Width="Auto"/>
                                         </Grid.ColumnDefinitions>
-                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                            <ui:SymbolIcon Symbol="ShieldCheckmark24" FontSize="20" Foreground="{DynamicResource BrandAccentBrush}" Margin="0,0,8,0"/>
-                                            <TextBlock Text="{DynamicResource Overview_CoreSectionTitle}" FontWeight="Bold" FontSize="18"/>
+                                        <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                                            <ui:SymbolIcon Symbol="ShieldCheckmark24" FontSize="20" Foreground="{DynamicResource BrandAccentBrush}" Margin="0,1,10,0" VerticalAlignment="Top"/>
+                                            <StackPanel>
+                                                <TextBlock Text="{DynamicResource Overview_CoreSectionTitle}" Style="{StaticResource FluentSectionTitleStyle}"/>
+                                                <TextBlock Text="{DynamicResource Overview_CoreSectionDesc}" Style="{StaticResource FluentCaptionStyle}" Margin="0,2,0,0"/>
+                                            </StackPanel>
                                         </StackPanel>
-                                        <Border Grid.Column="1" x:Name="CoreStatusBadgeBorder" Background="{DynamicResource StatusSuccessFillFaintBrush}" CornerRadius="12" Padding="10,3">
-                                            <TextBlock x:Name="CoreStatusBadgeText" Text="{DynamicResource Common_Checking}" FontWeight="SemiBold" FontSize="12" Foreground="{DynamicResource StatusSuccessBrush}"/>
+                                        <Border Grid.Column="1" x:Name="CoreStatusBadgeBorder" Style="{StaticResource FluentBadgeBorderStyle}"
+                                                Background="{DynamicResource SubtleFillColorSecondaryBrush}">
+                                            <TextBlock x:Name="CoreStatusBadgeText" Text="{DynamicResource Common_Checking}" FontWeight="SemiBold" FontSize="11.5"/>
                                         </Border>
                                     </Grid>
 
-                                    <!-- 70px label column keeps both rows aligned -->
-                                    <Grid Margin="0,0,0,12">
+                                    <Border Height="1" Margin="0,14,0,0" Background="{DynamicResource ControlStrokeColorDefaultBrush}" Opacity="0.55"/>
+
+                                    <!-- Installed core version and update status -->
+                                    <Grid Margin="0,12,0,12">
                                         <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="70"/>
+                                            <ColumnDefinition Width="96"/>
                                             <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
                                         </Grid.ColumnDefinitions>
-                                        <TextBlock Text="{DynamicResource CoreStatus_VersionLabel}" Opacity="0.65" FontSize="13" VerticalAlignment="Center"/>
-                                        <TextBlock Grid.Column="1" x:Name="ManagedCoreVersionText" Text="{DynamicResource Common_Checking}" FontWeight="Bold" FontSize="15" VerticalAlignment="Center"/>
+                                        <TextBlock Text="{DynamicResource CoreStatus_VersionLabel}" Style="{StaticResource FluentCaptionStyle}" VerticalAlignment="Center"/>
+                                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                            <TextBlock x:Name="ManagedCoreVersionText" Text="{DynamicResource Common_Checking}" Style="{StaticResource FluentBodyStrongStyle}" VerticalAlignment="Center"/>
+                                            <ui:ProgressRing x:Name="CoreUpdateProgressRing"
+                                                             Width="14" Height="14"
+                                                             IsIndeterminate="True"
+                                                             Margin="8,0,0,0"
+                                                             VerticalAlignment="Center"
+                                                             Visibility="Collapsed"/>
+                                            <Border x:Name="CoreUpdateStatusTag"
+                                                    Style="{StaticResource FluentBadgeBorderStyle}"
+                                                    Padding="7,2" Margin="8,0,0,0"
+                                                    VerticalAlignment="Center"
+                                                    Visibility="Collapsed">
+                                                <TextBlock x:Name="CoreUpdateStatusTagText"
+                                                           FontSize="10.5" FontWeight="SemiBold"
+                                                           VerticalAlignment="Center"/>
+                                            </Border>
+                                        </StackPanel>
+                                        <StackPanel x:Name="CoreRemoteLinkActions" Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Visibility="Collapsed">
+                                            <Button x:Name="CopyDownloadLinkBtn"
+                                                    Style="{StaticResource FluentBorderlessButtonStyle}"
+                                                    Padding="7,5" Margin="0,0,4,0"
+                                                    Click="OnCopyDownloadLinkClicked"
+                                                    ToolTip="{DynamicResource CloudUpdate_CopyLinkTip}"
+                                                    AutomationProperties.Name="{DynamicResource CloudUpdate_CopyLinkTip}">
+                                                <ui:SymbolIcon Symbol="Copy24" FontSize="15" Opacity="0.75"/>
+                                            </Button>
+                                            <Button x:Name="OpenDownloadLinkBtn"
+                                                    Style="{StaticResource FluentBorderlessButtonStyle}"
+                                                    Padding="7,5"
+                                                    Click="OnDownloadLinkClicked"
+                                                    ToolTip="{DynamicResource CloudUpdate_OpenLinkTip}"
+                                                    AutomationProperties.Name="{DynamicResource CloudUpdate_OpenLinkTip}">
+                                                <ui:SymbolIcon Symbol="Open24" FontSize="15" Opacity="0.75"/>
+                                            </Button>
+                                        </StackPanel>
                                     </Grid>
 
-                                    <!-- Whole row is a Button for keyboard focus and UIA semantics -->
-                                    <ui:Button x:Name="CorePathButton" Appearance="Transparent" Padding="0"
-                                               HorizontalContentAlignment="Stretch" Margin="0,0,0,12"
-                                               AutomationProperties.AutomationId="OverviewCorePath"
-                                               AutomationProperties.Name="{DynamicResource CoreStatus_PathTooltip}"
-                                               Click="OnCorePathRowClicked" ToolTip="{DynamicResource CoreStatus_PathTooltip}">
-                                        <Grid>
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="70"/>
-                                                <ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="Auto"/>
-                                            </Grid.ColumnDefinitions>
-                                            <TextBlock Text="{DynamicResource CoreStatus_PathLabel}" Opacity="0.65" FontSize="13" VerticalAlignment="Center"/>
-                                            <TextBlock Grid.Column="1" x:Name="ManagedCorePathText" Text="-" FontSize="12" Opacity="0.85" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                                            <ui:SymbolIcon Grid.Column="2" Symbol="Open24" FontSize="16" Opacity="0.75" VerticalAlignment="Center"/>
-                                        </Grid>
-                                    </ui:Button>
+                                    <Border Height="1" Background="{DynamicResource ControlStrokeColorDefaultBrush}" Opacity="0.35"/>
 
-                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
-                                        <ui:Button AutomationProperties.AutomationId="CheckUpdateButton" x:Name="CheckUpdateButton" Content="{DynamicResource CloudUpdate_CheckBtn}" Click="OnCheckUpdateClicked" Appearance="Secondary" Margin="0,0,12,0" Icon="{ui:SymbolIcon Symbol=ArrowSync24}"/>
-                                        <ui:Button AutomationProperties.AutomationId="DownloadInstallButton" x:Name="DownloadInstallButton" Content="{DynamicResource CloudUpdate_InstallBtn}" Click="OnDownloadAndInstallClicked" Appearance="Primary" IsEnabled="False" Margin="0,0,12,0" Icon="{ui:SymbolIcon Symbol=ArrowDownload24}"/>
-                                        <ui:Button AutomationProperties.AutomationId="UninstallCoreButton" x:Name="UninstallCoreButton" Content="{DynamicResource CoreStatus_UninstallBtn}" Click="OnUninstallCoreClicked" Appearance="Danger" IsEnabled="False" Icon="{ui:SymbolIcon Symbol=Delete24}"/>
+                                    <!-- Core installation directory -->
+                                    <Grid Margin="0,12,0,16">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="96"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="{DynamicResource CoreStatus_PathLabel}" Style="{StaticResource FluentCaptionStyle}" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="1" x:Name="ManagedCorePathText" Text="-" FontSize="12" FontFamily="Consolas" Opacity="0.78"
+                                                   TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                        <Button Grid.Column="2" x:Name="CorePathButton"
+                                                Style="{StaticResource FluentBorderlessButtonStyle}"
+                                                Padding="7,5" Visibility="Collapsed"
+                                                AutomationProperties.AutomationId="OverviewCorePath"
+                                                AutomationProperties.Name="{DynamicResource CoreStatus_PathTooltip}"
+                                                Click="OnCorePathRowClicked" ToolTip="{DynamicResource CoreStatus_PathTooltip}">
+                                            <ui:SymbolIcon Symbol="Open24" FontSize="15" Opacity="0.75"/>
+                                        </Button>
+                                    </Grid>
+
+                                    <!-- Actions -->
+                                    <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                                        <ui:Button AutomationProperties.AutomationId="DownloadInstallButton" x:Name="DownloadInstallButton"
+                                                   Content="{DynamicResource CloudUpdate_InstallBtn}"
+                                                   Click="OnDownloadAndInstallClicked"
+                                                   Appearance="Primary" IsEnabled="False" Margin="0,0,8,0"
+                                                   CornerRadius="{StaticResource FluentControlCornerRadius}"
+                                                   Icon="{ui:SymbolIcon Symbol=ArrowDownload24}"/>
+                                        <ui:Button AutomationProperties.AutomationId="CheckUpdateButton" x:Name="CheckUpdateButton"
+                                                   Content="{DynamicResource CloudUpdate_CheckBtn}"
+                                                   Click="OnCheckUpdateClicked"
+                                                   Appearance="Secondary" Margin="0,0,8,0"
+                                                   CornerRadius="{StaticResource FluentControlCornerRadius}"
+                                                   Icon="{ui:SymbolIcon Symbol=ArrowSync24}"/>
+                                        <ui:Button AutomationProperties.AutomationId="UninstallCoreButton" x:Name="UninstallCoreButton"
+                                                   Content="{DynamicResource CoreStatus_UninstallBtn}"
+                                                   Click="OnUninstallCoreClicked"
+                                                   Appearance="Secondary" Visibility="Collapsed"
+                                                   CornerRadius="{StaticResource FluentControlCornerRadius}"
+                                                   Icon="{ui:SymbolIcon Symbol=Delete24}"/>
                                     </StackPanel>
 
-                                    <!-- Update status. The message rides the InfoBar's own Message
-                                         property; the template does not reliably render Content,
-                                         so the link and progress live in their own surface below. -->
+                                    <!-- Core operation status and progress -->
                                     <ui:InfoBar x:Name="UpdateInfoBar"
                                                 Severity="Informational"
                                                 Title="{DynamicResource CloudUpdate_StatusTitle}"
-                                                IsOpen="True"
-                                                IsClosable="False"
-                                                Margin="0,0,0,0"/>
+                                                IsOpen="False"
+                                                IsClosable="True"
+                                                Margin="0,12,0,0"/>
 
-                                    <Border x:Name="UpdateDetailsPanel"
-                                            Background="{DynamicResource SubtleFillColorSecondaryBrush}"
-                                            BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
-                                            BorderThickness="1"
-                                            CornerRadius="6"
-                                            Padding="12,10"
+                                    <Border x:Name="InstallProgressPanel"
+                                            Style="{StaticResource FluentSubSurfaceStyle}"
                                             Margin="0,8,0,0"
                                             Visibility="Collapsed">
                                         <StackPanel>
-                                            <!-- Direct download link, shown only once a manifest is parsed. -->
-                                            <TextBlock x:Name="DownloadLinkPanel" Visibility="Collapsed">
-                                                <Hyperlink x:Name="DownloadLink" Click="OnDownloadLinkClicked"
-                                                           ToolTip="{DynamicResource CloudUpdate_OpenLinkTip}">
-                                                    <Run x:Name="DownloadLinkText"/>
-                                                </Hyperlink>
-                                            </TextBlock>
-
-                                            <StackPanel x:Name="InstallProgressPanel" Visibility="Collapsed" Margin="0,6,0,0">
-                                                <ProgressBar x:Name="InstallProgressBar" Height="4"/>
-                                                <TextBlock x:Name="InstallProgressLabel" FontSize="12" Opacity="0.85" TextWrapping="Wrap" Margin="0,6,0,0"/>
-                                            </StackPanel>
+                                            <ProgressBar x:Name="InstallProgressBar" Height="4"/>
+                                            <TextBlock x:Name="InstallProgressLabel" Style="{StaticResource FluentCaptionStyle}" Opacity="0.85" Margin="0,6,0,0"/>
                                         </StackPanel>
                                     </Border>
                                 </StackPanel>
@@ -345,22 +446,27 @@
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
 
-                    <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,12">
-                        <ui:Button AutomationProperties.AutomationId="InstancesNewBtn" Content="{DynamicResource Instances_NewBtn}" Click="OnCreateInstanceClicked" Appearance="Primary" Margin="0,0,10,0" Icon="{ui:SymbolIcon Symbol=Add24}"/>
-                        <ui:Button AutomationProperties.AutomationId="InstancesRefreshBtn" Content="{DynamicResource Instances_RefreshBtn}" Click="OnRefreshInstancesClicked" Margin="0,0,10,0" Icon="{ui:SymbolIcon Symbol=ArrowSync24}"/>
-                        <ui:Button AutomationProperties.AutomationId="InstancesStopAllBtn" Content="{DynamicResource Instances_StopAllBtn}" Click="OnStopAllInstancesClicked" Appearance="Danger" Icon="{ui:SymbolIcon Symbol=Stop24}"/>
+                    <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,14">
+                        <ui:Button AutomationProperties.AutomationId="InstancesNewBtn" Content="{DynamicResource Instances_NewBtn}" Click="OnCreateInstanceClicked" Appearance="Primary" Margin="0,0,8,0" Icon="{ui:SymbolIcon Symbol=Add24}"/>
+                        <ui:Button AutomationProperties.AutomationId="InstancesRefreshBtn" Content="{DynamicResource Instances_RefreshBtn}" Click="OnRefreshInstancesClicked" Appearance="Secondary" Margin="0,0,8,0" Icon="{ui:SymbolIcon Symbol=ArrowSync24}"/>
+                        <ui:Button AutomationProperties.AutomationId="InstancesStopAllBtn" Content="{DynamicResource Instances_StopAllBtn}" Click="OnStopAllInstancesClicked" Appearance="Secondary" Icon="{ui:SymbolIcon Symbol=Stop24}"/>
                     </StackPanel>
 
-                    <ListView AutomationProperties.AutomationId="InstancesListView" Grid.Row="1" x:Name="InstancesListView" 
+                    <ListView AutomationProperties.AutomationId="InstancesListView" Grid.Row="1" x:Name="InstancesListView"
                               Focusable="False"
-                              Background="Transparent" 
+                              Background="Transparent"
                               BorderThickness="0"
                               ItemContainerStyle="{StaticResource StretchRowItemStyle}"
                               ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                               ScrollViewer.VerticalScrollBarVisibility="Auto">
                         <ListView.ItemTemplate>
                             <DataTemplate>
-                                <ui:Card Margin="0,2,0,6" Padding="14,9">
+                                <Border CornerRadius="{StaticResource FluentCardCornerRadius}"
+                                        Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                                        BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                                        BorderThickness="1"
+                                        Padding="16,12"
+                                        Margin="0,0,0,8">
                                     <Grid>
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>
@@ -368,73 +474,113 @@
                                         </Grid.ColumnDefinitions>
 
                                         <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
-                                            <TextBlock Text="{Binding DisplayNameWithShortId}" FontWeight="Bold" FontSize="14" TextTrimming="CharacterEllipsis"/>
-                                            <StackPanel Orientation="Horizontal" Margin="0,3,0,0">
-                                                <Ellipse Width="7" Height="7" VerticalAlignment="Center" Margin="0,0,6,0">
-                                                    <Ellipse.Style>
-                                                        <Style TargetType="Ellipse">
-                                                            <Setter Property="Fill" Value="{DynamicResource StatusNeutralBrush}"/>
+                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                <TextBlock Text="{Binding Name}" Style="{StaticResource FluentBodyStrongStyle}" FontSize="14" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                                                <Border Style="{StaticResource FluentBadgeBorderStyle}"
+                                                        Padding="6,1" Margin="8,0,0,0"
+                                                        Background="{DynamicResource SubtleFillColorSecondaryBrush}"
+                                                        VerticalAlignment="Center">
+                                                    <TextBlock Text="{Binding ShortId}" FontFamily="Consolas" FontSize="11" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Opacity="0.78" VerticalAlignment="Center"/>
+                                                </Border>
+                                                <Border Padding="7,2" Margin="6,0,0,0"
+                                                        VerticalAlignment="Center">
+                                                    <Border.Style>
+                                                        <Style TargetType="Border" BasedOn="{StaticResource FluentBadgeBorderStyle}">
+                                                            <Setter Property="Background" Value="{DynamicResource SubtleFillColorSecondaryBrush}"/>
                                                             <Style.Triggers>
                                                                 <DataTrigger Binding="{Binding IsRunning}" Value="True">
-                                                                    <Setter Property="Fill" Value="{DynamicResource StatusSuccessBrush}"/>
+                                                                    <Setter Property="Background" Value="{DynamicResource StatusSuccessFillSoftBrush}"/>
                                                                 </DataTrigger>
                                                             </Style.Triggers>
                                                         </Style>
-                                                    </Ellipse.Style>
-                                                </Ellipse>
-                                                <TextBlock Text="{Binding StatusText}" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center">
-                                                    <TextBlock.Style>
-                                                        <Style TargetType="TextBlock">
-                                                            <Setter Property="Foreground" Value="{DynamicResource StatusNeutralBrush}"/>
-                                                            <Style.Triggers>
-                                                                <DataTrigger Binding="{Binding IsRunning}" Value="True">
-                                                                    <Setter Property="Foreground" Value="{DynamicResource StatusSuccessBrush}"/>
-                                                                </DataTrigger>
-                                                            </Style.Triggers>
-                                                        </Style>
-                                                    </TextBlock.Style>
-                                                </TextBlock>
-
+                                                    </Border.Style>
+                                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                        <Ellipse Width="6" Height="6" VerticalAlignment="Center" Margin="0,0,5,0">
+                                                            <Ellipse.Style>
+                                                                <Style TargetType="Ellipse">
+                                                                    <Setter Property="Fill" Value="{DynamicResource StatusNeutralBrush}"/>
+                                                                    <Style.Triggers>
+                                                                        <DataTrigger Binding="{Binding IsRunning}" Value="True">
+                                                                            <Setter Property="Fill" Value="{DynamicResource StatusSuccessBrush}"/>
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </Ellipse.Style>
+                                                        </Ellipse>
+                                                        <TextBlock Text="{Binding StatusText}" FontWeight="SemiBold" FontSize="11" VerticalAlignment="Center">
+                                                            <TextBlock.Style>
+                                                                <Style TargetType="TextBlock">
+                                                                    <Setter Property="Foreground" Value="{DynamicResource StatusNeutralBrush}"/>
+                                                                    <Style.Triggers>
+                                                                        <DataTrigger Binding="{Binding IsRunning}" Value="True">
+                                                                            <Setter Property="Foreground" Value="{DynamicResource StatusSuccessBrush}"/>
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </TextBlock.Style>
+                                                        </TextBlock>
+                                                    </StackPanel>
+                                                </Border>
                                             </StackPanel>
-                                            <TextBlock Text="{Binding BoundProjectText}" FontSize="11" Opacity="0.65" TextTrimming="CharacterEllipsis" Margin="0,3,0,0"/>
+
+                                            <StackPanel Orientation="Horizontal" Margin="0,5,0,0">
+                                                <TextBlock Text="{Binding BoundAccountText}" FontSize="12" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Opacity="0.65" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+                                                <TextBlock Text=" · " FontSize="12" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Opacity="0.4" VerticalAlignment="Center"/>
+                                                <TextBlock Text="{Binding BoundProjectText}" FontSize="12" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Opacity="0.65" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+                                            </StackPanel>
                                         </StackPanel>
 
                                         <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                                            <ui:Button AutomationProperties.AutomationId="InstanceRowLaunch" Content="{DynamicResource Instances_Launch}" 
-                                                       Click="OnStartInstanceClicked" 
-                                                       Tag="{Binding Id}" 
-                                                       Appearance="Primary" 
-                                                       Visibility="{Binding ShowStart, Converter={StaticResource BoolToVisibility}}" 
-                                                       Margin="0,0,8,0"
+                                            <ui:Button AutomationProperties.AutomationId="InstanceRowLaunch" Content="{DynamicResource Instances_Launch}"
+                                                       Click="OnStartInstanceClicked"
+                                                       Tag="{Binding Id}"
+                                                       Appearance="Secondary"
+                                                       Visibility="{Binding ShowStart, Converter={StaticResource BoolToVisibility}}"
+                                                       Margin="0,0,6,0"
                                                        Padding="12,5"
                                                        Icon="{ui:SymbolIcon Symbol=Play24}"/>
-                                            <ui:Button AutomationProperties.AutomationId="InstanceRowStop" Content="{DynamicResource Instances_Stop}" 
-                                                       Click="OnStopInstanceClicked" 
-                                                       Tag="{Binding Id}" 
-                                                       Appearance="Danger" 
-                                                       Visibility="{Binding ShowStop, Converter={StaticResource BoolToVisibility}}" 
-                                                       Margin="0,0,8,0"
+                                            <ui:Button AutomationProperties.AutomationId="InstanceRowStop" Content="{DynamicResource Instances_Stop}"
+                                                       Click="OnStopInstanceClicked"
+                                                       Tag="{Binding Id}"
+                                                       Appearance="Secondary"
+                                                       Foreground="{DynamicResource StatusCriticalBrush}"
+                                                       Visibility="{Binding ShowStop, Converter={StaticResource BoolToVisibility}}"
+                                                       Margin="0,0,6,0"
                                                        Padding="12,5"
                                                        Icon="{ui:SymbolIcon Symbol=Stop24}"/>
-                                            <ui:Button AutomationProperties.AutomationId="InstanceRowConfig" ToolTip="{DynamicResource Instances_ConfigTip}" 
-                                                       Click="OnConfigureInstanceClicked" 
-                                                       Tag="{Binding Id}" 
-                                                       Appearance="Secondary" 
-                                                       Margin="0,0,8,0"
-                                                       Padding="8,5"
-                                                       Icon="{ui:SymbolIcon Symbol=Settings24}"/>
-                                            <ui:Button AutomationProperties.AutomationId="InstanceRowDelete" ToolTip="{DynamicResource Instances_DeleteTip}" 
-                                                       Click="OnDeleteInstanceClicked" 
-                                                       Tag="{Binding Id}" 
-                                                       Appearance="Secondary" 
-                                                       Padding="8,5"
-                                                       Icon="{ui:SymbolIcon Symbol=Delete24}"/>
+                                            <Button AutomationProperties.AutomationId="InstanceRowConfig"
+                                                    AutomationProperties.Name="{DynamicResource Instances_ConfigTip}"
+                                                    ToolTip="{DynamicResource Instances_ConfigTip}"
+                                                    Style="{StaticResource FluentBorderlessButtonStyle}"
+                                                    Click="OnConfigureInstanceClicked"
+                                                    Tag="{Binding Id}"
+                                                    Padding="7,5"
+                                                    Margin="0,0,2,0">
+                                                <ui:SymbolIcon Symbol="Settings24" FontSize="15" Opacity="0.78"/>
+                                            </Button>
+                                            <Button AutomationProperties.AutomationId="InstanceRowDelete"
+                                                    AutomationProperties.Name="{DynamicResource Instances_DeleteTip}"
+                                                    ToolTip="{DynamicResource Instances_DeleteTip}"
+                                                    Style="{StaticResource FluentBorderlessButtonStyle}"
+                                                    Click="OnDeleteInstanceClicked"
+                                                    Tag="{Binding Id}"
+                                                    Padding="7,5">
+                                                <ui:SymbolIcon Symbol="Delete24" FontSize="15" Opacity="0.72"/>
+                                            </Button>
                                         </StackPanel>
                                     </Grid>
-                                </ui:Card>
+                                </Border>
                             </DataTemplate>
                         </ListView.ItemTemplate>
                     </ListView>
+
+                    <StackPanel x:Name="InstancesEmptyState" Grid.Row="1"
+                                HorizontalAlignment="Center" VerticalAlignment="Center"
+                                Visibility="Collapsed" Margin="0,0,0,36">
+                        <ui:SymbolIcon Symbol="Desktop24" FontSize="36" Opacity="0.35" Margin="0,0,0,10"/>
+                        <TextBlock Text="{DynamicResource Instances_EmptyTitle}" Style="{StaticResource FluentBodyStrongStyle}" HorizontalAlignment="Center" Opacity="0.75"/>
+                        <TextBlock Text="{DynamicResource Instances_EmptyDesc}" Style="{StaticResource FluentCaptionStyle}" HorizontalAlignment="Center" Margin="0,4,0,0"/>
+                    </StackPanel>
                 </Grid>
 
                 <Grid x:Name="ProjectsView" Visibility="Collapsed">
@@ -443,20 +589,20 @@
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
 
-                    <StackPanel Grid.Row="0" Margin="0,0,0,16">
-                        <Grid Margin="0,0,0,8">
+                    <StackPanel Grid.Row="0" Margin="0,0,0,14">
+                        <Grid Margin="0,0,0,6">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
                             <StackPanel Grid.Column="0" Orientation="Horizontal">
-                                <ui:Button AutomationProperties.AutomationId="ProjectsImportGeminiBtn" Content="{DynamicResource Projects_ImportGeminiBtn}" Click="OnImportFromGeminiClicked" Appearance="Primary" Margin="0,0,12,0" Icon="{ui:SymbolIcon Symbol=FolderArrowRight24}"/>
-                                <ui:Button AutomationProperties.AutomationId="ProjectsRefreshBtn" Content="{DynamicResource Projects_RefreshBtn}" Click="OnRefreshProjectsClicked" Margin="0,0,12,0" Icon="{ui:SymbolIcon Symbol=ArrowSync24}"/>
-                                <ui:Button AutomationProperties.AutomationId="ProjectsRepairBtn" Content="{DynamicResource Projects_RepairBtn}" Click="OnRepairProjectsClicked" Icon="{ui:SymbolIcon Symbol=Wrench24}"/>
+                                <ui:Button AutomationProperties.AutomationId="ProjectsImportGeminiBtn" Content="{DynamicResource Projects_ImportGeminiBtn}" Click="OnImportFromGeminiClicked" Appearance="Primary" Margin="0,0,8,0" Icon="{ui:SymbolIcon Symbol=FolderArrowRight24}"/>
+                                <ui:Button AutomationProperties.AutomationId="ProjectsRefreshBtn" Content="{DynamicResource Projects_RefreshBtn}" Click="OnRefreshProjectsClicked" Appearance="Secondary" Margin="0,0,8,0" Icon="{ui:SymbolIcon Symbol=ArrowSync24}"/>
+                                <ui:Button AutomationProperties.AutomationId="ProjectsRepairBtn" Content="{DynamicResource Projects_RepairBtn}" Click="OnRepairProjectsClicked" Appearance="Secondary" Icon="{ui:SymbolIcon Symbol=Wrench24}"/>
                             </StackPanel>
                             <ctrl:PageStatusStrip Grid.Column="1" x:Name="ProjectsStatusStrip" Margin="12,0,0,0" VerticalAlignment="Center"/>
                         </Grid>
-                        <TextBlock Text="{DynamicResource Projects_Desc}" Opacity="0.7" FontSize="12"/>
+                        <TextBlock Text="{DynamicResource Projects_Desc}" Style="{StaticResource FluentCaptionStyle}"/>
                     </StackPanel>
 
                     <ListView AutomationProperties.AutomationId="ProjectsListView" Grid.Row="1" x:Name="ProjectsListView"
@@ -468,7 +614,12 @@
                               ScrollViewer.VerticalScrollBarVisibility="Auto">
                         <ListView.ItemTemplate>
                             <DataTemplate>
-                                <ui:Card Margin="0,4,0,10" Padding="16,12">
+                                <Border CornerRadius="{StaticResource FluentCardCornerRadius}"
+                                        Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                                        BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                                        BorderThickness="1"
+                                        Padding="16,12"
+                                        Margin="0,0,0,8">
                                     <Grid>
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>
@@ -476,72 +627,119 @@
                                         </Grid.ColumnDefinitions>
 
                                         <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0" ClipToBounds="True">
-                                            <!-- Name lives in a Grid: a horizontal StackPanel measures at infinity and breaks TextTrimming -->
-                                            <Grid>
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="*"/>
-                                                    <ColumnDefinition Width="Auto"/>
-                                                    <ColumnDefinition Width="Auto"/>
-                                                </Grid.ColumnDefinitions>
-                                                <TextBlock Grid.Column="0" Text="{Binding DisplayNameWithShortId}" FontWeight="Bold" FontSize="15"
+                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                <TextBlock Text="{Binding Name}" Style="{StaticResource FluentBodyStrongStyle}" FontSize="14"
                                                            TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
-                                                <ui:Badge Grid.Column="1" Content="{DynamicResource Projects_PathInvalid}" Appearance="Caution" Margin="10,0,6,0" Visibility="{Binding IsPathInvalid, Converter={StaticResource BoolToVisibility}}" VerticalAlignment="Center"/>
-                                                <ui:Button AutomationProperties.AutomationId="ProjectRowRelocate" Grid.Column="2" Content="{DynamicResource Projects_RelocateBtn}" Click="OnRelocateProjectPathClicked" Tag="{Binding Id}" Padding="6,2" FontSize="11" Visibility="{Binding IsPathInvalid, Converter={StaticResource BoolToVisibility}}" VerticalAlignment="Center"/>
-                                            </Grid>
-                                            <TextBlock Text="{Binding Path}" FontSize="11" Opacity="0.6" TextTrimming="CharacterEllipsis" Margin="0,2,0,0"/>
+                                                <Border Style="{StaticResource FluentBadgeBorderStyle}"
+                                                        Padding="6,1" Margin="8,0,0,0"
+                                                        Background="{DynamicResource SubtleFillColorSecondaryBrush}"
+                                                        VerticalAlignment="Center">
+                                                    <TextBlock Text="{Binding ShortId}" FontFamily="Consolas" FontSize="11" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Opacity="0.78" VerticalAlignment="Center"/>
+                                                </Border>
+                                                <Border Padding="7,2" Margin="6,0,0,0" VerticalAlignment="Center">
+                                                    <Border.Style>
+                                                        <Style TargetType="Border" BasedOn="{StaticResource FluentBadgeBorderStyle}">
+                                                            <Setter Property="Background" Value="{DynamicResource SubtleFillColorSecondaryBrush}"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IsRunning}" Value="True">
+                                                                    <Setter Property="Background" Value="{DynamicResource StatusSuccessFillSoftBrush}"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Border.Style>
+                                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                        <Ellipse Width="6" Height="6" VerticalAlignment="Center" Margin="0,0,5,0">
+                                                            <Ellipse.Style>
+                                                                <Style TargetType="Ellipse">
+                                                                    <Setter Property="Fill" Value="{DynamicResource StatusNeutralBrush}"/>
+                                                                    <Style.Triggers>
+                                                                        <DataTrigger Binding="{Binding IsRunning}" Value="True">
+                                                                            <Setter Property="Fill" Value="{DynamicResource StatusSuccessBrush}"/>
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </Ellipse.Style>
+                                                        </Ellipse>
+                                                        <TextBlock Text="{Binding StatusText}" FontWeight="SemiBold" FontSize="11" VerticalAlignment="Center">
+                                                            <TextBlock.Style>
+                                                                <Style TargetType="TextBlock">
+                                                                    <Setter Property="Foreground" Value="{DynamicResource StatusNeutralBrush}"/>
+                                                                    <Style.Triggers>
+                                                                        <DataTrigger Binding="{Binding IsRunning}" Value="True">
+                                                                            <Setter Property="Foreground" Value="{DynamicResource StatusSuccessBrush}"/>
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </TextBlock.Style>
+                                                        </TextBlock>
+                                                    </StackPanel>
+                                                </Border>
+                                                <Border Style="{StaticResource FluentBadgeBorderStyle}"
+                                                        Padding="7,2" Margin="6,0,0,0"
+                                                        Background="{DynamicResource StatusCautionFillSoftBrush}"
+                                                        Visibility="{Binding IsPathInvalid, Converter={StaticResource BoolToVisibility}}"
+                                                        VerticalAlignment="Center">
+                                                    <TextBlock Text="{DynamicResource Projects_PathInvalid}" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource StatusCautionBrush}"/>
+                                                </Border>
+                                                <ui:Button AutomationProperties.AutomationId="ProjectRowRelocate"
+                                                           Content="{DynamicResource Projects_RelocateBtn}"
+                                                           Click="OnRelocateProjectPathClicked"
+                                                           Tag="{Binding Id}"
+                                                           Appearance="Secondary"
+                                                           Padding="7,2" Margin="6,0,0,0" FontSize="11"
+                                                           Visibility="{Binding IsPathInvalid, Converter={StaticResource BoolToVisibility}}"
+                                                           VerticalAlignment="Center"/>
+                                            </StackPanel>
+
+                                            <TextBlock Text="{Binding Path}" FontSize="11.5" FontFamily="Consolas"
+                                                       Foreground="{DynamicResource TextFillColorPrimaryBrush}" Opacity="0.58"
+                                                       TextTrimming="CharacterEllipsis" Margin="0,4,0,0"/>
+
                                             <StackPanel Orientation="Horizontal" Margin="0,5,0,0" ClipToBounds="True">
-                                                <Ellipse Width="7" Height="7" VerticalAlignment="Center" Margin="0,0,6,0">
-                                                    <Ellipse.Style>
-                                                        <Style TargetType="Ellipse">
-                                                            <Setter Property="Fill" Value="{DynamicResource StatusNeutralBrush}"/>
-                                                            <Style.Triggers>
-                                                                <DataTrigger Binding="{Binding IsRunning}" Value="True">
-                                                                    <Setter Property="Fill" Value="{DynamicResource StatusSuccessBrush}"/>
-                                                                </DataTrigger>
-                                                            </Style.Triggers>
-                                                        </Style>
-                                                    </Ellipse.Style>
-                                                </Ellipse>
-                                                <TextBlock Text="{Binding StatusText}" FontWeight="SemiBold" FontSize="12" Margin="0,0,14,0">
-                                                    <TextBlock.Style>
-                                                        <Style TargetType="TextBlock">
-                                                            <Setter Property="Foreground" Value="{DynamicResource StatusNeutralBrush}"/>
-                                                            <Style.Triggers>
-                                                                <DataTrigger Binding="{Binding IsRunning}" Value="True">
-                                                                    <Setter Property="Foreground" Value="{DynamicResource StatusSuccessBrush}"/>
-                                                                </DataTrigger>
-                                                            </Style.Triggers>
-                                                        </Style>
-                                                    </TextBlock.Style>
-                                                </TextBlock>
-                                                <TextBlock Text="{Binding BoundInstancesText}" Foreground="{DynamicResource BrandAccentTextBrush}" FontSize="11" VerticalAlignment="Center" Margin="0,0,14,0" Visibility="{Binding HasBoundInstances, Converter={StaticResource BoolToVisibility}}"/>
-                                                <TextBlock Text="{Binding ConvoCountText}" FontSize="11" Opacity="0.8" Foreground="{DynamicResource BrandAccentTextBrush}" VerticalAlignment="Center" Margin="0,0,14,0"/>
-                                                <TextBlock Text="{Binding LastActiveText}" FontSize="11" Opacity="0.55" VerticalAlignment="Center"/>
+                                                <Border Style="{StaticResource FluentBadgeBorderStyle}"
+                                                        Padding="7,1" Margin="0,0,8,0"
+                                                        Background="{DynamicResource BrandAccentFillSoftBrush}"
+                                                        VerticalAlignment="Center">
+                                                    <TextBlock Text="{Binding ConvoCountText}" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource BrandAccentTextBrush}"/>
+                                                </Border>
+                                                <TextBlock Text="{Binding BoundInstancesText}" FontSize="11.5" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Opacity="0.72"
+                                                           VerticalAlignment="Center" Margin="0,0,10,0"
+                                                           Visibility="{Binding HasBoundInstances, Converter={StaticResource BoolToVisibility}}"/>
+                                                <TextBlock Text="{Binding LastActiveText}" FontSize="11.5" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Opacity="0.55"
+                                                           VerticalAlignment="Center"/>
                                             </StackPanel>
                                         </StackPanel>
 
                                         <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
                                             <ui:Button AutomationProperties.AutomationId="ProjectRowConversations" Content="{DynamicResource Projects_ConversationsBtn}"
                                                        ToolTip="{DynamicResource Projects_ConversationsTip}"
-                                                       Click="OnOpenProjectConversationsClicked" 
-                                                       Tag="{Binding Id}" 
-                                                       Appearance="Primary" 
-                                                       Margin="0,0,8,0"
-                                                       Padding="10,5"
+                                                       Click="OnOpenProjectConversationsClicked"
+                                                       Tag="{Binding Id}"
+                                                       Appearance="Secondary"
+                                                       Margin="0,0,6,0"
+                                                       Padding="12,5"
                                                        Icon="{ui:SymbolIcon Symbol=Chat24}"/>
                                             <ui:Button AutomationProperties.AutomationId="ProjectRowActions" Content="{DynamicResource Projects_ActionsBtn}"
                                                        ToolTip="{DynamicResource Projects_ActionsTip}"
-                                                       Click="OnOpenProjectActionsClicked" 
-                                                       Tag="{Binding Id}" 
-                                                       Appearance="Secondary" 
-                                                       Padding="10,5"
+                                                       Click="OnOpenProjectActionsClicked"
+                                                       Tag="{Binding Id}"
+                                                       Appearance="Secondary"
+                                                       Padding="12,5"
                                                        Icon="{ui:SymbolIcon Symbol=Options24}"/>
                                         </StackPanel>
                                     </Grid>
-                                </ui:Card>
+                                </Border>
                             </DataTemplate>
                         </ListView.ItemTemplate>
                     </ListView>
+
+                    <StackPanel x:Name="ProjectsEmptyState" Grid.Row="1"
+                                HorizontalAlignment="Center" VerticalAlignment="Center"
+                                Visibility="Collapsed" Margin="0,0,0,36">
+                        <ui:SymbolIcon Symbol="Folder24" FontSize="36" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Opacity="0.35" Margin="0,0,0,10"/>
+                        <TextBlock Text="{DynamicResource Projects_EmptyTitle}" Style="{StaticResource FluentBodyStrongStyle}" HorizontalAlignment="Center" Opacity="0.75"/>
+                        <TextBlock Text="{DynamicResource Projects_EmptyDesc}" Style="{StaticResource FluentCaptionStyle}" HorizontalAlignment="Center" Margin="0,4,0,0"/>
+                    </StackPanel>
                 </Grid>
 
                 
@@ -552,14 +750,14 @@
                     </Grid.RowDefinitions>
 
                     <StackPanel Grid.Row="0" Margin="0,0,0,12">
-                        <Grid Margin="0,0,0,8">
+                        <Grid Margin="0,0,0,6">
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
-                                <ui:Button AutomationProperties.AutomationId="ToolsImportStockBtn" Content="{DynamicResource Tools_ImportStockBtn}" Click="OnImportStockToolsClicked" Appearance="Primary" Margin="0,0,10,0" Icon="{ui:SymbolIcon Symbol=ArrowDownload24}"/>
-                                <ui:Button AutomationProperties.AutomationId="ToolsOpenSharedFolderBtn" Content="{DynamicResource Tools_OpenSharedFolderBtn}" Click="OnOpenSharedFolderClicked" Appearance="Secondary" Margin="0,0,10,0" Icon="{ui:SymbolIcon Symbol=FolderOpen24}"/>
+                                <ui:Button AutomationProperties.AutomationId="ToolsImportStockBtn" Content="{DynamicResource Tools_ImportStockBtn}" Click="OnImportStockToolsClicked" Appearance="Primary" Margin="0,0,8,0" Icon="{ui:SymbolIcon Symbol=ArrowDownload24}"/>
+                                <ui:Button AutomationProperties.AutomationId="ToolsOpenSharedFolderBtn" Content="{DynamicResource Tools_OpenSharedFolderBtn}" Click="OnOpenSharedFolderClicked" Appearance="Secondary" Margin="0,0,8,0" Icon="{ui:SymbolIcon Symbol=FolderOpen24}"/>
                                 <ui:Button AutomationProperties.AutomationId="ToolsRefreshBtn" Content="{DynamicResource Tools_RefreshBtn}" Click="OnRefreshToolsClicked" Appearance="Secondary" Icon="{ui:SymbolIcon Symbol=ArrowSync24}"/>
                             </StackPanel>
                         </Grid>
-                        <TextBlock Text="{DynamicResource Tools_Desc}" Opacity="0.75" FontSize="12" TextWrapping="Wrap"/>
+                        <TextBlock Text="{DynamicResource Tools_Desc}" Style="{StaticResource FluentCaptionStyle}"/>
                     </StackPanel>
                     <!-- Must be stock TabControl/TabItem: WPF-UI implicit styles match exact type, a subclass falls back to the classic template -->
                     <TabControl Grid.Row="1" x:Name="ToolsTabs"
@@ -571,9 +769,9 @@
                                 <RowDefinition Height="*"/>
                             </Grid.RowDefinitions>
 
-                            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,10">
+                            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,8,0,10">
                                 <ui:Button AutomationProperties.AutomationId="ToolsNewSkillBtn" Content="{DynamicResource Tools_NewSkillBtn}" Click="OnNewSkillClicked" Appearance="Secondary" Icon="{ui:SymbolIcon Symbol=Add24}" Margin="0,0,12,0"/>
-                                <TextBlock Text="{DynamicResource Tools_SkillsPathHint}" Opacity="0.6" FontSize="11" VerticalAlignment="Center"/>
+                                <TextBlock Text="{DynamicResource Tools_SkillsPathHint}" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Opacity="0.58" FontSize="11.5" VerticalAlignment="Center"/>
                             </StackPanel>
 
                             <ListView AutomationProperties.AutomationId="SkillsListView" Grid.Row="1" x:Name="SkillsListView"
@@ -585,7 +783,11 @@
                                       ScrollViewer.VerticalScrollBarVisibility="Auto">
                                 <ListView.ItemTemplate>
                                     <DataTemplate>
-                                        <ui:Card Margin="0,2,0,6" Padding="14,9">
+                                        <Border CornerRadius="{StaticResource FluentCardCornerRadius}"
+                                                Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                                                BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                                                BorderThickness="1"
+                                                Margin="0,0,0,6" Padding="14,10">
                                             <Grid>
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="Auto"/>
@@ -594,20 +796,26 @@
                                                     <ColumnDefinition Width="Auto"/>
                                                 </Grid.ColumnDefinitions>
 
-                                                <ui:SymbolIcon Grid.Column="0" Symbol="Sparkle24" FontSize="16" Foreground="{DynamicResource BrandAccentBrush}"
+                                                <ui:SymbolIcon Grid.Column="0" Symbol="Sparkle24" FontSize="15" Foreground="{DynamicResource BrandAccentBrush}"
                                                                Margin="0,0,10,0" VerticalAlignment="Center"/>
-                                                <TextBlock Grid.Column="1" Text="{Binding Name}" FontWeight="Bold" FontSize="13"
+                                                <TextBlock Grid.Column="1" Text="{Binding Name}" Style="{StaticResource FluentBodyStrongStyle}"
                                                            VerticalAlignment="Center" Margin="0,0,14,0"
                                                            MaxWidth="260" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
-                                                <TextBlock Grid.Column="2" Text="{Binding Description}" FontSize="12" Opacity="0.7"
+                                                <TextBlock Grid.Column="2" Text="{Binding Description}" FontSize="12"
+                                                           Foreground="{DynamicResource TextFillColorPrimaryBrush}" Opacity="0.68"
                                                            VerticalAlignment="Center" Margin="0,0,14,0"
                                                            TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
-                                                <ui:Button AutomationProperties.AutomationId="ToolRowDetails" Grid.Column="3" Content="{DynamicResource Tools_DetailsBtn}"
-                                                           Click="OnToolDetailsClicked" Tag="{Binding}"
-                                                           Appearance="Secondary" Padding="10,4" VerticalAlignment="Center"
-                                                           Icon="{ui:SymbolIcon Symbol=Info24}"/>
+                                                <Button AutomationProperties.AutomationId="ToolRowDetails" Grid.Column="3"
+                                                        Style="{StaticResource FluentBorderlessButtonStyle}"
+                                                        Click="OnToolDetailsClicked" Tag="{Binding}"
+                                                        Padding="8,5" VerticalAlignment="Center">
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <ui:SymbolIcon Symbol="Info24" FontSize="14" Opacity="0.75" Margin="0,0,5,0" VerticalAlignment="Center"/>
+                                                        <TextBlock Text="{DynamicResource Tools_DetailsBtn}" FontSize="12" VerticalAlignment="Center"/>
+                                                    </StackPanel>
+                                                </Button>
                                             </Grid>
-                                        </ui:Card>
+                                        </Border>
                                     </DataTemplate>
                                 </ListView.ItemTemplate>
                             </ListView>
@@ -621,9 +829,9 @@
                                 <RowDefinition Height="*"/>
                             </Grid.RowDefinitions>
 
-                            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,10">
+                            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,8,0,10">
                                 <ui:Button AutomationProperties.AutomationId="ToolsNewPluginBtn" Content="{DynamicResource Tools_NewPluginBtn}" Click="OnNewPluginClicked" Appearance="Secondary" Icon="{ui:SymbolIcon Symbol=Add24}" Margin="0,0,12,0"/>
-                                <TextBlock Text="{DynamicResource Tools_PluginsPathHint}" Opacity="0.6" FontSize="11" VerticalAlignment="Center"/>
+                                <TextBlock Text="{DynamicResource Tools_PluginsPathHint}" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Opacity="0.58" FontSize="11.5" VerticalAlignment="Center"/>
                             </StackPanel>
 
                             <ListView AutomationProperties.AutomationId="PluginsListView" Grid.Row="1" x:Name="PluginsListView"
@@ -635,7 +843,11 @@
                                       ScrollViewer.VerticalScrollBarVisibility="Auto">
                                 <ListView.ItemTemplate>
                                     <DataTemplate>
-                                        <ui:Card Margin="0,2,0,6" Padding="14,9">
+                                        <Border CornerRadius="{StaticResource FluentCardCornerRadius}"
+                                                Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                                                BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                                                BorderThickness="1"
+                                                Margin="0,0,0,6" Padding="14,10">
                                             <Grid>
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="Auto"/>
@@ -644,20 +856,26 @@
                                                     <ColumnDefinition Width="Auto"/>
                                                 </Grid.ColumnDefinitions>
 
-                                                <ui:SymbolIcon Grid.Column="0" Symbol="PuzzlePiece24" FontSize="16" Foreground="{DynamicResource StatusCautionBrush}"
+                                                <ui:SymbolIcon Grid.Column="0" Symbol="PuzzlePiece24" FontSize="15" Foreground="{DynamicResource StatusCautionBrush}"
                                                                Margin="0,0,10,0" VerticalAlignment="Center"/>
-                                                <TextBlock Grid.Column="1" Text="{Binding Name}" FontWeight="Bold" FontSize="13"
+                                                <TextBlock Grid.Column="1" Text="{Binding Name}" Style="{StaticResource FluentBodyStrongStyle}"
                                                            VerticalAlignment="Center" Margin="0,0,14,0"
                                                            MaxWidth="260" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
-                                                <TextBlock Grid.Column="2" Text="{Binding Description}" FontSize="12" Opacity="0.7"
+                                                <TextBlock Grid.Column="2" Text="{Binding Description}" FontSize="12"
+                                                           Foreground="{DynamicResource TextFillColorPrimaryBrush}" Opacity="0.68"
                                                            VerticalAlignment="Center" Margin="0,0,14,0"
                                                            TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
-                                                <ui:Button AutomationProperties.AutomationId="ToolRowDetails" Grid.Column="3" Content="{DynamicResource Tools_DetailsBtn}"
-                                                           Click="OnToolDetailsClicked" Tag="{Binding}"
-                                                           Appearance="Secondary" Padding="10,4" VerticalAlignment="Center"
-                                                           Icon="{ui:SymbolIcon Symbol=Info24}"/>
+                                                <Button AutomationProperties.AutomationId="ToolRowDetails" Grid.Column="3"
+                                                        Style="{StaticResource FluentBorderlessButtonStyle}"
+                                                        Click="OnToolDetailsClicked" Tag="{Binding}"
+                                                        Padding="8,5" VerticalAlignment="Center">
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <ui:SymbolIcon Symbol="Info24" FontSize="14" Opacity="0.75" Margin="0,0,5,0" VerticalAlignment="Center"/>
+                                                        <TextBlock Text="{DynamicResource Tools_DetailsBtn}" FontSize="12" VerticalAlignment="Center"/>
+                                                    </StackPanel>
+                                                </Button>
                                             </Grid>
-                                        </ui:Card>
+                                        </Border>
                                     </DataTemplate>
                                 </ListView.ItemTemplate>
                             </ListView>
@@ -671,10 +889,10 @@
                                 <RowDefinition Height="*"/>
                             </Grid.RowDefinitions>
 
-                            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,10">
-                                <ui:Button AutomationProperties.AutomationId="ToolsNewMcpBtn" Content="{DynamicResource Tools_NewMcpBtn}" Click="OnAddMcpServerClicked" Appearance="Secondary" Icon="{ui:SymbolIcon Symbol=Add24}" Margin="0,0,10,0"/>
+                            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,8,0,10">
+                                <ui:Button AutomationProperties.AutomationId="ToolsNewMcpBtn" Content="{DynamicResource Tools_NewMcpBtn}" Click="OnAddMcpServerClicked" Appearance="Secondary" Icon="{ui:SymbolIcon Symbol=Add24}" Margin="0,0,8,0"/>
                                 <ui:Button AutomationProperties.AutomationId="ToolsEditMcpConfigBtn" Content="{DynamicResource Tools_EditMcpConfigBtn}" Click="OnEditMcpConfigFileClicked" Appearance="Secondary" Icon="{ui:SymbolIcon Symbol=DocumentEdit24}" Margin="0,0,12,0"/>
-                                <TextBlock Text="{DynamicResource Tools_McpPathHint}" Opacity="0.6" FontSize="11" VerticalAlignment="Center"/>
+                                <TextBlock Text="{DynamicResource Tools_McpPathHint}" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Opacity="0.58" FontSize="11.5" VerticalAlignment="Center"/>
                             </StackPanel>
 
                             <ListView AutomationProperties.AutomationId="McpListView" Grid.Row="1" x:Name="McpListView"
@@ -686,7 +904,11 @@
                                       ScrollViewer.VerticalScrollBarVisibility="Auto">
                                 <ListView.ItemTemplate>
                                     <DataTemplate>
-                                        <ui:Card Margin="0,2,0,6" Padding="14,9">
+                                        <Border CornerRadius="{StaticResource FluentCardCornerRadius}"
+                                                Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                                                BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                                                BorderThickness="1"
+                                                Margin="0,0,0,6" Padding="14,10">
                                             <Grid>
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="Auto"/>
@@ -695,20 +917,26 @@
                                                     <ColumnDefinition Width="Auto"/>
                                                 </Grid.ColumnDefinitions>
 
-                                                <ui:SymbolIcon Grid.Column="0" Symbol="PlugConnected24" FontSize="16" Foreground="{DynamicResource StatusSuccessBrush}"
+                                                <ui:SymbolIcon Grid.Column="0" Symbol="PlugConnected24" FontSize="15" Foreground="{DynamicResource StatusSuccessBrush}"
                                                                Margin="0,0,10,0" VerticalAlignment="Center"/>
-                                                <TextBlock Grid.Column="1" Text="{Binding Name}" FontWeight="Bold" FontSize="13"
+                                                <TextBlock Grid.Column="1" Text="{Binding Name}" Style="{StaticResource FluentBodyStrongStyle}"
                                                            VerticalAlignment="Center" Margin="0,0,14,0"
                                                            MaxWidth="260" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
                                                 <TextBlock Grid.Column="2" Text="{Binding CommandOrUrl}" FontFamily="Consolas" FontSize="12"
-                                                           Opacity="0.7" VerticalAlignment="Center" Margin="0,0,14,0"
+                                                           Foreground="{DynamicResource TextFillColorPrimaryBrush}" Opacity="0.68"
+                                                           VerticalAlignment="Center" Margin="0,0,14,0"
                                                            TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
-                                                <ui:Button AutomationProperties.AutomationId="ToolRowDetails" Grid.Column="3" Content="{DynamicResource Tools_DetailsBtn}"
-                                                           Click="OnToolDetailsClicked" Tag="{Binding}"
-                                                           Appearance="Secondary" Padding="10,4" VerticalAlignment="Center"
-                                                           Icon="{ui:SymbolIcon Symbol=Info24}"/>
+                                                <Button AutomationProperties.AutomationId="ToolRowDetails" Grid.Column="3"
+                                                        Style="{StaticResource FluentBorderlessButtonStyle}"
+                                                        Click="OnToolDetailsClicked" Tag="{Binding}"
+                                                        Padding="8,5" VerticalAlignment="Center">
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <ui:SymbolIcon Symbol="Info24" FontSize="14" Opacity="0.75" Margin="0,0,5,0" VerticalAlignment="Center"/>
+                                                        <TextBlock Text="{DynamicResource Tools_DetailsBtn}" FontSize="12" VerticalAlignment="Center"/>
+                                                    </StackPanel>
+                                                </Button>
                                             </Grid>
-                                        </ui:Card>
+                                        </Border>
                                     </DataTemplate>
                                 </ListView.ItemTemplate>
                             </ListView>
@@ -718,35 +946,44 @@
                 </Grid>
 
                 <Grid x:Name="ProxyView" Visibility="Collapsed">
-                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="0,0,4,0">
                         <StackPanel>
 
-                                            <ui:Card Margin="0,0,0,16" Padding="18">
+                            <Border CornerRadius="{StaticResource FluentCardCornerRadius}"
+                                    Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                                    BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                                    BorderThickness="1"
+                                    Margin="0,0,0,12" Padding="18,16">
                                 <StackPanel>
-                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
                                         <ui:SymbolIcon Symbol="ArrowSwap24" FontSize="16" Foreground="{DynamicResource BrandAccentBrush}" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                                        <TextBlock Text="{DynamicResource Proxy_ModeCardTitle}" FontWeight="Bold" FontSize="15" VerticalAlignment="Center"/>
+                                        <TextBlock Text="{DynamicResource Proxy_ModeCardTitle}" Style="{StaticResource FluentSectionTitleStyle}" VerticalAlignment="Center"/>
                                     </StackPanel>
                                     <RadioButton AutomationProperties.AutomationId="ProxyDirectRadio" x:Name="ProxyDirectRadio" Content="{DynamicResource Proxy_ModeDirect}" GroupName="ProxyMode" Margin="0,0,0,8" Checked="OnProxyModeRadioChanged"/>
                                     <RadioButton AutomationProperties.AutomationId="ProxySystemRadio" x:Name="ProxySystemRadio" Content="{DynamicResource Proxy_ModeSystem}" GroupName="ProxyMode" Margin="0,0,0,8" Checked="OnProxyModeRadioChanged"/>
-                                    <RadioButton AutomationProperties.AutomationId="ProxyManualRadio" x:Name="ProxyManualRadio" Content="{DynamicResource Proxy_ModeManual}" GroupName="ProxyMode" Margin="0,0,0,4" IsChecked="True" Checked="OnProxyModeRadioChanged"/>
+                                    <RadioButton AutomationProperties.AutomationId="ProxyManualRadio" x:Name="ProxyManualRadio" Content="{DynamicResource Proxy_ModeManual}" GroupName="ProxyMode" IsChecked="True" Checked="OnProxyModeRadioChanged"/>
                                 </StackPanel>
-                            </ui:Card>
+                            </Border>
 
                             <!-- Shown only when Manual mode is selected -->
-                            <ui:Card x:Name="ManualProxyCard" Margin="0,0,0,16" Padding="18">
+                            <Border x:Name="ManualProxyCard"
+                                    CornerRadius="{StaticResource FluentCardCornerRadius}"
+                                    Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                                    BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                                    BorderThickness="1"
+                                    Margin="0,0,0,12" Padding="18,16">
                                 <StackPanel>
-                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,14">
                                         <ui:SymbolIcon Symbol="Settings24" FontSize="16" Foreground="{DynamicResource BrandAccentBrush}" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                                        <TextBlock Text="{DynamicResource Proxy_ParamsCardTitle}" FontWeight="Bold" FontSize="15" VerticalAlignment="Center"/>
+                                        <TextBlock Text="{DynamicResource Proxy_ParamsCardTitle}" Style="{StaticResource FluentSectionTitleStyle}" VerticalAlignment="Center"/>
                                     </StackPanel>
-                                    
+
                                     <Grid Margin="0,0,0,12">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="120"/>
                                             <ColumnDefinition Width="*"/>
                                         </Grid.ColumnDefinitions>
-                                        <TextBlock Text="{DynamicResource Proxy_ProtocolLabel}" VerticalAlignment="Center" Opacity="0.8"/>
+                                        <TextBlock Text="{DynamicResource Proxy_ProtocolLabel}" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Opacity="0.78"/>
                                         <ComboBox AutomationProperties.AutomationId="ProxyProtocolCombo" Grid.Column="1" x:Name="ProxyProtocolCombo" SelectedIndex="0" Width="200" HorizontalAlignment="Left">
                                             <ComboBoxItem Content="SOCKS5"/>
                                             <ComboBoxItem Content="HTTP"/>
@@ -758,32 +995,37 @@
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="120"/>
                                             <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="70"/>
+                                            <ColumnDefinition Width="64"/>
                                             <ColumnDefinition Width="100"/>
                                         </Grid.ColumnDefinitions>
-                                        <TextBlock Text="{DynamicResource Proxy_HostLabel}" VerticalAlignment="Center" Opacity="0.8"/>
-                                        <ui:TextBox Grid.Column="1" x:Name="ProxyHostBox" Text="127.0.0.1" Margin="0,0,12,0"/>
-                                        <TextBlock Grid.Column="2" Text="{DynamicResource Proxy_PortLabel}" VerticalAlignment="Center" Opacity="0.8"/>
-                                        <ui:TextBox Grid.Column="3" x:Name="ProxyPortBox" Text="2952"/>
+                                        <TextBlock Text="{DynamicResource Proxy_HostLabel}" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Opacity="0.78"/>
+                                        <ui:TextBox AutomationProperties.AutomationId="ProxyHostBox" Grid.Column="1" x:Name="ProxyHostBox" Text="127.0.0.1" Margin="0,0,12,0"/>
+                                        <TextBlock Grid.Column="2" Text="{DynamicResource Proxy_PortLabel}" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Opacity="0.78"/>
+                                        <ui:TextBox AutomationProperties.AutomationId="ProxyPortBox" Grid.Column="3" x:Name="ProxyPortBox" Text="2952"/>
                                     </Grid>
 
-                                    <Grid Margin="0,0,0,0">
+                                    <Grid>
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="120"/>
                                             <ColumnDefinition Width="*"/>
                                         </Grid.ColumnDefinitions>
-                                        <TextBlock Text="{DynamicResource Proxy_BypassLabel}" VerticalAlignment="Center" Opacity="0.8"/>
-                                        <ui:TextBox Grid.Column="1" x:Name="ProxyBypassBox" Text="localhost;127.0.0.1;&lt;local&gt;"/>
+                                        <TextBlock Text="{DynamicResource Proxy_BypassLabel}" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Opacity="0.78"/>
+                                        <ui:TextBox AutomationProperties.AutomationId="ProxyBypassBox" Grid.Column="1" x:Name="ProxyBypassBox" Text="localhost;127.0.0.1;&lt;local&gt;"/>
                                     </Grid>
                                 </StackPanel>
-                            </ui:Card>
+                            </Border>
 
                             <!-- Shown for both System and Manual modes: proxy authentication credentials (optional) -->
-                            <ui:Card x:Name="ProxyAuthCard" Margin="0,0,0,16" Padding="18">
+                            <Border x:Name="ProxyAuthCard"
+                                    CornerRadius="{StaticResource FluentCardCornerRadius}"
+                                    Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                                    BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                                    BorderThickness="1"
+                                    Margin="0,0,0,12" Padding="18,16">
                                 <StackPanel>
-                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,14">
                                         <ui:SymbolIcon Symbol="Password24" FontSize="16" Foreground="{DynamicResource BrandAccentBrush}" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                                        <TextBlock Text="{DynamicResource Proxy_AuthCardTitle}" FontWeight="Bold" FontSize="15" VerticalAlignment="Center"/>
+                                        <TextBlock Text="{DynamicResource Proxy_AuthCardTitle}" Style="{StaticResource FluentSectionTitleStyle}" VerticalAlignment="Center"/>
                                     </StackPanel>
 
                                     <Grid Margin="0,0,0,12">
@@ -791,31 +1033,35 @@
                                             <ColumnDefinition Width="120"/>
                                             <ColumnDefinition Width="*"/>
                                         </Grid.ColumnDefinitions>
-                                        <TextBlock Text="{DynamicResource Proxy_UsernameLabel}" VerticalAlignment="Center" Opacity="0.8"/>
+                                        <TextBlock Text="{DynamicResource Proxy_UsernameLabel}" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Opacity="0.78"/>
                                         <ui:TextBox AutomationProperties.AutomationId="ProxyUsernameBox" Grid.Column="1" x:Name="ProxyUsernameBox"/>
                                     </Grid>
 
-                                    <Grid Margin="0,0,0,0">
+                                    <Grid>
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="120"/>
                                             <ColumnDefinition Width="*"/>
                                         </Grid.ColumnDefinitions>
-                                        <TextBlock Text="{DynamicResource Proxy_PasswordLabel}" VerticalAlignment="Center" Opacity="0.8"/>
+                                        <TextBlock Text="{DynamicResource Proxy_PasswordLabel}" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Opacity="0.78"/>
                                         <ui:PasswordBox AutomationProperties.AutomationId="ProxyPasswordBox" Grid.Column="1" x:Name="ProxyPasswordBox"/>
                                     </Grid>
                                 </StackPanel>
-                            </ui:Card>
+                            </Border>
 
-                                            <ui:Card Margin="0,0,0,16" Padding="18">
+                            <Border CornerRadius="{StaticResource FluentCardCornerRadius}"
+                                    Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                                    BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                                    BorderThickness="1"
+                                    Margin="0,0,0,12" Padding="18,16">
                                 <StackPanel>
                                     <StackPanel Orientation="Horizontal">
-                                        <ui:Button AutomationProperties.AutomationId="ProxyTestBtn" Content="{DynamicResource Proxy_TestBtn}" Click="OnTestProxyClicked" Appearance="Secondary" Margin="0,0,12,0" Icon="{ui:SymbolIcon Symbol=NetworkCheck24}"/>
+                                        <ui:Button AutomationProperties.AutomationId="ProxyTestBtn" Content="{DynamicResource Proxy_TestBtn}" Click="OnTestProxyClicked" Appearance="Secondary" Margin="0,0,8,0" Icon="{ui:SymbolIcon Symbol=NetworkCheck24}"/>
                                         <ui:Button AutomationProperties.AutomationId="ProxySaveBtn" Content="{DynamicResource Proxy_SaveBtn}" Click="OnSaveProxyClicked" Appearance="Primary" Icon="{ui:SymbolIcon Symbol=Checkmark24}"/>
                                     </StackPanel>
 
                                     <!-- Connectivity report. Row 0 spans the value columns because a
                                          run has a single egress region; rows 1 and 2 are per probe. -->
-                                    <Grid x:Name="ProxyTestResultGrid" Margin="0,12,0,0" Visibility="Collapsed">
+                                    <Grid x:Name="ProxyTestResultGrid" Margin="0,14,0,0" Visibility="Collapsed">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="Auto" MinWidth="110"/>
                                             <ColumnDefinition Width="32"/>
@@ -829,40 +1075,40 @@
                                         </Grid.RowDefinitions>
 
                                         <TextBlock x:Name="ProxyRegionLabel" Grid.Row="0" Grid.Column="0"
-                                                   Text="{DynamicResource Proxy_RegionRow}" FontSize="13" Opacity="0.75"
+                                                   Text="{DynamicResource Proxy_RegionRow}" FontSize="12.5" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Opacity="0.72"
                                                    VerticalAlignment="Center" Margin="0,0,0,6"/>
                                         <TextBlock x:Name="ProxyRegionValue" Grid.Row="0" Grid.Column="1" Grid.ColumnSpan="3"
-                                                   FontSize="13" FontWeight="SemiBold" TextAlignment="Center"
+                                                   FontSize="12.5" FontWeight="SemiBold" Foreground="{DynamicResource TextFillColorPrimaryBrush}" TextAlignment="Center"
                                                    VerticalAlignment="Center" Margin="0,0,0,6"/>
 
                                         <TextBlock x:Name="ProxyGeminiLabel" Grid.Row="1" Grid.Column="0"
-                                                   Text="Gemini" FontSize="13" Opacity="0.75"
+                                                   Text="Gemini" FontSize="12.5" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Opacity="0.72"
                                                    VerticalAlignment="Center" Margin="0,0,0,4"/>
                                         <TextBlock x:Name="ProxyGeminiStatus" Grid.Row="1" Grid.Column="1"
                                                    FontSize="13" FontWeight="Bold" TextAlignment="Center"
                                                    VerticalAlignment="Center" Margin="0,0,0,4"/>
                                         <TextBlock x:Name="ProxyGeminiLatency" Grid.Row="1" Grid.Column="2"
-                                                   FontSize="13" TextAlignment="Center"
+                                                   FontSize="12.5" Foreground="{DynamicResource TextFillColorPrimaryBrush}" TextAlignment="Center"
                                                    VerticalAlignment="Center" Margin="0,0,0,4"/>
                                         <TextBlock x:Name="ProxyGeminiReason" Grid.Row="1" Grid.Column="3"
-                                                   FontSize="12" Opacity="0.65" TextAlignment="Left" TextWrapping="Wrap"
+                                                   FontSize="12" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Opacity="0.65" TextAlignment="Left" TextWrapping="Wrap"
                                                    VerticalAlignment="Center" Margin="0,0,0,4"/>
 
                                         <TextBlock x:Name="ProxyAntigravityLabel" Grid.Row="2" Grid.Column="0"
-                                                   Text="Antigravity" FontSize="13" Opacity="0.75"
+                                                   Text="Antigravity" FontSize="12.5" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Opacity="0.72"
                                                    VerticalAlignment="Center"/>
                                         <TextBlock x:Name="ProxyAntigravityStatus" Grid.Row="2" Grid.Column="1"
                                                    FontSize="13" FontWeight="Bold" TextAlignment="Center"
                                                    VerticalAlignment="Center"/>
                                         <TextBlock x:Name="ProxyAntigravityLatency" Grid.Row="2" Grid.Column="2"
-                                                   FontSize="13" TextAlignment="Center"
+                                                   FontSize="12.5" Foreground="{DynamicResource TextFillColorPrimaryBrush}" TextAlignment="Center"
                                                    VerticalAlignment="Center"/>
                                         <TextBlock x:Name="ProxyAntigravityReason" Grid.Row="2" Grid.Column="3"
-                                                   FontSize="12" Opacity="0.65" TextAlignment="Left" TextWrapping="Wrap"
+                                                   FontSize="12" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Opacity="0.65" TextAlignment="Left" TextWrapping="Wrap"
                                                    VerticalAlignment="Center"/>
                                     </Grid>
                                 </StackPanel>
-                            </ui:Card>
+                            </Border>
                         </StackPanel>
                     </ScrollViewer>
                 </Grid>
@@ -873,16 +1119,16 @@
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
 
-                    <StackPanel Grid.Row="0" Margin="0,0,0,16">
+                    <StackPanel Grid.Row="0" Margin="0,0,0,14">
                         <Grid>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
                             <StackPanel Grid.Column="0" Orientation="Horizontal">
-                                <ui:Button AutomationProperties.AutomationId="AccountsCaptureBtn" Content="{DynamicResource Accounts_CaptureBtn}" Click="OnCaptureAccountClicked" Appearance="Primary" Margin="0,0,10,0" Icon="{ui:SymbolIcon Symbol=Add24}"/>
-                                <ui:Button AutomationProperties.AutomationId="AccountsRefreshAllTokensBtn" Content="{DynamicResource Accounts_RefreshAllTokensBtn}" Click="OnRefreshAllTokensClicked" Appearance="Secondary" Margin="0,0,10,0" Icon="{ui:SymbolIcon Symbol=ArrowSync24}"/>
-                                <ui:Button AutomationProperties.AutomationId="AccountsUnlockAllBtn" Content="{DynamicResource Accounts_UnlockAllBtn}" Click="OnUnlockAllAccountsClicked" Appearance="Secondary" Margin="0,0,10,0" Icon="{ui:SymbolIcon Symbol=LockOpen24}"/>
+                                <ui:Button AutomationProperties.AutomationId="AccountsCaptureBtn" Content="{DynamicResource Accounts_CaptureBtn}" Click="OnCaptureAccountClicked" Appearance="Primary" Margin="0,0,8,0" Icon="{ui:SymbolIcon Symbol=Add24}"/>
+                                <ui:Button AutomationProperties.AutomationId="AccountsRefreshAllTokensBtn" Content="{DynamicResource Accounts_RefreshAllTokensBtn}" Click="OnRefreshAllTokensClicked" Appearance="Secondary" Margin="0,0,8,0" Icon="{ui:SymbolIcon Symbol=ArrowSync24}"/>
+                                <ui:Button AutomationProperties.AutomationId="AccountsUnlockAllBtn" Content="{DynamicResource Accounts_UnlockAllBtn}" Click="OnUnlockAllAccountsClicked" Appearance="Secondary" Margin="0,0,8,0" Icon="{ui:SymbolIcon Symbol=LockOpen24}"/>
                                 <ui:Button AutomationProperties.AutomationId="AccountsVerifyBtn" Content="{DynamicResource Accounts_VerifyBtn}" Click="OnVerifyCredentialsClicked" Appearance="Secondary" Icon="{ui:SymbolIcon Symbol=ShieldCheckmark24}"/>
                             </StackPanel>
                             <ctrl:PageStatusStrip Grid.Column="1" x:Name="AccountsStatusStrip" Margin="12,0,0,0" VerticalAlignment="Center"/>
@@ -898,7 +1144,11 @@
                               ScrollViewer.VerticalScrollBarVisibility="Auto">
                         <ListView.ItemTemplate>
                             <DataTemplate>
-                                <ui:Card Margin="0,3,0,8" Padding="14,10">
+                                <Border CornerRadius="{StaticResource FluentCardCornerRadius}"
+                                        Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                                        BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                                        BorderThickness="1"
+                                        Margin="0,0,0,8" Padding="16,12">
                                     <Grid>
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="260"/>
@@ -907,11 +1157,13 @@
                                         </Grid.ColumnDefinitions>
 
                                         <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                                            <TextBlock Text="{Binding PrimaryName}" FontWeight="Bold" FontSize="14" TextTrimming="CharacterEllipsis"/>
-                                            <Border HorizontalAlignment="Left" Margin="0,4,0,0" CornerRadius="4" Padding="6,1"
+                                            <TextBlock Text="{Binding PrimaryName}" Style="{StaticResource FluentBodyStrongStyle}" FontSize="14" TextTrimming="CharacterEllipsis"/>
+                                            <Border HorizontalAlignment="Left" Margin="0,4,0,0"
+                                                    Style="{StaticResource FluentBadgeBorderStyle}"
+                                                    Padding="6,1"
                                                     Background="{DynamicResource BrandAccentFillStrongerBrush}"
                                                     Visibility="{Binding ShowTierBadge, Converter={StaticResource BoolToVisibility}}">
-                                                <TextBlock Text="{Binding TierBadgeText}" FontSize="10" FontWeight="SemiBold"
+                                                <TextBlock Text="{Binding TierBadgeText}" FontSize="10.5" FontWeight="SemiBold"
                                                            Foreground="{DynamicResource BrandAccentTextBrush}" TextTrimming="CharacterEllipsis"/>
                                             </Border>
                                         </StackPanel>
@@ -924,7 +1176,7 @@
                                                     <ColumnDefinition Width="Auto"/>
                                                     <ColumnDefinition Width="*"/>
                                                 </Grid.ColumnDefinitions>
-                                                <Ellipse Grid.Column="0" Width="7" Height="7" VerticalAlignment="Center" Margin="0,0,6,0">
+                                                <Ellipse Grid.Column="0" Width="6" Height="6" VerticalAlignment="Center" Margin="0,0,6,0">
                                                     <Ellipse.Style>
                                                         <Style TargetType="Ellipse">
                                                             <Setter Property="Fill" Value="{DynamicResource StatusSuccessBrush}"/>
@@ -948,22 +1200,22 @@
                                                         </Style>
                                                     </TextBlock.Style>
                                                 </TextBlock>
-                                                <TextBlock Grid.Column="2" Text="{Binding QuotaSummaryText}" FontSize="11" Opacity="0.85" Foreground="{DynamicResource BrandAccentTextBrush}" VerticalAlignment="Center" Margin="12,0,0,0"
+                                                <TextBlock Grid.Column="2" Text="{Binding QuotaSummaryText}" FontSize="11.5" Opacity="0.88" Foreground="{DynamicResource BrandAccentTextBrush}" VerticalAlignment="Center" Margin="12,0,0,0"
                                                            Visibility="{Binding ShowQuotaSummary, Converter={StaticResource BoolToVisibility}}"
                                                            TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
                                             </Grid>
-                                            <TextBlock Text="{Binding BoundInstanceSubtitle}" FontSize="11" Opacity="0.6" Margin="13,2,0,0" Visibility="{Binding ShowBoundInstanceSubtitle, Converter={StaticResource BoolToVisibility}}" TextTrimming="CharacterEllipsis"/>
+                                            <TextBlock Text="{Binding BoundInstanceSubtitle}" FontSize="11.5" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Opacity="0.62" Margin="12,3,0,0" Visibility="{Binding ShowBoundInstanceSubtitle, Converter={StaticResource BoolToVisibility}}" TextTrimming="CharacterEllipsis"/>
                                         </StackPanel>
 
                                         <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                                            <ui:Button AutomationProperties.AutomationId="AccountRowRefreshToken" ToolTip="{DynamicResource Accounts_RefreshTokenTip}" 
+                                            <ui:Button AutomationProperties.AutomationId="AccountRowRefreshToken" AutomationProperties.Name="{DynamicResource Accounts_RefreshTokenTip}" ToolTip="{DynamicResource Accounts_RefreshTokenTip}" 
                                                        Click="OnRefreshTokenClicked" 
                                                        Tag="{Binding Id}" 
                                                        Appearance="Secondary" 
                                                        Margin="0,0,8,0"
                                                        Padding="8,5"
                                                        Icon="{ui:SymbolIcon Symbol=ArrowSync24}"/>
-                                            <ui:Button AutomationProperties.AutomationId="AccountRowDetails" ToolTip="{DynamicResource Accounts_DetailsTip}" 
+                                            <ui:Button AutomationProperties.AutomationId="AccountRowDetails" AutomationProperties.Name="{DynamicResource Accounts_DetailsTip}" ToolTip="{DynamicResource Accounts_DetailsTip}" 
                                                        Click="OnAccountDetailsClicked" 
                                                        Tag="{Binding Id}" 
                                                        Appearance="Secondary" 
@@ -978,7 +1230,7 @@
                                                        Margin="0,0,8,0"
                                                        Padding="10,5"
                                                        Icon="{ui:SymbolIcon Symbol=LockOpen24}"/>
-                                            <ui:Button AutomationProperties.AutomationId="AccountRowDelete" ToolTip="{DynamicResource Common_Delete}" 
+                                            <ui:Button AutomationProperties.AutomationId="AccountRowDelete" AutomationProperties.Name="{DynamicResource Common_Delete}" ToolTip="{DynamicResource Common_Delete}" 
                                                        Click="OnDeleteAccountClicked" 
                                                        Tag="{Binding Id}" 
                                                        Appearance="Secondary"
@@ -986,51 +1238,81 @@
                                                        Icon="{ui:SymbolIcon Symbol=Delete24}"/>
                                         </StackPanel>
                                     </Grid>
-                                </ui:Card>
+                                </Border>
                             </DataTemplate>
                         </ListView.ItemTemplate>
                     </ListView>
                 </Grid>
 
                 <Grid x:Name="AppearanceView" Visibility="Collapsed">
-                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="0,0,4,0">
                         <StackPanel>
 
-                            <ui:Card Margin="0,0,0,16" Padding="20">
+                            <Border CornerRadius="{StaticResource FluentCardCornerRadius}"
+                                    Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                                    BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                                    BorderThickness="1"
+                                    Margin="0,0,0,12" Padding="20,18">
                                 <StackPanel>
                                     <StackPanel Orientation="Horizontal">
-                                        <ui:SymbolIcon Symbol="ColorBackground24" FontSize="18" Foreground="{DynamicResource BrandAccentBrush}" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                                        <TextBlock Text="{DynamicResource Appearance_MicaCardTitle}" FontWeight="Bold" FontSize="16" VerticalAlignment="Center"/>
+                                        <ui:SymbolIcon Symbol="ColorBackground24" FontSize="17" Foreground="{DynamicResource BrandAccentBrush}" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                                        <TextBlock Text="{DynamicResource Appearance_MicaCardTitle}" Style="{StaticResource FluentSectionTitleStyle}" FontSize="16" VerticalAlignment="Center"/>
                                     </StackPanel>
-                                    <TextBlock Text="{DynamicResource Appearance_MicaDesc}" 
-                                               TextWrapping="Wrap" Opacity="0.8" Margin="0,6,0,14" LineHeight="20" FontSize="13"/>
+                                    <TextBlock Text="{DynamicResource Appearance_MicaDesc}"
+                                               Style="{StaticResource FluentCaptionStyle}"
+                                               Margin="0,6,0,16" LineHeight="19"/>
 
                                     <Grid Margin="0,0,0,12">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="140"/>
-                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="240"/>
                                         </Grid.ColumnDefinitions>
-                                        <TextBlock Text="{DynamicResource Appearance_ThemeLabel}" VerticalAlignment="Center" Opacity="0.85"/>
-                                        <StackPanel Grid.Column="1" Orientation="Horizontal">
-                                            <RadioButton AutomationProperties.AutomationId="ThemeAutoRadio" x:Name="ThemeAutoRadio" Content="{DynamicResource Appearance_ThemeAuto}" GroupName="ThemeModeGroup" IsChecked="True" Checked="OnThemeModeChanged" Margin="0,0,24,0"/>
-                                            <RadioButton AutomationProperties.AutomationId="ThemeLightRadio" x:Name="ThemeLightRadio" Content="{DynamicResource Appearance_ThemeLight}" GroupName="ThemeModeGroup" Checked="OnThemeModeChanged" Margin="0,0,24,0"/>
-                                            <RadioButton AutomationProperties.AutomationId="ThemeDarkRadio" x:Name="ThemeDarkRadio" Content="{DynamicResource Appearance_ThemeDark}" GroupName="ThemeModeGroup" Checked="OnThemeModeChanged"/>
-                                        </StackPanel>
+                                        <TextBlock Text="{DynamicResource Appearance_ThemeLabel}" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Opacity="0.85"/>
+                                        <ComboBox AutomationProperties.AutomationId="ThemeModeCombo" Grid.Column="1" x:Name="ThemeModeCombo"
+                                                  SelectionChanged="OnThemeModeChanged"
+                                                  SelectedIndex="0">
+                                            <ComboBoxItem x:Name="ThemeAutoItem" Tag="auto" Content="{DynamicResource Appearance_ThemeAuto}"/>
+                                            <ComboBoxItem x:Name="ThemeLightItem" Tag="light" Content="{DynamicResource Appearance_ThemeLight}"/>
+                                            <ComboBoxItem x:Name="ThemeDarkItem" Tag="dark" Content="{DynamicResource Appearance_ThemeDark}"/>
+                                        </ComboBox>
                                     </Grid>
 
-                                    <Grid Margin="0,0,0,16">
+                                    <Grid Margin="0,0,0,12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="140"/>
+                                            <ColumnDefinition Width="240"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="{DynamicResource Appearance_MaterialLabel}" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Opacity="0.85"/>
+                                        <ComboBox AutomationProperties.AutomationId="BackdropMaterialCombo" Grid.Column="1" x:Name="BackdropMaterialCombo"
+                                                  SelectionChanged="OnBackdropMaterialChanged"
+                                                  SelectedIndex="0">
+                                            <ComboBoxItem x:Name="MaterialNoneItem" Tag="none" Content="{DynamicResource Appearance_MaterialNone}" ToolTip="{DynamicResource Appearance_MaterialNoneHint}"/>
+                                            <ComboBoxItem x:Name="MaterialMicaItem" Tag="mica" Content="{DynamicResource Appearance_MaterialMica}"/>
+                                            <ComboBoxItem x:Name="MaterialTabbedItem" Tag="tabbed" Content="{DynamicResource Appearance_MaterialTabbed}"/>
+                                            <ComboBoxItem x:Name="MaterialAcrylicItem" Tag="acrylic" Content="{DynamicResource Appearance_MaterialAcrylic}"/>
+                                        </ComboBox>
+                                    </Grid>
+
+                                    <Grid Margin="0,0,0,14">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="140"/>
                                             <ColumnDefinition Width="*"/>
                                         </Grid.ColumnDefinitions>
-                                        <TextBlock Text="{DynamicResource Appearance_MaterialLabel}" VerticalAlignment="Center" Opacity="0.85"/>
-                                        <StackPanel Grid.Column="1" Orientation="Horizontal">
-                                            <RadioButton AutomationProperties.AutomationId="MicaRadioBtn" x:Name="MicaRadioBtn" Content="{DynamicResource Appearance_MaterialMica}" GroupName="BackdropMaterialGroup" IsChecked="True" Checked="OnBackdropMaterialChanged" Margin="0,0,24,0"/>
-                                            <RadioButton AutomationProperties.AutomationId="TabbedRadioBtn" x:Name="TabbedRadioBtn" Content="{DynamicResource Appearance_MaterialTabbed}" GroupName="BackdropMaterialGroup" Checked="OnBackdropMaterialChanged" Margin="0,0,24,0"/>
-                                            <RadioButton AutomationProperties.AutomationId="AcrylicRadioBtn" x:Name="AcrylicRadioBtn" Content="{DynamicResource Appearance_MaterialAcrylic}" GroupName="BackdropMaterialGroup" Checked="OnBackdropMaterialChanged" Margin="0,0,24,0"/>
-                                            <RadioButton AutomationProperties.AutomationId="NoneRadioBtn" x:Name="NoneRadioBtn" Content="{DynamicResource Appearance_MaterialNone}" GroupName="BackdropMaterialGroup" Checked="OnBackdropMaterialChanged" ToolTip="{DynamicResource Appearance_MaterialNoneHint}"/>
+                                        <TextBlock Text="{DynamicResource Appearance_AccentInteractionLabel}" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Opacity="0.85"
+                                                   ToolTip="{DynamicResource Appearance_AccentInteractionHint}"/>
+                                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                            <ui:ToggleSwitch AutomationProperties.AutomationId="AccentInteractionCheck"
+                                                             AutomationProperties.Name="{DynamicResource Appearance_AccentInteractionLabel}"
+                                                             x:Name="AccentInteractionCheck"
+                                                             VerticalAlignment="Center"
+                                                             Checked="OnAccentInteractionChanged" Unchecked="OnAccentInteractionChanged"/>
+                                            <TextBlock Text="{DynamicResource Appearance_AccentInteractionContent}"
+                                                       Foreground="{DynamicResource TextFillColorPrimaryBrush}"
+                                                       VerticalAlignment="Center" Margin="10,0,0,0" Opacity="0.72" FontSize="12" TextWrapping="Wrap"/>
                                         </StackPanel>
                                     </Grid>
+
+                                    <Border Height="1" Background="{DynamicResource ControlStrokeColorDefaultBrush}" Opacity="0.35" Margin="0,2,0,14"/>
 
                                     <Grid Margin="0,0,0,12">
                                         <Grid.ColumnDefinitions>
@@ -1038,14 +1320,14 @@
                                             <ColumnDefinition Width="*"/>
                                             <ColumnDefinition Width="60"/>
                                         </Grid.ColumnDefinitions>
-                                        <TextBlock Text="{DynamicResource Appearance_OpacityLabel}" VerticalAlignment="Center" Opacity="0.85"/>
-                                        <Slider AutomationProperties.AutomationId="MicaOpacitySlider" Grid.Column="1" x:Name="MicaOpacitySlider" 
-                                                Minimum="0.00" Maximum="1.00" Value="0.28" 
+                                        <TextBlock Text="{DynamicResource Appearance_OpacityLabel}" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Opacity="0.85"/>
+                                        <Slider AutomationProperties.AutomationId="MicaOpacitySlider" Grid.Column="1" x:Name="MicaOpacitySlider"
+                                                Minimum="0.00" Maximum="1.00" Value="0.28"
                                                 SmallChange="0.01" LargeChange="0.05"
                                                 IsMoveToPointEnabled="True"
-                                                ValueChanged="OnMicaOpacityChanged" 
+                                                ValueChanged="OnMicaOpacityChanged"
                                                 VerticalAlignment="Center"/>
-                                        <TextBlock Grid.Column="2" x:Name="MicaOpacityLabel" Text="28%" VerticalAlignment="Center" HorizontalAlignment="Right" FontWeight="SemiBold"/>
+                                        <TextBlock Grid.Column="2" x:Name="MicaOpacityLabel" Text="28%" Foreground="{DynamicResource TextFillColorPrimaryBrush}" VerticalAlignment="Center" HorizontalAlignment="Right" FontWeight="SemiBold"/>
                                     </Grid>
 
                                     <Grid Margin="0,0,0,10">
@@ -1054,7 +1336,7 @@
                                             <ColumnDefinition Width="*"/>
                                             <ColumnDefinition Width="60"/>
                                         </Grid.ColumnDefinitions>
-                                        <TextBlock Text="{DynamicResource Appearance_NoiseAlphaLabel}" VerticalAlignment="Center" Opacity="0.85"
+                                        <TextBlock Text="{DynamicResource Appearance_NoiseAlphaLabel}" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Opacity="0.85"
                                                    ToolTip="{DynamicResource Appearance_NoiseAlphaHint}"/>
                                         <Slider AutomationProperties.AutomationId="NoiseAlphaSlider" Grid.Column="1" x:Name="NoiseAlphaSlider"
                                                 Minimum="0" Maximum="1" Value="0.55"
@@ -1062,7 +1344,7 @@
                                                 IsMoveToPointEnabled="True"
                                                 ValueChanged="OnNoiseAlphaChanged"
                                                 VerticalAlignment="Center"/>
-                                        <TextBlock Grid.Column="2" x:Name="NoiseAlphaLabel" Text="55%" VerticalAlignment="Center" HorizontalAlignment="Right" FontWeight="SemiBold"/>
+                                        <TextBlock Grid.Column="2" x:Name="NoiseAlphaLabel" Text="55%" Foreground="{DynamicResource TextFillColorPrimaryBrush}" VerticalAlignment="Center" HorizontalAlignment="Right" FontWeight="SemiBold"/>
                                     </Grid>
 
                                     <Grid Margin="0,0,0,10">
@@ -1071,7 +1353,7 @@
                                             <ColumnDefinition Width="*"/>
                                             <ColumnDefinition Width="60"/>
                                         </Grid.ColumnDefinitions>
-                                        <TextBlock Text="{DynamicResource Appearance_NoiseFreqLabel}" VerticalAlignment="Center" Opacity="0.85"
+                                        <TextBlock Text="{DynamicResource Appearance_NoiseFreqLabel}" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Opacity="0.85"
                                                    ToolTip="{DynamicResource Appearance_NoiseFreqHint}"/>
                                         <Slider AutomationProperties.AutomationId="NoiseFreqSlider" Grid.Column="1" x:Name="NoiseFreqSlider"
                                                 Minimum="0.5" Maximum="2.0" Value="0.85"
@@ -1079,7 +1361,7 @@
                                                 IsMoveToPointEnabled="True"
                                                 ValueChanged="OnNoiseFreqChanged"
                                                 VerticalAlignment="Center"/>
-                                        <TextBlock Grid.Column="2" x:Name="NoiseFreqLabel" Text="0.85" VerticalAlignment="Center" HorizontalAlignment="Right" FontWeight="SemiBold"/>
+                                        <TextBlock Grid.Column="2" x:Name="NoiseFreqLabel" Text="0.85" Foreground="{DynamicResource TextFillColorPrimaryBrush}" VerticalAlignment="Center" HorizontalAlignment="Right" FontWeight="SemiBold"/>
                                     </Grid>
 
                                     <Grid Margin="0,0,0,10">
@@ -1088,7 +1370,7 @@
                                             <ColumnDefinition Width="*"/>
                                             <ColumnDefinition Width="60"/>
                                         </Grid.ColumnDefinitions>
-                                        <TextBlock Text="{DynamicResource Appearance_NoiseTintLabel}" VerticalAlignment="Center" Opacity="0.85"
+                                        <TextBlock Text="{DynamicResource Appearance_NoiseTintLabel}" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Opacity="0.85"
                                                    ToolTip="{DynamicResource Appearance_NoiseTintHint}"/>
                                         <Slider AutomationProperties.AutomationId="NoiseTintSlider" Grid.Column="1" x:Name="NoiseTintSlider"
                                                 Minimum="0" Maximum="1" Value="0.28"
@@ -1096,16 +1378,16 @@
                                                 IsMoveToPointEnabled="True"
                                                 ValueChanged="OnNoiseTintChanged"
                                                 VerticalAlignment="Center"/>
-                                        <TextBlock Grid.Column="2" x:Name="NoiseTintLabel" Text="28%" VerticalAlignment="Center" HorizontalAlignment="Right" FontWeight="SemiBold"/>
+                                        <TextBlock Grid.Column="2" x:Name="NoiseTintLabel" Text="28%" Foreground="{DynamicResource TextFillColorPrimaryBrush}" VerticalAlignment="Center" HorizontalAlignment="Right" FontWeight="SemiBold"/>
                                     </Grid>
 
-                                    <Grid Margin="0,0,0,10">
+                                    <Grid>
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="140"/>
                                             <ColumnDefinition Width="*"/>
                                             <ColumnDefinition Width="60"/>
                                         </Grid.ColumnDefinitions>
-                                        <TextBlock Text="{DynamicResource Appearance_NoiseBaseLabel}" VerticalAlignment="Center" Opacity="0.85"
+                                        <TextBlock Text="{DynamicResource Appearance_NoiseBaseLabel}" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Opacity="0.85"
                                                    ToolTip="{DynamicResource Appearance_NoiseBaseHint}"/>
                                         <Slider AutomationProperties.AutomationId="NoiseBaseSlider" Grid.Column="1" x:Name="NoiseBaseSlider"
                                                 Minimum="0" Maximum="1" Value="0.35"
@@ -1113,55 +1395,46 @@
                                                 IsMoveToPointEnabled="True"
                                                 ValueChanged="OnNoiseBaseChanged"
                                                 VerticalAlignment="Center"/>
-                                        <TextBlock Grid.Column="2" x:Name="NoiseBaseLabel" Text="35%" VerticalAlignment="Center" HorizontalAlignment="Right" FontWeight="SemiBold"/>
+                                        <TextBlock Grid.Column="2" x:Name="NoiseBaseLabel" Text="35%" Foreground="{DynamicResource TextFillColorPrimaryBrush}" VerticalAlignment="Center" HorizontalAlignment="Right" FontWeight="SemiBold"/>
                                     </Grid>
 
                                 </StackPanel>
-                            </ui:Card>
+                            </Border>
 
-                            <ui:Card Margin="0,0,0,16" Padding="20">
+                            <Border CornerRadius="{StaticResource FluentCardCornerRadius}"
+                                    Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                                    BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                                    BorderThickness="1"
+                                    Margin="0,0,0,12" Padding="20,18">
                                 <StackPanel>
-                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-                                        <ui:SymbolIcon Symbol="Translate24" FontSize="20" Foreground="{DynamicResource BrandAccentBrush}" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                                        <TextBlock Text="{DynamicResource Language_UnifiedCardTitle}" FontWeight="Bold" FontSize="18"/>
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                                        <ui:SymbolIcon Symbol="Translate24" FontSize="17" Foreground="{DynamicResource BrandAccentBrush}" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                                        <TextBlock Text="{DynamicResource Language_UnifiedCardTitle}" Style="{StaticResource FluentSectionTitleStyle}" FontSize="16" VerticalAlignment="Center"/>
                                     </StackPanel>
 
-                                    <TextBlock Text="{DynamicResource Language_UnifiedCardDesc}" 
-                                               TextWrapping="Wrap" Opacity="0.75" Margin="0,0,0,16" LineHeight="20" FontSize="13"/>
+                                    <TextBlock Text="{DynamicResource Language_UnifiedCardDesc}"
+                                               Style="{StaticResource FluentCaptionStyle}"
+                                               Margin="0,0,0,14" LineHeight="19"/>
 
-                                    <Grid Margin="0,0,0,16">
+                                    <Grid>
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="140"/>
-                                            <ColumnDefinition Width="260"/>
+                                            <ColumnDefinition Width="240"/>
                                         </Grid.ColumnDefinitions>
-                                        <TextBlock Text="{DynamicResource Language_SelectLabel}" VerticalAlignment="Center" Opacity="0.85"/>
-                                        <ComboBox AutomationProperties.AutomationId="LanguageCombo" Grid.Column="1" x:Name="LanguageCombo" 
-                                                  DisplayMemberPath="DisplayName" 
+                                        <TextBlock Text="{DynamicResource Language_SelectLabel}" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Opacity="0.85"/>
+                                        <ComboBox AutomationProperties.AutomationId="LanguageCombo" Grid.Column="1" x:Name="LanguageCombo"
+                                                  DisplayMemberPath="DisplayName"
                                                   SelectedValuePath="Id"
                                                   DropDownOpened="OnLanguageComboDropDownOpened"
                                                   SelectionChanged="OnLanguageSelectionChanged"/>
                                     </Grid>
-
-                                    <Grid Margin="0,0,0,12">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="140"/>
-                                            <ColumnDefinition Width="*"/>
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock Text="{DynamicResource Appearance_AccentInteractionLabel}" VerticalAlignment="Center" Opacity="0.85"
-                                                   ToolTip="{DynamicResource Appearance_AccentInteractionHint}"/>
-                                        <CheckBox AutomationProperties.AutomationId="AccentInteractionCheck" Grid.Column="1" x:Name="AccentInteractionCheck"
-                                                  Content="{DynamicResource Appearance_AccentInteractionContent}"
-                                                  VerticalAlignment="Center"
-                                                  Checked="OnAccentInteractionChanged" Unchecked="OnAccentInteractionChanged"/>
-                                    </Grid>
-
                                 </StackPanel>
-                            </ui:Card>
+                            </Border>
                         </StackPanel>
                     </ScrollViewer>
                 </Grid>
 
-
+                </Grid>
             </Grid>
         </Grid>
     </Grid>

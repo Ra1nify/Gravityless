@@ -14,14 +14,14 @@
         ResizeMode="NoResize"
         Background="Transparent">
 
-    <Grid Margin="0,0,0,16" ClipToBounds="True">
+    <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <ui:TitleBar Grid.Row="0" x:Name="DialogTitleBar" Title="提示" ShowMaximize="False" ShowMinimize="False"/>
+        <ui:TitleBar Grid.Row="0" x:Name="DialogTitleBar" Title="{DynamicResource Common_Notice}" ShowMaximize="False" ShowMinimize="False"/>
 
         <!-- 48px icon column aligns with the icon badge -->
         <Grid Grid.Row="1" Margin="24,12,24,20">
@@ -35,19 +35,19 @@
             </Border>
 
             <StackPanel Grid.Column="1" VerticalAlignment="Top">
-                <TextBlock x:Name="DialogHeadingText" Text="标题" FontWeight="Bold" FontSize="16" Margin="0,0,0,8" TextWrapping="Wrap"/>
+                <TextBlock x:Name="DialogHeadingText" FontWeight="Bold" FontSize="16" Margin="0,0,0,8" TextWrapping="Wrap"/>
                 <ScrollViewer MaxHeight="280" VerticalScrollBarVisibility="Auto">
-                    <TextBlock x:Name="DialogMessageText" Text="详细消息内容" TextWrapping="Wrap" LineHeight="20" Opacity="0.85" FontSize="13"/>
+                    <TextBlock x:Name="DialogMessageText" TextWrapping="Wrap" LineHeight="20" Opacity="0.85" FontSize="13"/>
                 </ScrollViewer>
 
-                <ui:TextBox x:Name="DialogInputBox" Margin="0,12,0,0" Visibility="Collapsed"/>
+                <ui:TextBox AutomationProperties.AutomationId="ModernDialogInputBox" x:Name="DialogInputBox" Margin="0,12,0,0" Visibility="Collapsed"/>
             </StackPanel>
         </Grid>
 
-        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="24,0,24,0">
-            <ui:Button x:Name="TertiaryBtn" Content="" Click="OnTertiaryClicked" Appearance="Secondary" Margin="0,0,10,0" Visibility="Collapsed" MinWidth="80"/>
-            <ui:Button x:Name="SecondaryBtn" Content="取消" Click="OnSecondaryClicked" Appearance="Secondary" Margin="0,0,10,0" Visibility="Collapsed" MinWidth="80"/>
-            <ui:Button x:Name="PrimaryBtn" Content="确定" Click="OnPrimaryClicked" Appearance="Primary" MinWidth="80"/>
+        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="24,0,24,16">
+            <ui:Button AutomationProperties.AutomationId="ModernDialogTertiaryBtn" x:Name="TertiaryBtn" Content="" Click="OnTertiaryClicked" Appearance="Secondary" Margin="0,0,10,0" Visibility="Collapsed" MinWidth="80"/>
+            <ui:Button AutomationProperties.AutomationId="ModernDialogSecondaryBtn" x:Name="SecondaryBtn" Content="{DynamicResource Common_Cancel}" Click="OnSecondaryClicked" Appearance="Secondary" Margin="0,0,10,0" Visibility="Collapsed" MinWidth="80"/>
+            <ui:Button AutomationProperties.AutomationId="ModernDialogPrimaryBtn" x:Name="PrimaryBtn" Content="{DynamicResource Common_Confirm}" Click="OnPrimaryClicked" Appearance="Primary" MinWidth="80"/>
         </StackPanel>
     </Grid>
 </ui:FluentWindow>

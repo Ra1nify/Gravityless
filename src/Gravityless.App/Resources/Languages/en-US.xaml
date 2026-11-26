@@ -5,6 +5,7 @@
     <!-- Common & App -->
     <sys:String x:Key="App_Title">Gravityless - Antigravity Companion</sys:String>
     <sys:String x:Key="Common_Ready">Ready</sys:String>
+    <sys:String x:Key="Common_Running">Running</sys:String>
     <sys:String x:Key="Common_Confirm">OK</sys:String>
     <sys:String x:Key="Common_Cancel">Cancel</sys:String>
     <sys:String x:Key="Common_Delete">Delete</sys:String>
@@ -23,17 +24,49 @@
     <sys:String x:Key="Nav_Proxy">Proxy</sys:String>
     <sys:String x:Key="Nav_Accounts">Accounts</sys:String>
     <sys:String x:Key="Nav_Appearance">Appearance</sys:String>
+    <sys:String x:Key="PageHeader_OverviewTitle">Overview</sys:String>
+    <sys:String x:Key="PageHeader_OverviewSubtitle">Managed core status, updates and daemon health</sys:String>
+    <sys:String x:Key="PageHeader_InstancesTitle">Instances</sys:String>
+    <sys:String x:Key="PageHeader_InstancesSubtitle">Create, launch and configure isolated sandbox instances</sys:String>
+    <sys:String x:Key="PageHeader_ProjectsTitle">Projects</sys:String>
+    <sys:String x:Key="PageHeader_ProjectsSubtitle">Workspace index, conversation history and memory repair</sys:String>
+    <sys:String x:Key="PageHeader_ToolsTitle">Shared Tools</sys:String>
+    <sys:String x:Key="PageHeader_ToolsSubtitle">Global Skills, plugins and MCP server configurations</sys:String>
+    <sys:String x:Key="PageHeader_ProxyTitle">Network Proxy</sys:String>
+    <sys:String x:Key="PageHeader_ProxySubtitle">Outbound proxy mode, credentials and connectivity probe</sys:String>
+    <sys:String x:Key="PageHeader_AccountsTitle">Account Pool</sys:String>
+    <sys:String x:Key="PageHeader_AccountsSubtitle">OAuth credentials, quota pools and context limits</sys:String>
+    <sys:String x:Key="PageHeader_AppearanceTitle">Appearance &amp; Language</sys:String>
+    <sys:String x:Key="PageHeader_AppearanceSubtitle">Theme, backdrop material, and language</sys:String>
+    <sys:String x:Key="Instances_ConfigProjectsLabel">Mounted projects (multi-select):</sys:String>
+    <sys:String x:Key="Instances_ConfigProjectSearchPlaceholder">Search by project name, path or ID…</sys:String>
+    <sys:String x:Key="Instances_ConfigNoProjectsHint">No projects available to mount</sys:String>
+    <sys:String x:Key="Tools_DetailTitle">Tool Details</sys:String>
     <sys:String x:Key="Sidebar_CoreTooltip">Antigravity Core Status</sys:String>
     <sys:String x:Key="Sidebar_DaemonTooltip">Gravityless Daemon Status</sys:String>
 
     <!-- Overview (OverviewView) -->
-    <sys:String x:Key="CoreStatus_VersionLabel">Version:</sys:String>
-    <sys:String x:Key="CoreStatus_PathLabel">Path:</sys:String>
+    <sys:String x:Key="CoreStatus_VersionLabel">Installed</sys:String>
+    <sys:String x:Key="CoreStatus_PathLabel">Directory</sys:String>
     <sys:String x:Key="CoreStatus_PathTooltip">Open core directory in File Explorer</sys:String>
     <sys:String x:Key="CoreStatus_UninstallBtn">Uninstall Core</sys:String>
     <sys:String x:Key="CloudUpdate_CheckBtn">Check Update</sys:String>
-    <sys:String x:Key="CloudUpdate_InstallBtn">Install</sys:String>
-    <sys:String x:Key="CloudUpdate_InitialHint">Click Check for updates to see the latest version</sys:String>
+    <sys:String x:Key="CloudUpdate_InstallBtn">Install Core</sys:String>
+    <sys:String x:Key="CloudUpdate_UpgradeBtn">Upgrade Core</sys:String>
+    <sys:String x:Key="CloudUpdate_InitialHint">Click Check Update to fetch the latest version</sys:String>
+    <sys:String x:Key="CloudUpdate_CopyLinkTip">Copy direct download URL</sys:String>
+    <sys:String x:Key="CloudUpdate_LinkCopied">Download URL copied to clipboard</sys:String>
+    <sys:String x:Key="Overview_SummaryCoreLabel">Managed Core</sys:String>
+    <sys:String x:Key="Overview_SummaryDaemonLabel">Daemon</sys:String>
+    <sys:String x:Key="Overview_SummaryWorkspaceLabel">Workspace Pool</sys:String>
+    <sys:String x:Key="Overview_WorkspaceSummaryFormat">{0} instances · {1} accounts · {2} projects</sys:String>
+    <sys:String x:Key="Overview_CoreSectionDesc">Manage portable Antigravity core</sys:String>
+    <sys:String x:Key="Overview_CoreAvailableLabel">Available</sys:String>
+    <sys:String x:Key="Overview_CoreUpdateTag">Update</sys:String>
+    <sys:String x:Key="UpdateTag_Latest">Latest</sys:String>
+    <sys:String x:Key="UpdateTag_UpdateFormat">Update {0}</sys:String>
+    <sys:String x:Key="UpdateTag_Fail">Fail</sys:String>
+    <sys:String x:Key="Sidebar_DaemonCopiedTip">Daemon endpoint copied to clipboard</sys:String>
 
     <!-- Instances View -->
     <sys:String x:Key="Instances_NewBtn">New instance</sys:String>
@@ -138,7 +171,7 @@
     <sys:String x:Key="AccountDetails_ModelDisabledBadge">Locked</sys:String>
 
     <!-- Appearance View -->
-    <sys:String x:Key="Appearance_MicaCardTitle">Material &amp; Transparency</sys:String>
+    <sys:String x:Key="Appearance_MicaCardTitle">Visual Design</sys:String>
     <sys:String x:Key="Appearance_MicaDesc">Applied to all windows immediately.</sys:String>
     <sys:String x:Key="Appearance_MaterialLabel">Material:</sys:String>
     <sys:String x:Key="Appearance_MaterialMica">Mica</sys:String>
@@ -312,7 +345,7 @@
     <sys:String x:Key="Common_Error">Error</sys:String>
 
     <!-- Overview page -->
-    <sys:String x:Key="App_TitleBarFormat">Gravityless v{0} - Yet Another Spicy Companion Of Antigravity</sys:String>
+    <sys:String x:Key="App_TitleBarFormat">Gravityless · v{0}</sys:String>
     <sys:String x:Key="Overview_AppVersionLabel">App version</sys:String>
     <sys:String x:Key="Overview_ProjectLabel">Project</sys:String>
     <sys:String x:Key="Overview_OpenRepoBtn">Open GitHub</sys:String>
@@ -502,6 +535,12 @@
     <sys:String x:Key="Instances_BoundProjectFormat">Projects: {0}</sys:String>
     <sys:String x:Key="Instances_BoundProjectCountFormat">{0} project(s)</sys:String>
     <sys:String x:Key="Instances_NoBoundProject">No projects</sys:String>
+    <sys:String x:Key="Instances_AccountLabelFormat">Account: {0}</sys:String>
+    <sys:String x:Key="Instances_AccountGuestTag">Guest sandbox</sys:String>
+    <sys:String x:Key="Instances_EmptyTitle">No sandbox instances</sys:String>
+    <sys:String x:Key="Instances_EmptyDesc">Click "New instance" above to create an isolated Antigravity environment</sys:String>
+    <sys:String x:Key="Projects_EmptyTitle">No projects or memory stores</sys:String>
+    <sys:String x:Key="Projects_EmptyDesc">Click "Import from .gemini" above to link a local workspace</sys:String>
     <sys:String x:Key="Proxy_TestingStatus">Testing connection…</sys:String>
     <sys:String x:Key="Proxy_RegionFormat">Exit region: {0}</sys:String>
     <sys:String x:Key="Proxy_RegionRow">Region</sys:String>

@@ -14,7 +14,7 @@
         ShowInTaskbar="False"
         Background="Transparent">
 
-    <Grid Margin="0,0,0,16" ClipToBounds="True">
+    <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
@@ -24,7 +24,12 @@
 
         <ui:TitleBar x:Name="DialogTitleBar" Grid.Row="0" Title="{DynamicResource ConversationPreview_Title}" ShowMaximize="True" ShowMinimize="False"/>
 
-        <ui:Card Grid.Row="1" Margin="20,6,20,10" Padding="16,10">
+        <Border Grid.Row="1"
+                CornerRadius="{StaticResource FluentCardCornerRadius}"
+                Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                Margin="20,8,20,10" Padding="16,10">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
@@ -32,27 +37,29 @@
                 </Grid.ColumnDefinitions>
 
                 <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
-                    <TextBlock x:Name="ConversationTitleText" FontWeight="Bold" FontSize="15" TextTrimming="CharacterEllipsis"/>
-                    <TextBlock x:Name="ConversationMetaText" FontSize="11" Opacity="0.6" Margin="0,3,0,0" FontFamily="Consolas" TextTrimming="CharacterEllipsis"/>
+                    <TextBlock x:Name="ConversationTitleText" Style="{StaticResource FluentBodyStrongStyle}" FontSize="15" TextTrimming="CharacterEllipsis"/>
+                    <TextBlock x:Name="ConversationMetaText" FontSize="11" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Opacity="0.6" Margin="0,3,0,0" FontFamily="Consolas" TextTrimming="CharacterEllipsis"/>
                 </StackPanel>
 
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                    <ui:TextBox x:Name="SearchBox" 
-                                Width="260" 
-                                PlaceholderText="{DynamicResource ConversationPreview_SearchPlaceholder}" 
-                                TextChanged="OnSearchTextChanged" 
-                                Icon="{ui:SymbolIcon Symbol=Search24}" 
+                    <ui:TextBox AutomationProperties.AutomationId="ConvoPreviewSearchBox"
+                                x:Name="SearchBox"
+                                Width="260"
+                                PlaceholderText="{DynamicResource ConversationPreview_SearchPlaceholder}"
+                                TextChanged="OnSearchTextChanged"
+                                Icon="{ui:SymbolIcon Symbol=Search24}"
                                 Margin="0,0,10,0"/>
-                    <ui:Button x:Name="ExportSingleBtn" 
-                               Content="{DynamicResource ConversationPreview_ExportBtn}" 
-                               Click="OnExportSingleClicked" 
-                               Appearance="Primary" 
-                               Icon="{ui:SymbolIcon Symbol=Save24}" 
-                               Padding="12,5" 
+                    <ui:Button AutomationProperties.AutomationId="ConvoPreviewExportBtn"
+                               x:Name="ExportSingleBtn"
+                               Content="{DynamicResource ConversationPreview_ExportBtn}"
+                               Click="OnExportSingleClicked"
+                               Appearance="Secondary"
+                               Icon="{ui:SymbolIcon Symbol=Save24}"
+                               Padding="12,5"
                                VerticalAlignment="Center"/>
                 </StackPanel>
             </Grid>
-        </ui:Card>
+        </Border>
 
         <Grid Grid.Row="2" Margin="20,0,20,0">
             <StackPanel x:Name="LoadingPanel" VerticalAlignment="Center" HorizontalAlignment="Center">
@@ -143,9 +150,10 @@
                                      Visibility="{Binding ModelBubbleVisibility}">
                                 <StackPanel>
                                     <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
-                                        <TextBlock Text="🤖 Antigravity" FontWeight="Bold" FontSize="12" Foreground="{DynamicResource StatusSuccessBrush}"/>
-                                        <TextBlock Text="{Binding FormattedTime}" FontSize="11" Opacity="0.5" Margin="8,0,0,0"/>
-                                        <TextBlock Text="{Binding StepBadgeText}" FontSize="11" Opacity="0.4" Margin="8,0,0,0"/>
+                                        <ui:SymbolIcon Symbol="Bot24" FontSize="14" Foreground="{DynamicResource StatusSuccessBrush}" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                                        <TextBlock Text="Antigravity" FontWeight="Bold" FontSize="12" Foreground="{DynamicResource StatusSuccessBrush}" VerticalAlignment="Center"/>
+                                        <TextBlock Text="{Binding FormattedTime}" FontSize="11" Opacity="0.5" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                                        <TextBlock Text="{Binding StepBadgeText}" FontSize="11" Opacity="0.4" Margin="8,0,0,0" VerticalAlignment="Center"/>
                                     </StackPanel>
 
                                     <Border Background="{DynamicResource TranscriptThinkingCardBrush}" CornerRadius="4" Padding="10,6" Margin="0,0,0,8"
@@ -186,11 +194,11 @@
             </ListBox.ItemTemplate>
         </ListBox>
 
-        <Grid Grid.Row="3" Margin="20,10,20,0">
+        <Grid Grid.Row="3" Margin="20,10,20,16">
             <TextBlock Text="{DynamicResource ConversationPreview_ForkHint}" FontSize="11" Opacity="0.45"
                        HorizontalAlignment="Left" VerticalAlignment="Center"/>
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                <ui:Button Content="{DynamicResource Common_Close}" Click="OnCloseClicked" Appearance="Secondary" Padding="16,5"/>
+                <ui:Button AutomationProperties.AutomationId="ConvoPreviewCloseBtn" Content="{DynamicResource Common_Close}" Click="OnCloseClicked" Appearance="Secondary" Padding="16,5"/>
             </StackPanel>
         </Grid>
     </Grid>

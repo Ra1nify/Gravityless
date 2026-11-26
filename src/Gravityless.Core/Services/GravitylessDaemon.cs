@@ -21,7 +21,7 @@ public class GravitylessDaemon : IDisposable
     public int Port { get; private set; }
     public bool IsRunning { get; private set; }
 
-    public string MicaMaterial { get; set; } = "mica"; // "mica" | "tabbed" | "acrylic" | "none"
+    public string MicaMaterial { get; set; } = "none"; // "mica" | "tabbed" | "acrylic" | "none"
     /// <summary>"auto" (follow system) / "light" / "dark".</summary>
     public string ThemeMode { get; set; } = "auto";
     public bool AccentInteraction { get; set; } = true;

@@ -43,7 +43,7 @@ public partial class AccountDetailsDialog
             var inst = _instanceService.Instances.FirstOrDefault(i => i.Id == _account.BoundInstanceId);
             if (inst != null)
             {
-                BoundInstanceNameText.Text = $"🔵 {inst.DisplayNameWithShortId}";
+                BoundInstanceNameText.Text = inst.DisplayNameWithShortId;
                 BoundInstanceIdText.Text = string.Format(
                     LocalizationService.GetString("AccountDetails_BoundInstanceIdFormat", "实例 ID: {0}"),
                     _account.BoundInstanceId);

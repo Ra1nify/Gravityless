@@ -15,7 +15,7 @@
         ResizeMode="NoResize"
         Background="Transparent">
 
-    <Grid Margin="0,0,0,16" ClipToBounds="True">
+    <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
@@ -24,16 +24,20 @@
 
         <ui:TitleBar x:Name="DialogTitleBar" Grid.Row="0" Title="{DynamicResource AccountDetails_Title}" ShowMaximize="False" ShowMinimize="False"/>
 
-        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Margin="24,10,24,16">
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="24,12,24,12">
             <StackPanel>
-                
-                <ui:Card Margin="0,0,0,14" Padding="14,12">
+
+                <Border CornerRadius="{StaticResource FluentCardCornerRadius}"
+                        Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                        BorderThickness="1"
+                        Margin="0,0,0,14" Padding="14,12">
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
-                        <Border Grid.Column="0" Width="40" Height="40" CornerRadius="20" Background="{DynamicResource BrandAccentFillStrongerBrush}" Margin="0,0,12,0" VerticalAlignment="Center">
+                        <Border Grid.Column="0" Width="40" Height="40" CornerRadius="{StaticResource FluentControlCornerRadius}" Background="{DynamicResource BrandAccentFillStrongerBrush}" Margin="0,0,12,0" VerticalAlignment="Center">
                             <ui:SymbolIcon Symbol="Person24" FontSize="20" Foreground="{DynamicResource BrandAccentBrush}"/>
                         </Border>
                         <StackPanel Grid.Column="1" VerticalAlignment="Center">
@@ -42,46 +46,75 @@
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
-                                <ui:TextBox x:Name="DisplayNameBox" FontSize="13" FontWeight="Bold" Margin="0,0,8,0" PlaceholderText="{DynamicResource AccountDetails_NamePlaceholder}"/>
-                                <ui:Button Grid.Column="1" Content="{DynamicResource Common_Save}" Click="OnSaveDisplayNameClicked" Appearance="Primary" Padding="10,4"/>
+                                <ui:TextBox AutomationProperties.AutomationId="AccountDetailsNameBox" x:Name="DisplayNameBox" FontSize="13" FontWeight="SemiBold" Margin="0,0,8,0" PlaceholderText="{DynamicResource AccountDetails_NamePlaceholder}"/>
+                                <ui:Button AutomationProperties.AutomationId="AccountDetailsSaveNameBtn" Grid.Column="1" Content="{DynamicResource Common_Save}" Click="OnSaveDisplayNameClicked" Appearance="Primary" Padding="10,4"/>
                             </Grid>
-                            <TextBlock x:Name="EmailText" Opacity="0.65" FontSize="12" Margin="2,0,0,0" FontFamily="Consolas" TextTrimming="CharacterEllipsis"/>
+                            <TextBlock x:Name="EmailText" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Opacity="0.65" FontSize="12" Margin="2,0,0,0" FontFamily="Consolas" TextTrimming="CharacterEllipsis"/>
                         </StackPanel>
                     </Grid>
-                </ui:Card>
+                </Border>
 
-                <TextBlock Text="{DynamicResource AccountDetails_DeviceFingerprintHeader}" FontWeight="Bold" FontSize="13" Margin="0,0,0,6"/>
-                <ui:Card Margin="0,0,0,14" Padding="14,10">
+                <TextBlock Text="{DynamicResource AccountDetails_DeviceFingerprintHeader}" Style="{StaticResource FluentBodyStrongStyle}" Margin="0,0,0,6"/>
+                <Border CornerRadius="{StaticResource FluentCardCornerRadius}"
+                        Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                        BorderThickness="1"
+                        Margin="0,0,0,14" Padding="14,10">
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
                         <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,0">
-                            <TextBlock x:Name="InstallationIdText" FontFamily="Consolas" FontSize="12" FontWeight="SemiBold" TextWrapping="Wrap"/>
-                            <TextBlock Text="{DynamicResource AccountDetails_DeviceFingerprintDesc}" FontSize="11" Opacity="0.55" Margin="0,3,0,0"/>
+                            <TextBlock x:Name="InstallationIdText" FontFamily="Consolas" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource TextFillColorPrimaryBrush}" TextWrapping="Wrap"/>
+                            <TextBlock Text="{DynamicResource AccountDetails_DeviceFingerprintDesc}" FontSize="11.5" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Opacity="0.58" Margin="0,3,0,0"/>
                         </StackPanel>
-                        <ui:Button Grid.Column="1" Click="OnCopyInstallationIdClicked" Appearance="Secondary" Padding="8,5" Icon="{ui:SymbolIcon Symbol=Copy24}" ToolTip="{DynamicResource Common_Copy}"/>
+                        <Button AutomationProperties.AutomationId="AccountDetailsCopyFingerprintBtn"
+                                AutomationProperties.Name="{DynamicResource Common_Copy}"
+                                Grid.Column="1"
+                                Style="{StaticResource FluentBorderlessButtonStyle}"
+                                Click="OnCopyInstallationIdClicked"
+                                Padding="7,5"
+                                ToolTip="{DynamicResource Common_Copy}">
+                            <ui:SymbolIcon Symbol="Copy24" FontSize="15" Opacity="0.78"/>
+                        </Button>
                     </Grid>
-                </ui:Card>
+                </Border>
 
-                <TextBlock Text="{DynamicResource AccountDetails_BoundInstanceHeader}" FontWeight="Bold" FontSize="13" Margin="0,0,0,6"/>
-                <ui:Card Margin="0,0,0,14" Padding="14,10">
+                <TextBlock Text="{DynamicResource AccountDetails_BoundInstanceHeader}" Style="{StaticResource FluentBodyStrongStyle}" Margin="0,0,0,6"/>
+                <Border CornerRadius="{StaticResource FluentCardCornerRadius}"
+                        Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                        BorderThickness="1"
+                        Margin="0,0,0,14" Padding="14,10">
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
                         <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,0">
-                            <TextBlock x:Name="BoundInstanceNameText" FontWeight="SemiBold" FontSize="13"/>
-                            <TextBlock x:Name="BoundInstanceIdText" FontFamily="Consolas" FontSize="11" Opacity="0.75" Margin="0,3,0,0" TextWrapping="Wrap"/>
+                            <TextBlock x:Name="BoundInstanceNameText" FontWeight="SemiBold" FontSize="13" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                            <TextBlock x:Name="BoundInstanceIdText" FontFamily="Consolas" FontSize="11.5" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Opacity="0.72" Margin="0,3,0,0" TextWrapping="Wrap"/>
                         </StackPanel>
-                        <ui:Button x:Name="CopyInstanceIdBtn" Grid.Column="1" Click="OnCopyInstanceIdClicked" Appearance="Secondary" Padding="8,5" Icon="{ui:SymbolIcon Symbol=Copy24}" ToolTip="{DynamicResource Common_Copy}"/>
+                        <Button AutomationProperties.AutomationId="AccountDetailsCopyInstanceIdBtn"
+                                AutomationProperties.Name="{DynamicResource Common_Copy}"
+                                x:Name="CopyInstanceIdBtn"
+                                Grid.Column="1"
+                                Style="{StaticResource FluentBorderlessButtonStyle}"
+                                Click="OnCopyInstanceIdClicked"
+                                Padding="7,5"
+                                ToolTip="{DynamicResource Common_Copy}">
+                            <ui:SymbolIcon Symbol="Copy24" FontSize="15" Opacity="0.78"/>
+                        </Button>
                     </Grid>
-                </ui:Card>
+                </Border>
 
-                <TextBlock Text="{DynamicResource AccountDetails_TokenStatusHeader}" FontWeight="Bold" FontSize="13" Margin="0,0,0,6"/>
-                <ui:Card Margin="0,0,0,14" Padding="14,12">
+                <TextBlock Text="{DynamicResource AccountDetails_TokenStatusHeader}" Style="{StaticResource FluentBodyStrongStyle}" Margin="0,0,0,6"/>
+                <Border CornerRadius="{StaticResource FluentCardCornerRadius}"
+                        Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                        BorderThickness="1"
+                        Margin="0,0,0,14" Padding="14,12">
                     <StackPanel>
                         <Grid>
                             <Grid.ColumnDefinitions>
@@ -90,15 +123,15 @@
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
-                            <Ellipse x:Name="AccessTokenStatusDot" Grid.Column="0" Width="8" Height="8" Fill="LightGreen" VerticalAlignment="Center" Margin="0,0,7,0"/>
-                            <TextBlock Grid.Column="1" Text="{DynamicResource AccountDetails_AccessTokenLabel}" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center"/>
+                            <Ellipse x:Name="AccessTokenStatusDot" Grid.Column="0" Width="7" Height="7" Fill="LightGreen" VerticalAlignment="Center" Margin="0,0,7,0"/>
+                            <TextBlock Grid.Column="1" Text="{DynamicResource AccountDetails_AccessTokenLabel}" FontWeight="SemiBold" FontSize="12" Foreground="{DynamicResource TextFillColorPrimaryBrush}" VerticalAlignment="Center"/>
                             <TextBlock x:Name="AccessTokenStatusText" Grid.Column="2" FontWeight="SemiBold" FontSize="12" Margin="8,0,8,0" VerticalAlignment="Center"/>
-                            <TextBlock x:Name="AccessTokenPreviewText" Grid.Column="3" FontFamily="Consolas" FontSize="11" Opacity="0.55" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="AccessTokenPreviewText" Grid.Column="3" FontFamily="Consolas" FontSize="11" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Opacity="0.55" VerticalAlignment="Center"/>
                         </Grid>
-                        <TextBlock x:Name="AccessTokenLastUsedText" FontSize="11" Opacity="0.65" Margin="15,4,0,0"/>
-                        <TextBlock x:Name="AccessTokenExpiryText" FontSize="11" Opacity="0.65" Margin="15,2,0,0"/>
+                        <TextBlock x:Name="AccessTokenLastUsedText" FontSize="11" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Opacity="0.65" Margin="14,4,0,0"/>
+                        <TextBlock x:Name="AccessTokenExpiryText" FontSize="11" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Opacity="0.65" Margin="14,2,0,0"/>
 
-                        <Separator Margin="0,9,0,9" Opacity="0.15"/>
+                        <Border Height="1" Background="{DynamicResource ControlStrokeColorDefaultBrush}" Opacity="0.35" Margin="0,10,0,10"/>
 
                         <Grid>
                             <Grid.ColumnDefinitions>
@@ -107,15 +140,15 @@
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
-                            <Ellipse x:Name="RefreshTokenStatusDot" Grid.Column="0" Width="8" Height="8" Fill="LightGreen" VerticalAlignment="Center" Margin="0,0,7,0"/>
-                            <TextBlock Grid.Column="1" Text="{DynamicResource AccountDetails_RefreshTokenLabel}" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center"/>
+                            <Ellipse x:Name="RefreshTokenStatusDot" Grid.Column="0" Width="7" Height="7" Fill="LightGreen" VerticalAlignment="Center" Margin="0,0,7,0"/>
+                            <TextBlock Grid.Column="1" Text="{DynamicResource AccountDetails_RefreshTokenLabel}" FontWeight="SemiBold" FontSize="12" Foreground="{DynamicResource TextFillColorPrimaryBrush}" VerticalAlignment="Center"/>
                             <TextBlock x:Name="RefreshTokenStatusText" Grid.Column="2" FontWeight="SemiBold" FontSize="12" Margin="8,0,8,0" VerticalAlignment="Center"/>
-                            <TextBlock x:Name="RefreshTokenPreviewText" Grid.Column="3" FontFamily="Consolas" FontSize="11" Opacity="0.55" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="RefreshTokenPreviewText" Grid.Column="3" FontFamily="Consolas" FontSize="11" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Opacity="0.55" VerticalAlignment="Center"/>
                         </Grid>
-                        <TextBlock x:Name="RefreshTokenLastUsedText" FontSize="11" Opacity="0.65" Margin="15,4,0,0"/>
-                        <TextBlock x:Name="RefreshTokenExpiryText" FontSize="11" Opacity="0.65" Margin="15,2,0,0"/>
+                        <TextBlock x:Name="RefreshTokenLastUsedText" FontSize="11" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Opacity="0.65" Margin="14,4,0,0"/>
+                        <TextBlock x:Name="RefreshTokenExpiryText" FontSize="11" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Opacity="0.65" Margin="14,2,0,0"/>
                     </StackPanel>
-                </ui:Card>
+                </Border>
 
                 <Grid Margin="0,0,0,6">
                     <Grid.ColumnDefinitions>
@@ -123,30 +156,38 @@
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
                     <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-                        <TextBlock Text="{DynamicResource AccountDetails_QuotaHeader}" FontWeight="Bold" FontSize="13" VerticalAlignment="Center"/>
+                        <TextBlock Text="{DynamicResource AccountDetails_QuotaHeader}" Style="{StaticResource FluentBodyStrongStyle}" VerticalAlignment="Center"/>
                         <Border x:Name="AccountTierBadge"
                                 Visibility="Collapsed"
-                                CornerRadius="4"
-                                Padding="6,2"
+                                Style="{StaticResource FluentBadgeBorderStyle}"
+                                Padding="6,1"
                                 Margin="8,0,0,0"
                                 VerticalAlignment="Center"
                                 Background="{DynamicResource BrandAccentFillStrongerBrush}">
-                            <TextBlock x:Name="AccountTierText" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource BrandAccentBrush}"/>
+                            <TextBlock x:Name="AccountTierText" FontSize="10.5" FontWeight="SemiBold" Foreground="{DynamicResource BrandAccentBrush}"/>
                         </Border>
                     </StackPanel>
-                    <TextBlock Grid.Column="1" x:Name="QuotaLastFetchedText" FontSize="11" Opacity="0.5" VerticalAlignment="Center"/>
+                    <TextBlock Grid.Column="1" x:Name="QuotaLastFetchedText" FontSize="11" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Opacity="0.52" VerticalAlignment="Center"/>
                 </Grid>
-                <ui:Card Margin="0,0,0,10" Padding="14,12">
+                <Border CornerRadius="{StaticResource FluentCardCornerRadius}"
+                        Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                        BorderThickness="1"
+                        Margin="0,0,0,10" Padding="14,12">
                     <StackPanel>
-                        <TextBlock x:Name="AccountSubscriptionMetaText" Visibility="Collapsed" FontSize="11" Opacity="0.7" Margin="0,0,0,8" TextWrapping="Wrap"/>
+                        <TextBlock x:Name="AccountSubscriptionMetaText" Visibility="Collapsed" FontSize="11.5" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Opacity="0.7" Margin="0,0,0,8" TextWrapping="Wrap"/>
                         <StackPanel x:Name="QuotaGroupsPanel"/>
                     </StackPanel>
-                </ui:Card>
+                </Border>
 
-                <TextBlock Text="{DynamicResource AccountDetails_ModelSpecsHeader}" FontWeight="Bold" FontSize="13" Margin="0,4,0,6"/>
-                <ui:Card Margin="0,0,0,10" Padding="14,12">
+                <TextBlock Text="{DynamicResource AccountDetails_ModelSpecsHeader}" Style="{StaticResource FluentBodyStrongStyle}" Margin="0,4,0,6"/>
+                <Border CornerRadius="{StaticResource FluentCardCornerRadius}"
+                        Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                        BorderThickness="1"
+                        Margin="0,0,0,10" Padding="14,12">
                     <StackPanel x:Name="ModelSpecsPanel"/>
-                </ui:Card>
+                </Border>
 
                 <!-- Refresh outcome. Sits inside the last card so it does not float between
                      card edges; severity carries the result instead of a coloured text run. -->
@@ -160,13 +201,15 @@
             </StackPanel>
         </ScrollViewer>
 
-        <Grid Grid.Row="2" Margin="24,0,24,0">
-            <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
-                <ui:Button x:Name="RefreshTokenBtn" Content="{DynamicResource AccountDetails_RefreshBtn}" Click="OnRefreshTokenClicked" Appearance="Primary" Icon="{ui:SymbolIcon Symbol=ArrowSync24}"/>
-            </StackPanel>
-            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                <ui:Button Content="{DynamicResource Common_Close}" Click="OnCloseClicked" Appearance="Secondary"/>
-            </StackPanel>
-        </Grid>
+        <Border Grid.Row="2" BorderBrush="{DynamicResource DividerStrokeColorDefaultBrush}" BorderThickness="0,1,0,0" Padding="24,12,24,16">
+            <Grid>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
+                    <ui:Button AutomationProperties.AutomationId="AccountDetailsRefreshBtn" x:Name="RefreshTokenBtn" Content="{DynamicResource AccountDetails_RefreshBtn}" Click="OnRefreshTokenClicked" Appearance="Primary" Icon="{ui:SymbolIcon Symbol=ArrowSync24}"/>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <ui:Button AutomationProperties.AutomationId="AccountDetailsCloseBtn" Content="{DynamicResource Common_Close}" Click="OnCloseClicked" Appearance="Secondary"/>
+                </StackPanel>
+            </Grid>
+        </Border>
     </Grid>
 </ui:FluentWindow>
