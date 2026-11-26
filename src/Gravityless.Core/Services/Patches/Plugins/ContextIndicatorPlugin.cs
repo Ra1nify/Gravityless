@@ -128,13 +128,17 @@ module.exports = {
 
 .gl-ctx-btn {
     position: relative !important;
+    appearance: none !important;
+    -webkit-appearance: none !important;
     width: 28px !important;
     height: 28px !important;
     padding: 0 !important;
     margin: 0 !important;
     border-radius: 9999px !important;
-    border: 1px solid transparent !important;
+    border: 0 solid transparent !important;
     background: transparent !important;
+    background-color: transparent !important;
+    box-shadow: none !important;
     color: var(--gl-ctx-fg-muted) !important;
     display: inline-flex !important;
     align-items: center !important;
@@ -142,25 +146,31 @@ module.exports = {
     cursor: pointer !important;
     user-select: none !important;
     outline: none !important;
-    transition: background-color 120ms cubic-bezier(0.1, 0.9, 0.2, 1), border-color 120ms ease, transform 80ms ease !important;
+    transition: background-color 150ms cubic-bezier(0.1, 0.9, 0.2, 1), color 150ms ease, transform 80ms ease !important;
 }
 .gl-ctx-btn:hover {
-    background-color: var(--gl-ctx-hover) !important;
-    border-color: var(--gl-ctx-divider) !important;
+    background-color: var(--secondary, var(--gl-ctx-hover)) !important;
+    border: 0 solid transparent !important;
+    box-shadow: none !important;
     color: var(--gl-ctx-fg) !important;
 }
 .gl-ctx-btn:active {
-    background-color: var(--gl-ctx-press) !important;
+    background-color: var(--secondary, var(--gl-ctx-press)) !important;
     transform: scale(0.96) !important;
 }
 .gl-ctx-btn[aria-expanded="true"] {
-    background-color: var(--gl-ctx-hover) !important;
-    border-color: var(--gl-ctx-stroke-ctrl) !important;
+    background-color: var(--secondary, var(--gl-ctx-hover)) !important;
+    border: 0 solid transparent !important;
+    box-shadow: none !important;
     color: var(--gl-ctx-fg) !important;
 }
+.gl-ctx-btn:focus:not(:focus-visible) {
+    outline: none !important;
+    box-shadow: none !important;
+}
 .gl-ctx-btn:focus-visible {
-    outline: 2px solid var(--gl-ctx-fg) !important;
-    outline-offset: 1px !important;
+    outline: 2px solid var(--nux-focus-ring, var(--gl-ctx-fg)) !important;
+    outline-offset: 2px !important;
 }
 
 .gl-ctx-svg {
@@ -541,6 +551,22 @@ module.exports = {
             if (!/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/i.test(window.location.origin || '')) return;
             if (window.__gravitylessContextIndicatorInstalled) return;
             window.__gravitylessContextIndicatorInstalled = true;
+
+            (function ensureBaseStyle() {
+                try {
+                    if (document.getElementById('gl-ctx-inline-style')) return;
+                    const st = document.createElement('style');
+                    st.id = 'gl-ctx-inline-style';
+                    st.textContent = [
+                        '.gl-ctx-host{display:inline-flex!important;align-items:center!important;flex-shrink:0!important;margin:0 2px!important;padding:0!important;background:transparent!important;border:0!important;box-shadow:none!important;}',
+                        '.gl-ctx-btn{position:relative!important;width:28px!important;height:28px!important;min-width:28px!important;min-height:28px!important;padding:0!important;margin:0!important;border:0!important;border-radius:9999px!important;background:transparent!important;background-color:transparent!important;box-shadow:none!important;outline:none!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;cursor:pointer!important;user-select:none!important;}',
+                        '.gl-ctx-btn:not(:hover):not([aria-expanded="true"]){background:transparent!important;background-color:transparent!important;border:0!important;box-shadow:none!important;}',
+                        '.gl-ctx-btn:hover,.gl-ctx-btn[aria-expanded="true"]{background-color:var(--secondary,var(--gl-ctx-hover))!important;border:0!important;border-radius:9999px!important;box-shadow:none!important;}',
+                        '.gl-ctx-btn:focus:not(:focus-visible){outline:none!important;box-shadow:none!important;}'
+                    ].join('\n');
+                    (document.head || document.documentElement).appendChild(st);
+                } catch (_) {}
+            })();
 
             const SVG_NS = 'http://www.w3.org/2000/svg';
             const RING_R = 6.25;
@@ -982,8 +1008,9 @@ module.exports = {
 
                 const headRight = el('div', 'gl-ctx-head-right');
                 if (cascadeId) {
-                    const refBtn = el('button', 'gl-ctx-refresh');
-                    refBtn.type = 'button';
+                    const refBtn = el('div', 'gl-ctx-refresh');
+                    refBtn.setAttribute('role', 'button');
+                    refBtn.setAttribute('tabindex', '0');
                     refBtn.setAttribute('aria-label', tr('刷新上下文统计', 'Refresh context stats'));
                     refBtn.setAttribute('title', tr('刷新', 'Refresh'));
                     refBtn.setAttribute('data-spinning', entry && entry.loading ? 'true' : 'false');
@@ -993,6 +1020,13 @@ module.exports = {
                         ev.preventDefault();
                         ev.stopPropagation();
                         refreshCascade(cascadeId, true, rec.trajCtx);
+                    });
+                    refBtn.addEventListener('keydown', (ev) => {
+                        if (ev.key === 'Enter' || ev.key === ' ') {
+                            ev.preventDefault();
+                            ev.stopPropagation();
+                            refreshCascade(cascadeId, true, rec.trajCtx);
+                        }
                     });
                     headRight.appendChild(refBtn);
                 }
@@ -1189,8 +1223,11 @@ module.exports = {
                     let rec = footerRecords.get(footer);
                     if (!rec) {
                         const host = el('div', 'gl-ctx-host');
-                        const btn = el('button', 'gl-ctx-btn');
-                        btn.type = 'button';
+                        host.style.cssText = 'display:inline-flex;align-items:center;flex-shrink:0;margin:0 2px;padding:0;background:transparent;border:0;box-shadow:none;';
+                        const btn = el('div', 'gl-ctx-btn flex cursor-pointer items-center justify-center h-7 w-7 rounded-full select-none outline-none transition-colors');
+                        btn.style.cssText = 'width:28px;height:28px;min-width:28px;min-height:28px;padding:0;margin:0;border:0;border-radius:9999px;background:transparent;box-shadow:none;outline:none;display:inline-flex;align-items:center;justify-content:center;';
+                        btn.setAttribute('role', 'button');
+                        btn.setAttribute('tabindex', '0');
                         btn.setAttribute('aria-haspopup', 'dialog');
                         btn.setAttribute('aria-expanded', 'false');
                         const { svg, arc } = createRingIcon();
@@ -1218,6 +1255,13 @@ module.exports = {
                             ev.preventDefault();
                             ev.stopPropagation();
                             openFlyout(rec);
+                        });
+                        btn.addEventListener('keydown', (ev) => {
+                            if (ev.key === 'Enter' || ev.key === ' ') {
+                                ev.preventDefault();
+                                ev.stopPropagation();
+                                openFlyout(rec);
+                            }
                         });
                         footerRecords.set(footer, rec);
                     }

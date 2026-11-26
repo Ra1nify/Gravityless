@@ -14,7 +14,7 @@ public sealed class PatchLoader
     public const string BootstrapEntryMarker = "/* GRAVITYLESS_BOOTSTRAP_ENTRY */";
     public const string BootstrapFileName = "gravityless-bootstrap.js";
     public const string PluginsDirName = "gravityless-plugins";
-    public const int PatchVersion = 62;
+    public const int PatchVersion = 65;
     public static readonly string PatchStamp = $"/* GRAVITYLESS_BOOTSTRAP_VERSION: {PatchVersion} */";
 
     private readonly IReadOnlyList<IPatchPlugin> _plugins;

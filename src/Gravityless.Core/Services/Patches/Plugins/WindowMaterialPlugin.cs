@@ -412,6 +412,8 @@ body[data-agy-theme].light {
     --gl-shadow-dialog: ${shadowDialog};
     --background: transparent !important;
     --surface: transparent !important;
+    --shell: transparent !important;
+    --shell-canvas: transparent !important;
     --composer-fill: rgba(${composerFill}, ${fillA}) !important;
     --composer-border: rgba(${composerRing}, ${ringA}) !important;
     --sidebar: transparent !important;
@@ -465,10 +467,16 @@ html, body {
 .surface-rail,
 .surface-base,
 .agy-bg-background,
+.agy-shell,
+.agy-sheet,
+.agy-inset-shell,
 .agy-shell-rail,
 .agy-pane-content,
 .agy-sidebar-panel,
 .agy-sidebar-raised,
+body[data-agy-theme] .agy-shell,
+body[data-agy-theme] .agy-sheet,
+body[data-agy-theme] .agy-inset-shell,
 body[data-agy-theme] .surface-base,
 body[data-agy-theme] .surface-rail,
 body[data-agy-theme] .agy-shell-rail,
@@ -478,6 +486,11 @@ body[data-agy-theme] .agy-pane-content,
 body[data-agy-theme].dark .agy-shell-rail,
 body[data-agy-theme].dark .agy-sidebar-panel,
 body[data-agy-theme].dark .agy-sidebar-raised,
+[data-split-panes] .agy-sheet[data-sheet-inset] [data-tiling-pane],
+[data-split-panes] .agy-sheet[data-sheet-inset] [data-tiling-pane] > [data-pane-id],
+[data-split-panes] .agy-sheet[data-sheet-inset] [data-tiling-pane] > [data-pane-id] > :first-child,
+.agy-sheet[data-sheet-inset] [data-main-content-body],
+.agy-inset-shell [data-side-panel-body],
 [data-testid="sidebar"],
 [data-testid="main-content"],
 .monaco-workbench,
@@ -496,6 +509,7 @@ body[data-agy-theme].dark .agy-sidebar-raised,
 .xterm-viewport {
     background: transparent !important;
     background-color: transparent !important;
+    background-image: none !important;
 }
 
 .monaco-workbench .part.sidebar,
