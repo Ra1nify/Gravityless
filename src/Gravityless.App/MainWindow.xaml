@@ -908,6 +908,12 @@
 
                                         <StackPanel Grid.Column="0" VerticalAlignment="Center">
                                             <TextBlock Text="{Binding PrimaryName}" FontWeight="Bold" FontSize="14" TextTrimming="CharacterEllipsis"/>
+                                            <Border HorizontalAlignment="Left" Margin="0,4,0,0" CornerRadius="4" Padding="6,1"
+                                                    Background="{DynamicResource BrandAccentFillStrongerBrush}"
+                                                    Visibility="{Binding ShowTierBadge, Converter={StaticResource BoolToVisibility}}">
+                                                <TextBlock Text="{Binding TierBadgeText}" FontSize="10" FontWeight="SemiBold"
+                                                           Foreground="{DynamicResource BrandAccentTextBrush}" TextTrimming="CharacterEllipsis"/>
+                                            </Border>
                                         </StackPanel>
 
                                         <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="12,0,12,0" ClipToBounds="True">

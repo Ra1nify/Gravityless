@@ -606,6 +606,8 @@ module.exports = {
 
             const cacheByCascade = new Map();
             const footerRecords = new Map();
+            let modelCatalog = null;
+            let modelCatalogInflight = null;
             let activeFlyout = null;
             let flyoutPortalOpen = false;
             let syncRaf = 0;
@@ -877,6 +879,45 @@ module.exports = {
                 return await resp.json();
             }
 
+            function ensureModelCatalog() {
+                if (modelCatalog) return Promise.resolve(modelCatalog);
+                if (modelCatalogInflight) return modelCatalogInflight;
+                modelCatalogInflight = (async () => {
+                    try {
+                        const res = await callLsRpc('GetCascadeModelConfigs', {});
+                        const list = res && Array.isArray(res.clientModelConfigs) ? res.clientModelConfigs : [];
+                        if (list.length > 0) {
+                            modelCatalog = list;
+                            updateAllUi();
+                        }
+                    } catch (_) {} finally {
+                        modelCatalogInflight = null;
+                    }
+                    return modelCatalog;
+                })();
+                return modelCatalogInflight;
+            }
+
+            function findCatalogModel(rec, metrics) {
+                if (!Array.isArray(modelCatalog) || modelCatalog.length === 0) return null;
+                const targets = [
+                    metrics && metrics.modelDisplayName,
+                    rec && rec.modelLabel
+                ].filter(Boolean).map((s) => String(s).trim().toLowerCase());
+                for (let t = 0; t < targets.length; t++) {
+                    const q = targets[t];
+                    for (let i = 0; i < modelCatalog.length; i++) {
+                        const item = modelCatalog[i];
+                        if (!item) continue;
+                        const lbl = String(item.label || '').trim().toLowerCase();
+                        if (lbl && (lbl === q || q.includes(lbl) || lbl.includes(q))) {
+                            return item;
+                        }
+                    }
+                }
+                return null;
+            }
+
             function refreshCascade(cascadeId, forceTailCheck, trajCtx) {
                 if (!cascadeId) return Promise.resolve();
                 const entry = ensureCache(cascadeId);
@@ -1089,6 +1130,17 @@ module.exports = {
                     addKvRow(rows, tr('上轮输出', 'Last output'), formatInt(m.output), thinkSub);
                 }
                 addKvRow(rows, tr('窗口上限', 'Context limit'), formatInt(m.max));
+                const catModel = findCatalogModel(rec, m);
+                if (catModel) {
+                    const hwMax = parseNum(catModel.maxTokens);
+                    const maxOut = parseNum(catModel.maxOutputTokens);
+                    if (hwMax > 0 && hwMax !== m.max) {
+                        addKvRow(rows, tr('模型硬件窗口', 'Hardware window'), formatInt(hwMax));
+                    }
+                    if (maxOut > 0) {
+                        addKvRow(rows, tr('单轮输出上限', 'Max output'), formatInt(maxOut));
+                    }
+                }
                 flyout.appendChild(rows);
 
                 if (m.groups.length > 0) {
@@ -1160,6 +1212,7 @@ module.exports = {
                 renderFlyout();
                 positionFlyout();
                 flyout.style.visibility = '';
+                ensureModelCatalog();
                 if (rec.cascadeId) {
                     const entry = cacheByCascade.get(rec.cascadeId);
                     if (!entry || Date.now() - entry.lastFetchedAt > 1200) {

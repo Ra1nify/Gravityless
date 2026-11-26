@@ -114,8 +114,45 @@ public class AccountProfile
 
     public string? AccountTierId { get; set; }
     public string? AccountTierName { get; set; }
+    public string? SubscriptionType { get; set; }
+    public string? RegionCode { get; set; }
+    public bool? TelemetryEnabled { get; set; }
+    public List<AccountCreditInfo> AvailableCredits { get; set; } = new();
+    public List<ModelContextSpec> ModelSpecs { get; set; } = new();
     public string? QuotaSummaryDescription { get; set; }
     public string? QuotaLastError { get; set; }
+
+    public string FormatSubscriptionChannel() => SubscriptionType?.Trim().ToUpperInvariant() switch
+    {
+        "GOOGLE_ONE_HELIUM" => "Google One",
+        "GDP_HELIUM" => "GDP",
+        "" or null => UsesGcpTos ? "GCP-TOS" : string.Empty,
+        var raw => raw.Replace("_HELIUM", "", StringComparison.OrdinalIgnoreCase).Replace('_', ' ')
+    };
+
+    public string FormatTierSummary(bool includeRegion = true)
+    {
+        var baseTier = !string.IsNullOrWhiteSpace(AccountTierName) ? AccountTierName.Trim() : AccountTierId?.Trim();
+        var channel = FormatSubscriptionChannel();
+        var parts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(baseTier)) parts.Add(baseTier);
+        if (!string.IsNullOrWhiteSpace(channel)) parts.Add(channel);
+        if (includeRegion && !string.IsNullOrWhiteSpace(RegionCode)) parts.Add(RegionCode.Trim().ToUpperInvariant());
+        return string.Join(" · ", parts);
+    }
+
+    public string FormatCreditsSummary()
+    {
+        if (AvailableCredits == null || AvailableCredits.Count == 0) return string.Empty;
+        var items = new List<string>();
+        foreach (var c in AvailableCredits)
+        {
+            if (string.IsNullOrWhiteSpace(c.CreditType)) continue;
+            var min = string.IsNullOrWhiteSpace(c.MinimumCreditAmountForUsage) ? "" : $" (≥{c.MinimumCreditAmountForUsage})";
+            items.Add($"{c.CreditType}{min}");
+        }
+        return string.Join(", ", items);
+    }
 
     public DateTime? QuotaLastFetchedAt { get; set; }
     public string? QuotaRawText { get; set; }

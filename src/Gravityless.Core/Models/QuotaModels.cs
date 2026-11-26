@@ -117,3 +117,52 @@ public class QuotaGroupInfo
         return segs.Count > 0 ? string.Join("/", segs) : string.Empty;
     }
 }
+
+/// <summary>
+/// Credit entitlement metadata returned inside <c>loadCodeAssist.paidTier.availableCredits</c>.
+/// </summary>
+public class AccountCreditInfo
+{
+    public string CreditType { get; set; } = string.Empty;
+    public string MinimumCreditAmountForUsage { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Per-model token window, thinking, and Cascade Checkpointer compaction parameters
+/// extracted from CloudCode <c>fetchAvailableModels</c>.
+/// </summary>
+public class ModelContextSpec
+{
+    public string ModelId { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+    public string TagTitle { get; set; } = string.Empty;
+    public bool Recommended { get; set; }
+    public long MaxTokens { get; set; }
+    public long MaxOutputTokens { get; set; }
+
+    public string CheckpointerStrategy { get; set; } = string.Empty;
+    public long CheckpointerMaxTokens { get; set; }
+    public long CheckpointerThreshold { get; set; }
+    public long CheckpointerMaxOutputTokens { get; set; }
+    public double? CheckpointerOverheadRatio { get; set; }
+    public string CheckpointModel { get; set; } = string.Empty;
+
+    public bool SupportsThinking { get; set; }
+    public int? ThinkingLevel { get; set; }
+    public int? MinThinkingBudget { get; set; }
+    public bool SupportsImages { get; set; }
+    public bool SupportsVideo { get; set; }
+
+    public static string FormatK(long tokens)
+    {
+        if (tokens <= 0) return "—";
+        if (tokens >= 1000)
+        {
+            double k = tokens / 1000.0;
+            return tokens >= 100000
+                ? $"{Math.Round(k):0}K"
+                : $"{k:0.#}K";
+        }
+        return tokens.ToString();
+    }
+}

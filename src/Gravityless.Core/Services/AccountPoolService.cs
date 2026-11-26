@@ -295,6 +295,7 @@ public class AccountPoolService
     public const string RetrieveUserQuotaSummaryPath = "/v1internal:retrieveUserQuotaSummary";
     public const string RetrieveUserQuotaPath = "/v1internal:retrieveUserQuota";
     public const string FetchAvailableModelsPath = "/v1internal:fetchAvailableModels";
+    public const string FetchUserInfoPath = "/v1internal:fetchUserInfo";
 
     public const string StandaloneOAuthTokenFileName = "jetski-standalone-oauth-token";
     public const string LegacyOauthCredsFileName = "oauth_creds.json";
@@ -1186,6 +1187,8 @@ public class AccountPoolService
                 ? "{}"
                 : JsonSerializer.Serialize(new { project = projectId });
 
+            string? availableModelsBody = null;
+
             // 4. Experimental Argon probe: when summary lacks an Argon pool, inspect fetchAvailableModels
             //    (non-fatal; accounts without Argon entitlement keep Argon* = null cleanly).
             if (parsed.ArgonGroup == null)
@@ -1194,6 +1197,7 @@ public class AccountPoolService
                     client, usedBaseUrl + FetchAvailableModelsPath, accessToken, projectPayload, cancellationToken, maxAttempts: 1);
                 if (mOk && !string.IsNullOrWhiteSpace(mBody))
                 {
+                    availableModelsBody = mBody;
                     MergeArgonQuotaFromPayload(parsed, mBody, "fetchAvailableModels");
                 }
 
@@ -1206,6 +1210,36 @@ public class AccountPoolService
                         MergeArgonQuotaFromPayload(parsed, qBody, "retrieveUserQuota");
                     }
                 }
+            }
+
+            // 4b. Fetch per-model context/checkpointer thresholds and account region/settings (non-fatal).
+            if (string.IsNullOrWhiteSpace(availableModelsBody))
+            {
+                var (mOk2, _, mBody2, _) = await SendCloudCodePostAsync(
+                    client, usedBaseUrl + FetchAvailableModelsPath, accessToken, projectPayload, cancellationToken, maxAttempts: 1);
+                if (mOk2 && !string.IsNullOrWhiteSpace(mBody2))
+                {
+                    availableModelsBody = mBody2;
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(availableModelsBody))
+            {
+                var specs = ParseModelContextSpecs(availableModelsBody);
+                if (specs.Count > 0)
+                {
+                    acc.ModelSpecs = specs;
+                }
+            }
+
+            var (regionCode, telemetryEnabled) = await FetchUserInfoAsync(client, usedBaseUrl, accessToken, projectPayload, cancellationToken);
+            if (!string.IsNullOrWhiteSpace(regionCode))
+            {
+                acc.RegionCode = regionCode;
+            }
+            if (telemetryEnabled.HasValue)
+            {
+                acc.TelemetryEnabled = telemetryEnabled;
             }
 
             // 5. Apply structured pools + backward-compatible scalar fields (strictly isolated per pool).
@@ -1234,6 +1268,14 @@ public class AccountPoolService
             if (!string.IsNullOrWhiteSpace(assistInfo.TierName))
             {
                 acc.AccountTierName = assistInfo.TierName;
+            }
+            if (!string.IsNullOrWhiteSpace(assistInfo.SubscriptionType))
+            {
+                acc.SubscriptionType = assistInfo.SubscriptionType;
+            }
+            if (assistInfo.Credits is { Count: > 0 })
+            {
+                acc.AvailableCredits = assistInfo.Credits;
             }
             if (!string.IsNullOrWhiteSpace(parsed.Description))
             {
@@ -1392,7 +1434,13 @@ public class AccountPoolService
         return (false, lastStatus, lastBody, lastError);
     }
 
-    private sealed record CloudCodeAssistInfo(string? ProjectId, string? TierId, string? TierName, bool? UsesGcpTos);
+    private sealed record CloudCodeAssistInfo(
+        string? ProjectId,
+        string? TierId,
+        string? TierName,
+        bool? UsesGcpTos,
+        string? SubscriptionType,
+        List<AccountCreditInfo>? Credits);
 
     public static string BuildLoadCodeAssistPayload(string? baseDir = null)
     {
@@ -1426,7 +1474,7 @@ public class AccountPoolService
                 cancellationToken);
             if (!ok || string.IsNullOrWhiteSpace(body))
             {
-                return new CloudCodeAssistInfo(null, null, null, null);
+                return new CloudCodeAssistInfo(null, null, null, null, null, null);
             }
 
             var node = JsonNode.Parse(body);
@@ -1441,16 +1489,150 @@ public class AccountPoolService
             var tierNode = paidTier ?? currentTier;
             var tierId = tierNode?["id"]?.ToString();
             var tierName = tierNode?["name"]?.ToString();
+            var subscriptionType = paidTier?["upgradeSubscriptionType"]?.ToString()
+                ?? currentTier?["upgradeSubscriptionType"]?.ToString();
+
+            List<AccountCreditInfo>? credits = null;
+            if (paidTier?["availableCredits"] is JsonArray creditArr && creditArr.Count > 0)
+            {
+                credits = new List<AccountCreditInfo>();
+                foreach (var item in creditArr)
+                {
+                    if (item is not JsonObject cObj) continue;
+                    var ct = cObj["creditType"]?.ToString();
+                    if (string.IsNullOrWhiteSpace(ct)) continue;
+                    credits.Add(new AccountCreditInfo
+                    {
+                        CreditType = ct,
+                        MinimumCreditAmountForUsage = cObj["minimumCreditAmountForUsage"]?.ToString() ?? string.Empty
+                    });
+                }
+            }
 
             bool? usesGcpTos = TryReadBool(paidTier?["usesGcpTos"] ?? paidTier?["uses_gcp_tos"])
                 ?? TryReadBool(currentTier?["usesGcpTos"] ?? currentTier?["uses_gcp_tos"]);
 
-            return new CloudCodeAssistInfo(projectId, tierId, tierName, usesGcpTos);
+            return new CloudCodeAssistInfo(projectId, tierId, tierName, usesGcpTos, subscriptionType, credits);
         }
         catch
         {
-            return new CloudCodeAssistInfo(null, null, null, null);
+            return new CloudCodeAssistInfo(null, null, null, null, null, null);
         }
+    }
+
+    private async Task<(string? RegionCode, bool? TelemetryEnabled)> FetchUserInfoAsync(
+        HttpClient client,
+        string baseUrl,
+        string accessToken,
+        string projectPayload,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var (ok, _, body, _) = await SendCloudCodePostAsync(
+                client,
+                baseUrl + FetchUserInfoPath,
+                accessToken,
+                projectPayload,
+                cancellationToken,
+                maxAttempts: 1);
+            if (!ok || string.IsNullOrWhiteSpace(body)) return (null, null);
+
+            var node = JsonNode.Parse(body);
+            var regionCode = node?["regionCode"]?.ToString();
+            var telemetry = TryReadBool(node?["userSettings"]?["telemetryEnabled"]);
+            return (regionCode, telemetry);
+        }
+        catch
+        {
+            return (null, null);
+        }
+    }
+
+    /// <summary>
+    /// Extracts per-model hardware context limits, thinking capability metadata, and Cascade
+    /// Checkpointer compaction thresholds from a <c>fetchAvailableModels</c> payload.
+    /// </summary>
+    public static List<ModelContextSpec> ParseModelContextSpecs(string json)
+    {
+        var list = new List<ModelContextSpec>();
+        if (string.IsNullOrWhiteSpace(json)) return list;
+
+        try
+        {
+            var root = JsonNode.Parse(json);
+            if (root?["models"] is not JsonObject modelsObj) return list;
+
+            static long ParseLong(JsonNode? n) =>
+                n != null && long.TryParse(n.ToString(), System.Globalization.NumberStyles.Any,
+                    System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : 0;
+
+            static int? ParseInt(JsonNode? n) =>
+                n != null && int.TryParse(n.ToString(), System.Globalization.NumberStyles.Any,
+                    System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : null;
+
+            static double? ParseDouble(JsonNode? n) =>
+                n != null && double.TryParse(n.ToString(), System.Globalization.NumberStyles.Any,
+                    System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : null;
+
+            foreach (var kv in modelsObj)
+            {
+                if (kv.Value is not JsonObject m) continue;
+                var modelId = kv.Key;
+                if (ShouldSkipInternalModel(modelId)) continue;
+
+                var displayName = m["displayName"]?.ToString()?.Trim() ?? string.Empty;
+                if (string.IsNullOrWhiteSpace(displayName)) continue;
+
+                var spec = new ModelContextSpec
+                {
+                    ModelId = modelId,
+                    DisplayName = displayName,
+                    TagTitle = m["tagTitle"]?.ToString()?.Trim() ?? string.Empty,
+                    Recommended = TryReadBool(m["recommended"]) == true,
+                    MaxTokens = ParseLong(m["maxTokens"]),
+                    MaxOutputTokens = ParseLong(m["maxOutputTokens"]),
+                    SupportsThinking = TryReadBool(m["supportsThinking"]) == true,
+                    ThinkingLevel = ParseInt(m["thinkingLevel"]),
+                    MinThinkingBudget = ParseInt(m["minThinkingBudget"]),
+                    SupportsImages = TryReadBool(m["supportsImages"]) == true,
+                    SupportsVideo = TryReadBool(m["supportsVideo"]) == true
+                };
+
+                var chkRaw = m["modelExperiments"]?["experiments"]?["CASCADE_USE_EXPERIMENT_CHECKPOINTER"]?["stringValue"]?.ToString();
+                if (!string.IsNullOrWhiteSpace(chkRaw))
+                {
+                    try
+                    {
+                        var chk = JsonNode.Parse(chkRaw);
+                        if (chk != null)
+                        {
+                            spec.CheckpointerStrategy = chk["strategy"]?.ToString() ?? string.Empty;
+                            spec.CheckpointerMaxTokens = ParseLong(chk["max_token_limit"]);
+                            spec.CheckpointerThreshold = ParseLong(chk["token_threshold"]);
+                            spec.CheckpointerMaxOutputTokens = ParseLong(chk["max_output_tokens"]);
+                            spec.CheckpointerOverheadRatio = ParseDouble(chk["max_overhead_ratio"]);
+                            spec.CheckpointModel = chk["checkpoint_model"]?.ToString() ?? string.Empty;
+                        }
+                    }
+                    catch { }
+                }
+
+                list.Add(spec);
+            }
+
+            list.Sort((a, b) =>
+            {
+                int recCmp = b.Recommended.CompareTo(a.Recommended);
+                if (recCmp != 0) return recCmp;
+                int chkCmp = (b.CheckpointerMaxTokens > 0).CompareTo(a.CheckpointerMaxTokens > 0);
+                if (chkCmp != 0) return chkCmp;
+                return string.Compare(a.DisplayName, b.DisplayName, StringComparison.OrdinalIgnoreCase);
+            });
+        }
+        catch { }
+
+        return list;
     }
 
     private static bool? TryReadBool(JsonNode? node)

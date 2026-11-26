@@ -129,6 +129,12 @@
     <sys:String x:Key="AccountDetails_ExperimentalBadge">Experimental</sys:String>
     <sys:String x:Key="AccountDetails_QuotaSyncWarningPrefix">Quota sync issue: {0}</sys:String>
     <sys:String x:Key="AccountDetails_TierFormat">Account tier: {0}</sys:String>
+    <sys:String x:Key="AccountDetails_CreditsFormat">Credits threshold: {0}</sys:String>
+    <sys:String x:Key="AccountDetails_ModelSpecsHeader">Model Context &amp; Checkpointer Limits</sys:String>
+    <sys:String x:Key="AccountDetails_ModelSpecsEmpty">Click &quot;Refresh Token &amp; Quota&quot; below to load model limits and compaction thresholds</sys:String>
+    <sys:String x:Key="AccountDetails_HardwareCapFormat">Model cap {0}</sys:String>
+    <sys:String x:Key="AccountDetails_CheckpointerCapFormat">Checkpointer {0}</sys:String>
+    <sys:String x:Key="AccountDetails_OutputCapFormat">Out {0}</sys:String>
 
     <!-- Appearance View -->
     <sys:String x:Key="Appearance_MicaCardTitle">Material &amp; Transparency</sys:String>

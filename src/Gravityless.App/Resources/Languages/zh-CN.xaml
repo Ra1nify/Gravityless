@@ -129,6 +129,12 @@
     <sys:String x:Key="AccountDetails_ExperimentalBadge">实验性</sys:String>
     <sys:String x:Key="AccountDetails_QuotaSyncWarningPrefix">配额同步异常: {0}</sys:String>
     <sys:String x:Key="AccountDetails_TierFormat">账号层级: {0}</sys:String>
+    <sys:String x:Key="AccountDetails_CreditsFormat">Credits 门槛: {0}</sys:String>
+    <sys:String x:Key="AccountDetails_ModelSpecsHeader">模型上下文与 Checkpointer 压缩阈值</sys:String>
+    <sys:String x:Key="AccountDetails_ModelSpecsEmpty">点击下方「刷新 Token 与配额」后展示服务端下发的模型上限与压缩阈值</sys:String>
+    <sys:String x:Key="AccountDetails_HardwareCapFormat">硬件上限 {0}</sys:String>
+    <sys:String x:Key="AccountDetails_CheckpointerCapFormat">Checkpointer {0}</sys:String>
+    <sys:String x:Key="AccountDetails_OutputCapFormat">输出 {0}</sys:String>
 
     <!-- Appearance View -->
     <sys:String x:Key="Appearance_MicaCardTitle">材质与透明度</sys:String>

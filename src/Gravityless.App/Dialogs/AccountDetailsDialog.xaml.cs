@@ -66,9 +66,7 @@ public partial class AccountDetailsDialog
 
         RenderTokenStatus();
 
-        var tierLabel = !string.IsNullOrWhiteSpace(_account.AccountTierName)
-            ? _account.AccountTierName
-            : _account.AccountTierId;
+        var tierLabel = _account.FormatTierSummary();
         if (!string.IsNullOrWhiteSpace(tierLabel))
         {
             AccountTierText.Text = tierLabel;
@@ -77,6 +75,28 @@ public partial class AccountDetailsDialog
         else
         {
             AccountTierBadge.Visibility = Visibility.Collapsed;
+        }
+
+        var metaParts = new List<string>();
+        var creditsSummary = _account.FormatCreditsSummary();
+        if (!string.IsNullOrWhiteSpace(creditsSummary))
+        {
+            metaParts.Add(string.Format(
+                LocalizationService.GetString("AccountDetails_CreditsFormat", "Credits 门槛: {0}"),
+                creditsSummary));
+        }
+        if (_account.TelemetryEnabled.HasValue)
+        {
+            metaParts.Add($"Telemetry: {(_account.TelemetryEnabled.Value ? "On" : "Off")}");
+        }
+        if (metaParts.Count > 0)
+        {
+            AccountSubscriptionMetaText.Text = string.Join("  ·  ", metaParts);
+            AccountSubscriptionMetaText.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            AccountSubscriptionMetaText.Visibility = Visibility.Collapsed;
         }
 
         if (_account.QuotaLastFetchedAt.HasValue)
@@ -91,6 +111,7 @@ public partial class AccountDetailsDialog
         }
 
         RenderQuotaGroups();
+        RenderModelSpecs();
 
         if (showStoredError && !string.IsNullOrWhiteSpace(_account.QuotaLastError))
         {
@@ -155,6 +176,127 @@ public partial class AccountDetailsDialog
             }
 
             AddQuotaGroupSection(ordered[i]);
+        }
+    }
+
+    private void RenderModelSpecs()
+    {
+        if (ModelSpecsPanel == null) return;
+        ModelSpecsPanel.Children.Clear();
+
+        var specs = _account.ModelSpecs;
+        if (specs == null || specs.Count == 0)
+        {
+            ModelSpecsPanel.Children.Add(new WpfControls.TextBlock
+            {
+                Text = LocalizationService.GetString("AccountDetails_ModelSpecsEmpty", "点击下方「刷新 Token 与配额」后展示服务端下发的模型上限与压缩阈值"),
+                FontSize = 11.5,
+                Opacity = 0.6,
+                TextWrapping = TextWrapping.Wrap
+            });
+            return;
+        }
+
+        for (int i = 0; i < specs.Count; i++)
+        {
+            var spec = specs[i];
+            if (i > 0)
+            {
+                ModelSpecsPanel.Children.Add(new WpfControls.Separator
+                {
+                    Margin = new Thickness(0, 6, 0, 6),
+                    Opacity = 0.12
+                });
+            }
+
+            var row = new WpfControls.Grid();
+            row.ColumnDefinitions.Add(new WpfControls.ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            row.ColumnDefinitions.Add(new WpfControls.ColumnDefinition { Width = GridLength.Auto });
+
+            var left = new WpfControls.StackPanel { VerticalAlignment = VerticalAlignment.Center };
+            var nameRow = new WpfControls.StackPanel { Orientation = WpfControls.Orientation.Horizontal };
+            nameRow.Children.Add(new WpfControls.TextBlock
+            {
+                Text = spec.DisplayName,
+                FontSize = 12,
+                FontWeight = FontWeights.SemiBold,
+                VerticalAlignment = VerticalAlignment.Center
+            });
+            if (!string.IsNullOrWhiteSpace(spec.TagTitle))
+            {
+                nameRow.Children.Add(new WpfControls.Border
+                {
+                    CornerRadius = new CornerRadius(4),
+                    Padding = new Thickness(5, 1, 5, 1),
+                    Margin = new Thickness(6, 0, 0, 0),
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Background = ResolveBrush("BrandAccentFillStrongerBrush", Colors.DimGray),
+                    Child = new WpfControls.TextBlock
+                    {
+                        Text = spec.TagTitle,
+                        FontSize = 9.5,
+                        FontWeight = FontWeights.SemiBold,
+                        Foreground = ResolveBrush("StatusCautionBrush", Colors.Orange)
+                    }
+                });
+            }
+            left.Children.Add(nameRow);
+
+            var subParts = new List<string> { spec.ModelId };
+            if (spec.CheckpointerThreshold > 0)
+            {
+                var overhead = spec.CheckpointerOverheadRatio.HasValue
+                    ? $" / {spec.CheckpointerOverheadRatio.Value * 100:0}%"
+                    : string.Empty;
+                subParts.Add($"Threshold {ModelContextSpec.FormatK(spec.CheckpointerThreshold)}{overhead}");
+            }
+            if (spec.MinThinkingBudget.HasValue)
+            {
+                subParts.Add($"Think≥{spec.MinThinkingBudget.Value}");
+            }
+            left.Children.Add(new WpfControls.TextBlock
+            {
+                Text = string.Join(" · ", subParts),
+                FontSize = 10.5,
+                Opacity = 0.55,
+                Margin = new Thickness(0, 2, 0, 0),
+                TextTrimming = TextTrimming.CharacterEllipsis
+            });
+            WpfControls.Grid.SetColumn(left, 0);
+            row.Children.Add(left);
+
+            var rightParts = new List<string>();
+            if (spec.MaxTokens > 0)
+            {
+                rightParts.Add(string.Format(
+                    LocalizationService.GetString("AccountDetails_HardwareCapFormat", "硬件上限 {0}"),
+                    ModelContextSpec.FormatK(spec.MaxTokens)));
+            }
+            if (spec.CheckpointerMaxTokens > 0)
+            {
+                rightParts.Add(string.Format(
+                    LocalizationService.GetString("AccountDetails_CheckpointerCapFormat", "Checkpointer {0}"),
+                    ModelContextSpec.FormatK(spec.CheckpointerMaxTokens)));
+            }
+            if (spec.MaxOutputTokens > 0)
+            {
+                rightParts.Add(string.Format(
+                    LocalizationService.GetString("AccountDetails_OutputCapFormat", "输出 {0}"),
+                    ModelContextSpec.FormatK(spec.MaxOutputTokens)));
+            }
+            var rightText = new WpfControls.TextBlock
+            {
+                Text = string.Join("  ·  ", rightParts),
+                FontSize = 11,
+                FontWeight = FontWeights.Medium,
+                Opacity = 0.85,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(10, 0, 0, 0)
+            };
+            WpfControls.Grid.SetColumn(rightText, 1);
+            row.Children.Add(rightText);
+
+            ModelSpecsPanel.Children.Add(row);
         }
     }
 

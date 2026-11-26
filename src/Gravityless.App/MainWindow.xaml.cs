@@ -586,12 +586,15 @@ public partial class MainWindow
                 ? string.Format(LocalizationService.GetString("Accounts_BoundInstanceFormat", "绑定实例: {0}"), boundInst.DisplayNameWithShortId) 
                 : (!string.IsNullOrEmpty(acc.BoundInstanceId) ? string.Format(LocalizationService.GetString("Accounts_BoundInstanceIdFormat", "绑定实例 ID: {0}"), acc.BoundInstanceId) : "");
             string quotaText = acc.QuotaCardSummaryText;
+            string tierBadge = acc.FormatTierSummary();
             _accountDisplayList.Add(new AccountDisplayItem
             {
                 Id = acc.Id,
                 Email = acc.Email,
                 DisplayName = acc.DisplayName,
                 PrimaryName = !string.IsNullOrWhiteSpace(acc.DisplayName) ? acc.DisplayName : acc.Email,
+                TierBadgeText = tierBadge,
+                ShowTierBadge = !string.IsNullOrEmpty(tierBadge),
                 InstallationId = acc.InstallationId,
                 IsRunning = acc.IsRunning,
                 StatusText = acc.IsRunning 
@@ -3158,6 +3161,10 @@ public class AccountDisplayItem
     public string DisplayName { get; set; } = string.Empty;
 
     public string PrimaryName { get; set; } = string.Empty;
+
+    public string TierBadgeText { get; set; } = string.Empty;
+
+    public bool ShowTierBadge { get; set; }
 
     public string InstallationId { get; set; } = string.Empty;
 
