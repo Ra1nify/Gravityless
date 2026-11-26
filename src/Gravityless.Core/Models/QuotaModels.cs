@@ -136,6 +136,8 @@ public class ModelContextSpec
     public string ModelId { get; set; } = string.Empty;
     public string DisplayName { get; set; } = string.Empty;
     public string TagTitle { get; set; } = string.Empty;
+    public string TagDescription { get; set; } = string.Empty;
+    public bool Disabled { get; set; }
     public bool Recommended { get; set; }
     public long MaxTokens { get; set; }
     public long MaxOutputTokens { get; set; }

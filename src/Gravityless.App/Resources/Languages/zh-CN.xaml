@@ -135,6 +135,7 @@
     <sys:String x:Key="AccountDetails_HardwareCapFormat">硬件上限 {0}</sys:String>
     <sys:String x:Key="AccountDetails_CheckpointerCapFormat">Checkpointer {0}</sys:String>
     <sys:String x:Key="AccountDetails_OutputCapFormat">输出 {0}</sys:String>
+    <sys:String x:Key="AccountDetails_ModelDisabledBadge">未解锁</sys:String>
 
     <!-- Appearance View -->
     <sys:String x:Key="Appearance_MicaCardTitle">材质与透明度</sys:String>

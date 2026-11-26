@@ -209,7 +209,11 @@ public partial class AccountDetailsDialog
                 });
             }
 
-            var row = new WpfControls.Grid();
+            var row = new WpfControls.Grid
+            {
+                Opacity = spec.Disabled ? 0.58 : 1.0,
+                ToolTip = string.IsNullOrWhiteSpace(spec.TagDescription) ? null : spec.TagDescription
+            };
             row.ColumnDefinitions.Add(new WpfControls.ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             row.ColumnDefinitions.Add(new WpfControls.ColumnDefinition { Width = GridLength.Auto });
 
@@ -222,8 +226,21 @@ public partial class AccountDetailsDialog
                 FontWeight = FontWeights.SemiBold,
                 VerticalAlignment = VerticalAlignment.Center
             });
-            if (!string.IsNullOrWhiteSpace(spec.TagTitle))
+
+            var badgeLabel = spec.Disabled
+                ? (string.IsNullOrWhiteSpace(spec.TagTitle)
+                    ? LocalizationService.GetString("AccountDetails_ModelDisabledBadge", "未解锁")
+                    : $"{spec.TagTitle} · {LocalizationService.GetString("AccountDetails_ModelDisabledBadge", "未解锁")}")
+                : spec.TagTitle;
+
+            if (!string.IsNullOrWhiteSpace(badgeLabel))
             {
+                var badgeForeground = spec.Disabled
+                    ? ResolveBrush("TextFillColorSecondaryBrush", Colors.Silver)
+                    : string.Equals(spec.TagTitle, "New", StringComparison.OrdinalIgnoreCase)
+                        ? ResolveBrush("StatusSuccessBrush", Colors.LightGreen)
+                        : ResolveBrush("StatusCautionBrush", Colors.Orange);
+
                 nameRow.Children.Add(new WpfControls.Border
                 {
                     CornerRadius = new CornerRadius(4),
@@ -233,10 +250,10 @@ public partial class AccountDetailsDialog
                     Background = ResolveBrush("BrandAccentFillStrongerBrush", Colors.DimGray),
                     Child = new WpfControls.TextBlock
                     {
-                        Text = spec.TagTitle,
+                        Text = badgeLabel,
                         FontSize = 9.5,
                         FontWeight = FontWeights.SemiBold,
-                        Foreground = ResolveBrush("StatusCautionBrush", Colors.Orange)
+                        Foreground = badgeForeground
                     }
                 });
             }

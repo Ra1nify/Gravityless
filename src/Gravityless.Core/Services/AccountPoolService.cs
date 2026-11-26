@@ -301,8 +301,23 @@ public class AccountPoolService
     public const string LegacyOauthCredsFileName = "oauth_creds.json";
     public const string KeyringUnavailableMarkerFileName = "antigravity-keyring-unavailable";
 
-    private const string FallbackAntigravityVersion = "2.35.1";
-    public static string DefaultUserAgent => $"antigravity/{ResolveAntigravityVersion(null)}";
+    private const string FallbackAntigravityVersion = "2.35.2";
+    public static string DefaultUserAgent => FormatAntigravityHubUserAgent(ResolveAntigravityVersion(null));
+
+    /// <summary>
+    /// Formats the Hub-era User-Agent (<c>antigravity/hub/&lt;ver&gt; windows/&lt;arch&gt;</c>) required by
+    /// CloudCode <c>fetchAvailableModels</c> to return newer Gemini 4 model families and <c>agentModelSorts</c>.
+    /// </summary>
+    public static string FormatAntigravityHubUserAgent(string version)
+    {
+        var arch = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture switch
+        {
+            System.Runtime.InteropServices.Architecture.Arm64 => "arm64",
+            System.Runtime.InteropServices.Architecture.X86 => "386",
+            _ => "amd64"
+        };
+        return $"antigravity/hub/{version} windows/{arch}";
+    }
 
     public static string GetCloudCodeBaseUrl(AccountProfile? account) =>
         account?.UsesGcpTos == true ? ProdCloudCodeBaseUrl : DailyCloudCodeBaseUrl;
@@ -1033,7 +1048,7 @@ public class AccountPoolService
         return bestStr ?? FallbackAntigravityVersion;
     }
 
-    private string GetUserAgent() => $"antigravity/{ResolveAntigravityVersion(_baseDir)}";
+    private string GetUserAgent() => FormatAntigravityHubUserAgent(ResolveAntigravityVersion(_baseDir));
 
     private static bool TryParseThreePartVersion(string? raw, out Version? parsed, out string normalized)
     {
@@ -1549,9 +1564,27 @@ public class AccountPoolService
         }
     }
 
+    private static readonly HashSet<string> HiddenAntigravityModelIds = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "chat_20706",
+        "chat_23310",
+        "tab_flash_lite_preview",
+        "tab_jump_flash_lite_preview",
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-lite",
+        "gemini-2.5-flash-thinking",
+        "gemini-2.5-pro"
+    };
+
+    private static readonly string[] EffortSuffixes =
+    [
+        "-extra-high", "-extra-low", "-xhigh", "-minimal", "-low", "-medium", "-high"
+    ];
+
     /// <summary>
     /// Extracts per-model hardware context limits, thinking capability metadata, and Cascade
     /// Checkpointer compaction thresholds from a <c>fetchAvailableModels</c> payload.
+    /// Applies Antigravity's <c>agentModelSorts</c>, hidden/deprecated alias filtering, and ordering.
     /// </summary>
     public static List<ModelContextSpec> ParseModelContextSpecs(string json)
     {
@@ -1575,20 +1608,43 @@ public class AccountPoolService
                 n != null && double.TryParse(n.ToString(), System.Globalization.NumberStyles.Any,
                     System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : null;
 
+            var pickerRank = ExtractAgentPickerRanks(root);
+            var nonAgentIds = ExtractNonAgentModelIds(root);
+
+            var candidates = new List<(ModelContextSpec Spec, string ModelEnum, int Rank)>();
+            var spelledNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
             foreach (var kv in modelsObj)
             {
                 if (kv.Value is not JsonObject m) continue;
                 var modelId = kv.Key;
-                if (ShouldSkipInternalModel(modelId)) continue;
+                if (ShouldSkipInternalModel(modelId) || HiddenAntigravityModelIds.Contains(modelId)) continue;
 
                 var displayName = m["displayName"]?.ToString()?.Trim() ?? string.Empty;
                 if (string.IsNullOrWhiteSpace(displayName)) continue;
+
+                if (pickerRank.Count > 0)
+                {
+                    if (!pickerRank.ContainsKey(modelId)) continue;
+                }
+                else if (nonAgentIds.Contains(modelId))
+                {
+                    continue;
+                }
+
+                var modelEnum = m["model"]?.ToString()?.Trim() ?? string.Empty;
+                if (DoesDisplayNameSpellId(displayName, modelId))
+                {
+                    spelledNames.Add(displayName);
+                }
 
                 var spec = new ModelContextSpec
                 {
                     ModelId = modelId,
                     DisplayName = displayName,
                     TagTitle = m["tagTitle"]?.ToString()?.Trim() ?? string.Empty,
+                    TagDescription = m["tagDescription"]?.ToString()?.Trim() ?? string.Empty,
+                    Disabled = TryReadBool(m["disabled"] ?? m["isDisabled"]) == true,
                     Recommended = TryReadBool(m["recommended"]) == true,
                     MaxTokens = ParseLong(m["maxTokens"]),
                     MaxOutputTokens = ParseLong(m["maxOutputTokens"]),
@@ -1618,21 +1674,155 @@ public class AccountPoolService
                     catch { }
                 }
 
-                list.Add(spec);
+                int rank = pickerRank.TryGetValue(modelId, out var r) ? r : int.MaxValue;
+                candidates.Add((spec, modelEnum, rank));
             }
 
-            list.Sort((a, b) =>
+            // Fallback guard against deceptive deprecated aliases when agentModelSorts is absent
+            // (e.g. legacy gemini-2.5-flash returning displayName "Gemini 3.5 Flash Lite").
+            foreach (var item in candidates)
             {
-                int recCmp = b.Recommended.CompareTo(a.Recommended);
-                if (recCmp != 0) return recCmp;
-                int chkCmp = (b.CheckpointerMaxTokens > 0).CompareTo(a.CheckpointerMaxTokens > 0);
-                if (chkCmp != 0) return chkCmp;
-                return string.Compare(a.DisplayName, b.DisplayName, StringComparison.OrdinalIgnoreCase);
-            });
+                if (pickerRank.Count == 0 && !DoesDisplayNameSpellId(item.Spec.DisplayName, item.Spec.ModelId))
+                {
+                    if (spelledNames.Contains(item.Spec.DisplayName) || DoesEnumNameLegacyModel(item.ModelEnum, item.Spec.ModelId))
+                    {
+                        continue;
+                    }
+                }
+                list.Add(item.Spec);
+            }
+
+            if (pickerRank.Count > 0)
+            {
+                var rankLookup = candidates.ToDictionary(c => c.Spec.ModelId, c => c.Rank, StringComparer.OrdinalIgnoreCase);
+                list.Sort((a, b) => rankLookup[a.ModelId].CompareTo(rankLookup[b.ModelId]));
+            }
+            else
+            {
+                list.Sort((a, b) =>
+                {
+                    int disCmp = a.Disabled.CompareTo(b.Disabled);
+                    if (disCmp != 0) return disCmp;
+                    int recCmp = b.Recommended.CompareTo(a.Recommended);
+                    if (recCmp != 0) return recCmp;
+                    int chkCmp = (b.CheckpointerMaxTokens > 0).CompareTo(a.CheckpointerMaxTokens > 0);
+                    if (chkCmp != 0) return chkCmp;
+                    return string.Compare(a.DisplayName, b.DisplayName, StringComparison.OrdinalIgnoreCase);
+                });
+            }
         }
         catch { }
 
         return list;
+    }
+
+    private static Dictionary<string, int> ExtractAgentPickerRanks(JsonNode? root)
+    {
+        var rank = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        if (root?["agentModelSorts"] is not JsonArray sortsArr) return rank;
+
+        foreach (var sortNode in sortsArr)
+        {
+            if (sortNode?["groups"] is not JsonArray groupsArr) continue;
+            foreach (var grp in groupsArr)
+            {
+                if (grp?["modelIds"] is not JsonArray idsArr) continue;
+                foreach (var idNode in idsArr)
+                {
+                    var id = idNode?.ToString()?.Trim();
+                    if (!string.IsNullOrWhiteSpace(id) && !rank.ContainsKey(id))
+                    {
+                        rank[id] = rank.Count;
+                    }
+                }
+            }
+        }
+        return rank;
+    }
+
+    private static HashSet<string> ExtractNonAgentModelIds(JsonNode? root)
+    {
+        var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (root == null) return ids;
+
+        foreach (var key in new[]
+        {
+            "commandModelIds",
+            "tabModelIds",
+            "imageGenerationModelIds",
+            "mqueryModelIds",
+            "webSearchModelIds",
+            "commitMessageModelIds",
+            "audioTranscriptionModelIds"
+        })
+        {
+            if (root[key] is JsonArray arr)
+            {
+                foreach (var item in arr)
+                {
+                    var id = item?.ToString()?.Trim();
+                    if (!string.IsNullOrWhiteSpace(id)) ids.Add(id);
+                }
+            }
+        }
+
+        if (root["tieredModelIds"] is JsonObject tieredObj)
+        {
+            foreach (var kv in tieredObj)
+            {
+                if (kv.Value is JsonArray arr)
+                {
+                    foreach (var item in arr)
+                    {
+                        var id = item?.ToString()?.Trim();
+                        if (!string.IsNullOrWhiteSpace(id)) ids.Add(id);
+                    }
+                }
+            }
+        }
+
+        return ids;
+    }
+
+    private static string StripEffortFromModelId(string modelId)
+    {
+        foreach (var suffix in EffortSuffixes)
+        {
+            if (modelId.EndsWith(suffix, StringComparison.OrdinalIgnoreCase) && modelId.Length > suffix.Length)
+            {
+                return modelId[..^suffix.Length];
+            }
+        }
+        return modelId;
+    }
+
+    private static bool DoesDisplayNameSpellId(string displayName, string modelId)
+    {
+        var trimmed = displayName.Trim();
+        int open = trimmed.LastIndexOf(" (", StringComparison.Ordinal);
+        if (open > 0 && trimmed.EndsWith(')'))
+        {
+            var inner = trimmed[(open + 2)..^1].Trim().ToLowerInvariant();
+            if (inner is "minimal" or "extra low" or "low" or "medium" or "high" or "extra high" or "xhigh" or "thinking")
+            {
+                trimmed = trimmed[..open].Trim();
+            }
+        }
+        if (string.IsNullOrWhiteSpace(trimmed)) return false;
+
+        var slug = string.Join('-', trimmed.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        var family = StripEffortFromModelId(modelId);
+        return string.Equals(slug, family, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(slug, modelId, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool DoesEnumNameLegacyModel(string modelEnum, string modelId)
+    {
+        const string prefix = "MODEL_GOOGLE_";
+        if (!modelEnum.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return false;
+        var rest = modelEnum[prefix.Length..];
+        var normalizedId = modelId.Replace('-', '_').Replace('.', '_');
+        return !string.IsNullOrEmpty(rest) && string.Equals(rest, normalizedId, StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool? TryReadBool(JsonNode? node)
